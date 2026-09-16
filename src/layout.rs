@@ -1,0 +1,1058 @@
+//! Where the panes are.
+//!
+//! One source of truth: `ui` derives its rectangles from this and the mouse
+//! hit-tests against it, so drawing and clicking cannot disagree about where a
+//! pane sits. The arithmetic reproduces exactly what ratatui's solver produced
+//! when the layout lived there — the tests pin the measured cases.
+
+use crate::Pane;
+use unicode_width::UnicodeWidthStr;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Area {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl Area {
+    pub fn right(&self) -> u16 {
+        self.x + self.width
+    }
+
+    pub fn bottom(&self) -> u16 {
+        self.y + self.height
+    }
+
+    pub fn holds(&self, column: u16, row: u16) -> bool {
+        column >= self.x && column < self.right() && row >= self.y && row < self.bottom()
+    }
+}
+
+/// Where a strip of right-aligned labels on a pane's top border sits, and how
+/// wide it is: each label followed by one space, the last space landing on the
+/// column before the corner. Here rather than in `ui` for the reason [`GUTTER`]
+/// is — the renderer leaves room for it and the mouse hit-tests against it, and
+/// two derivations of one number is a click landing a column off.
+///
+/// Measured with `unicode-width`, never by counting characters: a glyph a font
+/// draws two columns wide and a count reads as one is a bar that overflows the
+/// border it was right-aligned on.
+pub fn strip_width(labels: &[String]) -> u16 {
+    labels
+        .iter()
+        .map(|label| UnicodeWidthStr::width(label.as_str()) as u16 + 1)
+        .sum()
+}
+
+/// Which label of that strip is under a column, if any.
+pub fn strip_at(area: Area, labels: &[String], column: u16) -> Option<usize> {
+    let mut at = (area.x + area.width.saturating_sub(1)).checked_sub(strip_width(labels))?;
+    labels.iter().position(|label| {
+        let width = UnicodeWidthStr::width(label.as_str()) as u16;
+        let hit = column >= at && column < at + width;
+        at += width + 1;
+        hit
+    })
+}
+
+/// How wide the editor's line-number gutter is, between its border and its
+/// text. The renderer draws it and the mouse hit-tests past it, so both read
+/// this rather than each counting columns.
+///
+/// Eight, not five. Four columns are the number; the fifth is the bar a
+/// diagnostic or a Reading draws; the sixth is the fold toggle; the last two
+/// are air between the gutter and the code. A toggle wedged between the last
+/// digit and the first character of the code is a target too small to aim a
+/// pointer at, and code that starts against the line number is code you read
+/// the number as part of.
+pub const GUTTER: u16 = 8;
+
+/// Which gutter column the fold toggle sits in, counted from the pane's inside
+/// edge. Here beside [`GUTTER`] for the reason `GUTTER` is here — `ui` draws
+/// it and `mouse` hit-tests it, and two derivations of one column is a click
+/// landing beside the thing it pointed at.
+pub const TOGGLE_COLUMN: u16 = 5;
+
+/// How wide the step-menu is while walking a Story — a fixed constant, the
+/// same shape as `GUTTER`, rather than sized to the longest Step name in
+/// whichever Story happens to be loaded. A per-Story width would resize the
+/// rectangle every time a reviewer entered a different Story, which is
+/// exactly the class of bug the "one layout" rule exists to prevent
+/// (`docs/adr/0008-a-story-set-is-titled-a-step-is-named.md`).
+pub const STEP_MENU_WIDTH: u16 = 20;
+
+/// The two columns a diff spends saying whether a row was added, removed or is
+/// context — drawn immediately right of the line number, so they are gutter
+/// too. Named here beside [`GUTTER`] rather than counted in `ui`'s format
+/// string, for the reason that one is here.
+pub const MARKER: u16 = 2;
+
+/// What the editor pane draws between its border and its text. Three answers
+/// rather than two, because a diff has one the others do not: a bool said only
+/// "Preview or not", so the diff was measured as if it were Source and its
+/// last two columns of code were unreachable, its caret sat two columns left
+/// of its text and a click on it landed two columns off.
+pub enum Gutter {
+    /// Source and Story view's code: the line number.
+    Numbers,
+    /// Review's diff: the line number, and the marker that says which side the
+    /// row came from.
+    NumbersAndMarker,
+    /// A Preview: none. Five columns spent naming rows the reader cannot act
+    /// on are five columns not spent on text.
+    None,
+}
+
+/// How wide that strip is.
+///
+/// One function rather than a check in the renderer and another in the
+/// hit-test, for the reason `GUTTER` lives here at all — the two computed the
+/// gutter separately once, which is how a click lands in the wrong column.
+pub fn gutter(shows: Gutter) -> u16 {
+    match shows {
+        Gutter::Numbers => GUTTER,
+        Gutter::NumbersAndMarker => GUTTER + MARKER,
+        Gutter::None => 0,
+    }
+}
+
+/// Where the AI pane sits. Beside the editor it stops above the terminal,
+/// which spans the width beneath everything. Tall it runs the whole height
+/// down the right-hand edge and the terminal ends at its border — the
+/// terminal gives up width rather than the AI pane giving up rows, which is
+/// the point of asking for it. Its left edge is in the same column either
+/// way, so only its height and the terminal's width change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AiPane {
+    #[default]
+    Beside,
+    Tall,
+}
+
+/// Which pane is in the corner beneath the tree, or none at all. At the tree's
+/// width, and the columns come out of the shell pane — the mirror of what the
+/// tall AI pane does from the other side, and for the same reason: the pane
+/// asked for is the one that gains, and the shell is what there is to give.
+///
+/// One slot naming its occupant rather than a visibility flag per pane. A flag
+/// per pane is exactly what "enums, not booleans" forbids: it can say more than
+/// one pane is on screen, which is a state one rectangle cannot draw and one
+/// hit-test cannot answer for — so every site that chose between them would
+/// need a precedence rule of its own, and the rules would drift. Here "both at
+/// once" is unrepresentable, and asking for one while another shows is a
+/// replacement with nothing to decide.
+///
+/// Hidden leaves a zero-width rectangle, which `Area::holds` answers `false`
+/// for, so no arm has to remember to ask whether the corner is occupied before
+/// hit-testing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Corner {
+    #[default]
+    Hidden,
+    Risk,
+    Buffers,
+    History,
+}
+
+impl Corner {
+    /// Which pane the corner is holding, or none at all. One answer, read by
+    /// the hit-test, by the focus geometry and by the toggle — the three had a
+    /// copy each, so the compiler named the same decision three times and a
+    /// fifth occupant was three edits rather than one. Exhaustive, so a new
+    /// occupant is still a compiler error, now at the one site that decides it.
+    pub fn pane(self) -> Option<Pane> {
+        match self {
+            Corner::Hidden => None,
+            Corner::Risk => Some(Pane::Risk),
+            Corner::Buffers => Some(Pane::Buffers),
+            Corner::History => Some(Pane::History),
+        }
+    }
+}
+
+/// The two panes that take their columns out of the shell, one from each side:
+/// the AI pane's shape from the right and the corner from the left. One value
+/// because they are one question — how much of the bottom row is the shell's —
+/// and because a rectangle chosen from a growing list of positional flags is a
+/// rectangle nobody can read at the call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Shapes {
+    pub ai: AiPane,
+    pub corner: Corner,
+}
+
+/// The first content row a pane shows: where the wheel left it, pulled back so
+/// the row you are on stays visible, and never further than the last screenful.
+/// `focus` and the result are 0-based; `fits` is how many rows the pane shows,
+/// which is not its height — chrome inside the borders takes rows too.
+pub fn viewport(offset: usize, focus: usize, rows: usize, fits: usize) -> usize {
+    let fits = fits.max(1);
+    let offset = offset.min(rows.saturating_sub(fits));
+    if focus < offset {
+        return focus;
+    }
+    if focus >= offset + fits {
+        return focus + 1 - fits;
+    }
+    offset
+}
+
+/// How many rows of context a framed range keeps above it when the pane has
+/// rows to spare after it — enough that the range is not pinned hard against
+/// the pane's top edge, and never enough to push its end off the bottom.
+const CONTEXT: usize = 2;
+
+/// The first content row a pane shows so that a whole *range* is on screen —
+/// what [`viewport`] is for a cursor. `crime::frame_site` argues why the two
+/// are different questions; here, `first` and `last` are 0-based rows and
+/// `fits` is how many rows the pane shows. A range taller than the pane is
+/// framed from its top: it cannot be shown whole, and it is read downward from
+/// where it starts.
+pub fn frame(first: usize, last: usize, fits: usize) -> usize {
+    let height = last.saturating_sub(first) + 1;
+    first.saturating_sub(CONTEXT.min(fits.max(1).saturating_sub(height)))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Layout {
+    pub tree: Area,
+    pub editor: Area,
+    pub ai: Area,
+    pub terminal: Area,
+    /// The narration band, directly under the editor — a rectangle on
+    /// `Layout` rather than one `ui` or `mouse` each compute on their own, so
+    /// drawing and hit-testing can never disagree about where it is. Empty
+    /// (zero height) whenever `band_height` is 0.
+    pub band: Area,
+    /// The step-menu, directly left of the editor's gutter — a spatial
+    /// index onto the Story being walked, not a control. Empty (zero width)
+    /// whenever `step_menu_width` is 0.
+    pub step_menu: Area,
+    /// The corner beneath the tree, beside the shell. Empty (zero width)
+    /// whenever nothing occupies it.
+    pub corner: Area,
+    /// Which pane that rectangle belongs to, carried here so `pane_at` answers
+    /// from the layout alone — the alternative is every hit-test taking the
+    /// occupant as a second argument and one of them forgetting.
+    pub occupant: Corner,
+}
+
+/// Tree, editor and AI across the top; terminal beneath. The terminal takes 30%
+/// of the height and the AI pane 30% of the width, except that the editor keeps
+/// at least 20 columns and the top keeps at least 5 rows. `band_height` is 0
+/// outside Story view's walk; the editor comes back already shortened by it,
+/// so no caller has to remember to subtract it a second time.
+///
+/// `ai_width` is `None` until the pane's edge is dragged: a share of the screen
+/// until somebody names a width, and after that the width they named — which is
+/// what the tree does either side of it, and what keeps a resized terminal from
+/// silently reflowing the child living in there. `ai` says whether that column
+/// stops above the terminal or runs the whole height past it.
+pub fn panes(
+    width: u16,
+    height: u16,
+    tree_divider: u16,
+    ai_width: Option<u16>,
+    band_height: u16,
+    step_menu_width: u16,
+    shapes: Shapes,
+) -> Layout {
+    let terminal_height =
+        ((height as u32 * 3 + 5) / 10).min(height.saturating_sub(5) as u32) as u16;
+    let top = height - terminal_height;
+
+    let tree_width = tree_divider.min(width);
+    let room = width.saturating_sub(tree_width);
+    let share = ((width as u32 * 3 + 5) / 10) as u16;
+    let ai_width = ai_width.unwrap_or(share).min(room.saturating_sub(20));
+    let step_menu_width = step_menu_width.min(room.saturating_sub(ai_width).saturating_sub(20));
+    let editor_width = room - ai_width - step_menu_width;
+    let band_height = band_height.min(top);
+    let editor_height = top - band_height;
+    let (ai_height, shell_room) = match shapes.ai {
+        AiPane::Beside => (top, width),
+        AiPane::Tall => (height, width.saturating_sub(ai_width)),
+    };
+    // The corner takes its columns from the shell and nothing else: a floor of
+    // one column, because a tall AI pane and a wide tree can between them ask
+    // for more than the screen has, and a shell of zero columns is a pty vt100
+    // panics on.
+    // Its own width is where the shell starts, so the two tile whatever the
+    // floor does to them. Every occupant is the same rectangle — which pane is
+    // in it changes what is drawn, never where.
+    let corner_width = match shapes.corner {
+        Corner::Hidden => 0,
+        _ => tree_width.min(shell_room.saturating_sub(1)),
+    };
+    let terminal_width = shell_room.saturating_sub(corner_width).max(1);
+
+    Layout {
+        tree: Area {
+            x: 0,
+            y: 0,
+            width: tree_width,
+            height: top,
+        },
+        editor: Area {
+            x: tree_width + step_menu_width,
+            y: 0,
+            width: editor_width,
+            height: editor_height,
+        },
+        step_menu: Area {
+            x: tree_width,
+            y: 0,
+            // The full top height, not `editor_height`: the band sits under
+            // the editor's own column, never the step-menu's, so spanning
+            // only `editor_height` here would leave the rows beside the band
+            // belonging to no pane at all.
+            width: step_menu_width,
+            height: top,
+        },
+        ai: Area {
+            x: tree_width + step_menu_width + editor_width,
+            y: 0,
+            width: ai_width,
+            height: ai_height,
+        },
+        terminal: Area {
+            x: corner_width,
+            y: top,
+            width: terminal_width,
+            height: terminal_height,
+        },
+        corner: Area {
+            x: 0,
+            y: top,
+            width: corner_width,
+            height: terminal_height,
+        },
+        occupant: shapes.corner,
+        band: Area {
+            x: tree_width + step_menu_width,
+            y: editor_height,
+            width: editor_width,
+            height: band_height,
+        },
+    }
+}
+
+/// A centred overlay box sized to its content. Shared so that what is drawn and
+/// what is clickable are the same rectangle — they were not, and the palette's
+/// click band was four columns wider than its box.
+pub fn overlay(width: u16, height: u16, lines: u16, widest: u16) -> Area {
+    let box_width = (widest + 4).clamp(24, width.max(24));
+    let box_height = (lines + 2).min(height);
+    Area {
+        x: width.saturating_sub(box_width) / 2,
+        y: height.saturating_sub(box_height) / 2,
+        width: box_width,
+        height: box_height,
+    }
+}
+
+/// A box inset from every edge, so what is behind it stays visible. Shrinks the
+/// margin rather than the box on a small terminal.
+pub fn inset(width: u16, height: u16, columns: u16, rows: u16) -> Area {
+    let columns = columns.min(width.saturating_sub(40) / 2);
+    let rows = rows.min(height.saturating_sub(10) / 2);
+    Area {
+        x: columns,
+        y: rows,
+        width: width.saturating_sub(columns * 2),
+        height: height.saturating_sub(rows * 2),
+    }
+}
+
+/// Where the project search's results box is, and how many rows of results it
+/// shows. Here rather than in `ui` for the reason [`GUTTER`] is: the scroll
+/// clamp has to count the rows the renderer draws, and the two computing the
+/// inset separately is how a list comes to be clamped against a box of another
+/// size. `SEARCH_HEADER` is the three rows above the list — the query, its
+/// count, and the row naming the box's own keys — which are chrome inside the
+/// borders, and a pane's row count is not its height. The mouse counts from
+/// past them too: the first result row is `y + 1 + SEARCH_HEADER`.
+pub const SEARCH_HEADER: u16 = 3;
+
+pub fn search_box(width: u16, height: u16) -> Area {
+    inset(width, height, 8, 3)
+}
+
+pub fn search_hit_rows(width: u16, height: u16) -> usize {
+    search_box(width, height)
+        .height
+        .saturating_sub(2 + SEARCH_HEADER) as usize
+}
+
+/// The `k`-th of `n` shells side by side in the terminal strip. Even columns,
+/// the last taking the remainder, so the splits tile the strip exactly — `ui`
+/// draws these and `mouse` hit-tests them, for the one-layout reason.
+pub fn split(strip: Area, n: usize, k: usize) -> Area {
+    let n = n.clamp(1, usize::from(u16::MAX)) as u16;
+    let k = (k.min(usize::from(n) - 1)) as u16;
+    let each = strip.width / n;
+    let x = strip.x + each * k;
+    Area {
+        x,
+        y: strip.y,
+        width: if k + 1 == n { strip.right() - x } else { each },
+        height: strip.height,
+    }
+}
+
+/// Which of `n` splits holds `column` — the last one whose left edge is at or
+/// before it, so the remainder the last split takes is its own.
+pub fn split_at(strip: Area, n: usize, column: u16) -> usize {
+    (0..n.max(1))
+        .rev()
+        .find(|&k| split(strip, n, k).x <= column)
+        .unwrap_or(0)
+}
+
+pub fn pane_at(layout: &Layout, column: u16, row: u16) -> Option<Pane> {
+    // Before the shell, and never folded into the tree's: a click in the corner
+    // means something entirely different from a click in either, and a pane
+    // hit-tested against its neighbour's rectangle is every drag in it asking
+    // for a span of the wrong pane.
+    if layout.corner.holds(column, row) {
+        layout.occupant.pane()
+    } else if layout.tree.holds(column, row) {
+        Some(Pane::Tree)
+    } else if layout.editor.holds(column, row) || layout.band.holds(column, row) {
+        Some(Pane::Editor)
+    } else if layout.ai.holds(column, row) {
+        Some(Pane::Ai)
+    } else if layout.terminal.holds(column, row) {
+        Some(Pane::Terminal)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::*;
+
+    #[test]
+    fn splits_tile_the_strip_and_the_last_takes_the_remainder() {
+        let strip = Area {
+            x: 5,
+            y: 20,
+            width: 10,
+            height: 6,
+        };
+        let thirds: Vec<_> = (0..3).map(|k| split(strip, 3, k)).collect();
+        assert_eq!(
+            thirds.iter().map(|a| (a.x, a.width)).collect::<Vec<_>>(),
+            vec![(5, 3), (8, 3), (11, 4)]
+        );
+        assert!(thirds.iter().all(|a| (a.y, a.height) == (20, 6)));
+        assert_eq!(split(strip, 1, 0), strip);
+        assert_eq!(split(strip, 0, 3), strip);
+        assert_eq!(split_at(strip, 3, 5), 0);
+        assert_eq!(split_at(strip, 3, 10), 1);
+        assert_eq!(split_at(strip, 3, 14), 2);
+        assert_eq!(split_at(strip, 1, 14), 0);
+    }
+}
+
+#[cfg(test)]
+mod viewport_tests {
+    use super::viewport;
+
+    // A 10-row list in a pane showing 4 of them.
+    #[test]
+    fn the_wheel_offset_is_kept_while_the_focused_row_is_visible() {
+        assert_eq!(viewport(2, 3, 10, 4), 2);
+    }
+
+    #[test]
+    fn a_focused_row_above_the_view_pulls_it_back() {
+        assert_eq!(viewport(5, 1, 10, 4), 1);
+    }
+
+    #[test]
+    fn a_focused_row_below_the_view_pushes_it_down() {
+        assert_eq!(viewport(0, 7, 10, 4), 4);
+    }
+
+    #[test]
+    fn scrolling_stops_at_the_last_screenful() {
+        assert_eq!(viewport(99, 0, 10, 4), 0);
+        assert_eq!(viewport(99, 9, 10, 4), 6);
+    }
+
+    #[test]
+    fn content_shorter_than_the_pane_never_scrolls() {
+        assert_eq!(viewport(99, 1, 3, 4), 0);
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::{frame, viewport};
+
+    #[test]
+    fn a_range_that_fits_keeps_a_little_context_above_it() {
+        assert_eq!(frame(10, 14, 9), 8);
+    }
+
+    #[test]
+    fn a_range_as_tall_as_the_pane_is_framed_from_its_top() {
+        assert_eq!(frame(10, 18, 9), 10);
+    }
+
+    #[test]
+    fn a_range_taller_than_the_pane_is_framed_from_its_top() {
+        assert_eq!(frame(10, 40, 9), 10);
+    }
+
+    #[test]
+    fn the_context_shrinks_rather_than_pushing_the_range_off_the_bottom() {
+        assert_eq!(frame(10, 17, 9), 9);
+    }
+
+    #[test]
+    fn a_range_at_the_top_never_frames_above_the_first_row() {
+        assert_eq!(frame(0, 4, 9), 0);
+        assert_eq!(frame(1, 5, 9), 0);
+    }
+
+    /// What the two functions have to agree on: `settle` re-clamps every
+    /// offset, so a frame the clamp moved would be a frame nobody sees.
+    #[test]
+    fn the_clamp_leaves_a_framed_range_alone() {
+        for (first, last) in [(10, 14), (10, 40), (0, 4), (10, 17)] {
+            let offset = frame(first, last, 9);
+            assert_eq!(viewport(offset, first, 60, 9), offset);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        inset, pane_at, panes, strip_at, strip_width, AiPane, Area, Corner, Shapes, STEP_MENU_WIDTH,
+    };
+    use crate::Pane;
+
+    /// Measured from ratatui's solver before the layout moved here. If these
+    /// change, the panes moved on screen.
+    #[test]
+    fn matches_what_ratatui_produced() {
+        let cases = [
+            (120u16, 26u16, 30u16, (30u16, 54u16, 36u16), (18u16, 8u16)),
+            (100, 26, 30, (30, 40, 30), (18, 8)),
+            (80, 24, 45, (45, 20, 15), (17, 7)),
+            (200, 50, 30, (30, 110, 60), (35, 15)),
+        ];
+        for (width, height, divider, (tree, editor, ai), (top, terminal)) in cases {
+            let layout = panes(width, height, divider, None, 0, 0, Shapes::default());
+            assert_eq!(
+                (layout.tree.width, layout.editor.width, layout.ai.width),
+                (tree, editor, ai),
+                "widths for {width}x{height} divider {divider}"
+            );
+            assert_eq!(
+                (layout.tree.height, layout.terminal.height),
+                (top, terminal),
+                "heights for {width}x{height}"
+            );
+        }
+    }
+
+    /// A width the user dragged to is kept whatever the screen does — only the
+    /// editor's 20-column floor overrides it.
+    #[test]
+    fn a_named_ai_width_is_kept_instead_of_the_share() {
+        assert_eq!(
+            panes(120, 26, 30, Some(40), 0, 0, Shapes::default())
+                .ai
+                .width,
+            40
+        );
+        assert_eq!(
+            panes(200, 50, 30, Some(40), 0, 0, Shapes::default())
+                .ai
+                .width,
+            40
+        );
+        // 30 tree + 20 editor leaves 30, not the 60 asked for.
+        assert_eq!(
+            panes(80, 26, 30, Some(60), 0, 0, Shapes::default())
+                .ai
+                .width,
+            30
+        );
+    }
+
+    #[test]
+    fn the_panes_tile_without_gaps_or_overlap() {
+        let layout = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        assert_eq!(layout.tree.right(), layout.editor.x);
+        assert_eq!(layout.editor.right(), layout.ai.x);
+        assert_eq!(layout.ai.right(), 120);
+        assert_eq!(layout.tree.bottom(), layout.terminal.y);
+        assert_eq!(layout.terminal.bottom(), 26);
+    }
+
+    #[test]
+    fn every_column_belongs_to_exactly_one_pane() {
+        let layout = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        for column in 0..120 {
+            for row in [0u16, 17, 18, 25] {
+                assert!(
+                    pane_at(&layout, column, row).is_some(),
+                    "nothing at {column},{row}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hit_testing_finds_the_right_pane() {
+        let layout = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        assert_eq!(pane_at(&layout, 5, 5), Some(Pane::Tree));
+        assert_eq!(pane_at(&layout, 40, 5), Some(Pane::Editor));
+        assert_eq!(pane_at(&layout, 100, 5), Some(Pane::Ai));
+        assert_eq!(pane_at(&layout, 40, 20), Some(Pane::Terminal));
+        assert_eq!(pane_at(&layout, 200, 5), None);
+    }
+
+    #[test]
+    fn a_band_shortens_the_editor_and_sits_directly_under_it() {
+        let full = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        let banded = panes(120, 26, 30, None, 6, 0, Shapes::default());
+        assert_eq!(banded.editor.height, full.editor.height - 6);
+        assert_eq!(banded.editor.x, full.editor.x);
+        assert_eq!(banded.editor.width, full.editor.width);
+        assert_eq!(banded.band.x, banded.editor.x);
+        assert_eq!(banded.band.width, banded.editor.width);
+        assert_eq!(banded.band.y, banded.editor.bottom());
+        assert_eq!(banded.band.height, 6);
+        // Every other pane is untouched — the band is the only rectangle
+        // that changes.
+        assert_eq!(banded.tree, full.tree);
+        assert_eq!(banded.ai, full.ai);
+        assert_eq!(banded.terminal, full.terminal);
+    }
+
+    #[test]
+    fn a_click_on_the_band_hit_tests_as_the_editor() {
+        let layout = panes(120, 26, 30, None, 6, 0, Shapes::default());
+        let (column, row) = (layout.band.x, layout.band.y);
+        assert_eq!(pane_at(&layout, column, row), Some(Pane::Editor));
+    }
+
+    /// The step-menu narrows the editor by exactly its own width and sits
+    /// directly to its left — pinned to the exact measured numbers, the same
+    /// way `matches_what_ratatui_produced` pins the other panes, not just
+    /// relationally.
+    #[test]
+    fn a_step_menu_narrows_the_editor_and_sits_directly_left_of_it() {
+        let full = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        let menued = panes(120, 26, 30, None, 0, STEP_MENU_WIDTH, Shapes::default());
+        assert_eq!((menued.step_menu.x, menued.step_menu.y), (30, 0));
+        assert_eq!((menued.step_menu.width, menued.step_menu.height), (20, 18));
+        assert_eq!((menued.editor.x, menued.editor.width), (50, 34));
+        assert_eq!(menued.editor.height, full.editor.height);
+        assert_eq!(menued.editor.width, full.editor.width - STEP_MENU_WIDTH);
+        assert_eq!(menued.editor.x, menued.step_menu.right());
+        // The step-menu spans the tree's full height, not just the editor's:
+        // the band sits under the editor's own column, never the
+        // step-menu's, so a shorter step-menu would leave the rows beside
+        // the band belonging to no pane.
+        assert_eq!(menued.step_menu.height, menued.tree.height);
+        // Every other pane is untouched — the step-menu is the only new
+        // rectangle, taken out of the editor's width alone.
+        assert_eq!(menued.tree, full.tree);
+        assert_eq!(menued.ai, full.ai);
+        assert_eq!(menued.terminal, full.terminal);
+    }
+
+    /// The step-menu is drawn, never hit-tested: the ticket asks for no new
+    /// mouse region and no click-to-jump, so a click over it resolves to no
+    /// pane at all rather than quietly falling into the editor's.
+    #[test]
+    fn a_click_on_the_step_menu_hits_no_pane() {
+        let layout = panes(120, 26, 30, None, 0, STEP_MENU_WIDTH, Shapes::default());
+        let (column, row) = (layout.step_menu.x, layout.step_menu.y);
+        assert_eq!(pane_at(&layout, column, row), None);
+    }
+
+    /// An extreme AI-pane width squeezes the step-menu to nothing before it
+    /// ever touches the editor's own 20-column floor — the menu is
+    /// secondary furniture, the editor is not.
+    #[test]
+    fn an_extreme_ai_width_empties_the_step_menu_before_the_editor_floor() {
+        let squeezed = panes(120, 26, 30, Some(70), 0, STEP_MENU_WIDTH, Shapes::default());
+        assert_eq!(squeezed.step_menu.width, 0);
+        assert_eq!(squeezed.editor.width, 20);
+    }
+
+    /// The whole point of the tall shape: the AI pane gains the terminal's
+    /// rows and the terminal gives up its columns. Nothing else moves — the
+    /// tree, the editor and the AI pane's own left edge are where they were,
+    /// so switching shapes never reflows the buffer beside it.
+    #[test]
+    fn a_tall_ai_pane_takes_the_height_and_the_terminal_gives_up_the_width() {
+        let beside = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        let tall = panes(
+            120,
+            26,
+            30,
+            None,
+            0,
+            0,
+            Shapes {
+                ai: AiPane::Tall,
+                ..Shapes::default()
+            },
+        );
+        assert_eq!(tall.ai.height, 26);
+        assert_eq!(tall.terminal.width, 120 - tall.ai.width);
+        assert_eq!(tall.terminal.right(), tall.ai.x);
+        assert_eq!((tall.ai.x, tall.ai.width), (beside.ai.x, beside.ai.width));
+        assert_eq!(tall.tree, beside.tree);
+        assert_eq!(tall.editor, beside.editor);
+        assert_eq!(tall.terminal.height, beside.terminal.height);
+    }
+
+    #[test]
+    fn a_tall_pane_still_tiles_without_gaps_or_overlap() {
+        let layout = panes(
+            120,
+            26,
+            30,
+            None,
+            0,
+            0,
+            Shapes {
+                ai: AiPane::Tall,
+                ..Shapes::default()
+            },
+        );
+        for column in 0..120 {
+            for row in 0..26 {
+                assert!(
+                    pane_at(&layout, column, row).is_some(),
+                    "nothing at {column},{row}"
+                );
+            }
+        }
+        // The rows the terminal used to own beside the AI pane are the AI
+        // pane's now, and the ones in front of it are still the terminal's.
+        assert_eq!(pane_at(&layout, 100, 20), Some(Pane::Ai));
+        assert_eq!(pane_at(&layout, 40, 20), Some(Pane::Terminal));
+    }
+
+    /// A dragged width is the width in either shape — going tall must not
+    /// quietly hand the pane the share it had already been dragged off.
+    #[test]
+    fn a_tall_pane_keeps_a_named_width() {
+        assert_eq!(
+            panes(
+                120,
+                26,
+                30,
+                Some(40),
+                0,
+                0,
+                Shapes {
+                    ai: AiPane::Tall,
+                    ..Shapes::default()
+                }
+            )
+            .ai
+            .width,
+            40
+        );
+    }
+
+    /// The whole point of the Risk list's shape: it sits beneath the tree at
+    /// the tree's width, the shell gives up exactly those columns and starts
+    /// where the editor starts, and nothing above it moves. Pinned to the
+    /// measured numbers, the way the other panes are.
+    #[test]
+    fn the_risk_list_sits_under_the_tree_and_the_shell_gives_up_its_columns() {
+        let hidden = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        let shown = panes(
+            120,
+            26,
+            30,
+            None,
+            0,
+            0,
+            Shapes {
+                corner: Corner::Risk,
+                ..Shapes::default()
+            },
+        );
+        assert_eq!(
+            (hidden.corner.width, hidden.corner.height),
+            (0, 8),
+            "a hidden pane is zero-sized"
+        );
+        assert_eq!(
+            (hidden.terminal.x, hidden.terminal.width),
+            (0, 120),
+            "and the shell has the full width"
+        );
+        assert_eq!(
+            (
+                shown.corner.x,
+                shown.corner.y,
+                shown.corner.width,
+                shown.corner.height
+            ),
+            (0, 18, 30, 8)
+        );
+        assert_eq!((shown.terminal.x, shown.terminal.width), (30, 90));
+        assert_eq!(shown.terminal.x, shown.corner.right());
+        assert_eq!(shown.corner.width, shown.tree.width);
+        assert_eq!(shown.corner.y, shown.tree.bottom());
+        // The shell starts where the editor starts, which is what makes the
+        // left-hand column read as one column.
+        assert_eq!(shown.terminal.x, shown.editor.x);
+        // Except while a Story is being walked: the step-menu moves the
+        // editor right, and the Risk list stays at the tree's width rather
+        // than following it — the pane is the tree's column, and the shell
+        // still starts at the Risk list's own right edge.
+        let menued = panes(
+            120,
+            26,
+            30,
+            None,
+            0,
+            STEP_MENU_WIDTH,
+            Shapes {
+                corner: Corner::Risk,
+                ..Shapes::default()
+            },
+        );
+        assert_eq!(menued.corner.width, menued.tree.width);
+        assert_eq!(menued.terminal.x, menued.corner.right());
+        assert_eq!(menued.editor.x, menued.tree.right() + STEP_MENU_WIDTH);
+        // Nothing else moves either way: toggling the pane must not reflow the
+        // buffer or the child beside it.
+        assert_eq!(shown.tree, hidden.tree);
+        assert_eq!(shown.editor, hidden.editor);
+        assert_eq!(shown.ai, hidden.ai);
+        assert_eq!(shown.terminal.y, hidden.terminal.y);
+        assert_eq!(shown.terminal.height, hidden.terminal.height);
+    }
+
+    /// Both shapes at once: the AI pane takes the shell's columns from the
+    /// right and the Risk list from the left, and the shell keeps what is
+    /// between them.
+    #[test]
+    fn a_tall_ai_pane_and_the_risk_list_take_the_shell_from_both_sides() {
+        let layout = panes(
+            120,
+            26,
+            30,
+            None,
+            0,
+            0,
+            Shapes {
+                ai: AiPane::Tall,
+                corner: Corner::Risk,
+            },
+        );
+        assert_eq!((layout.corner.x, layout.corner.width), (0, 30));
+        assert_eq!((layout.terminal.x, layout.terminal.width), (30, 54));
+        assert_eq!(layout.terminal.right(), layout.ai.x);
+        assert_eq!(layout.ai.height, 26);
+    }
+
+    /// The floor: a tree as wide as the screen would leave the shell no
+    /// columns at all, and a pty of zero columns is one vt100 panics on. The
+    /// Risk list gives way rather than the shell disappearing — and it is the
+    /// tree's width that can reach this, never the tall AI pane, whose own
+    /// width is already capped by the editor's 20-column floor.
+    #[test]
+    fn the_shell_keeps_a_column_when_the_risk_list_asks_for_everything() {
+        for ai in [AiPane::Beside, AiPane::Tall] {
+            let layout = panes(
+                30,
+                26,
+                30,
+                None,
+                0,
+                0,
+                Shapes {
+                    ai,
+                    corner: Corner::Risk,
+                },
+            );
+            assert_eq!(layout.terminal.width, 1, "{ai:?}");
+            assert_eq!(layout.corner.width, 29);
+            assert_eq!(layout.terminal.x, layout.corner.right());
+        }
+    }
+
+    #[test]
+    fn the_risk_list_is_hit_tested_as_itself_and_never_as_the_tree_or_the_shell() {
+        let layout = panes(
+            120,
+            26,
+            30,
+            None,
+            0,
+            0,
+            Shapes {
+                corner: Corner::Risk,
+                ..Shapes::default()
+            },
+        );
+        assert_eq!(pane_at(&layout, 5, 20), Some(Pane::Risk));
+        assert_eq!(pane_at(&layout, 5, 5), Some(Pane::Tree));
+        assert_eq!(pane_at(&layout, 40, 20), Some(Pane::Terminal));
+        // The slot's other occupant: the same rectangle, answered as itself.
+        // Which pane is in the corner changes what a click means and never
+        // where the corner is, so a click that landed on a Risk row must land
+        // on a buffer row at the same cell.
+        let buffers = panes(
+            120,
+            26,
+            30,
+            None,
+            0,
+            0,
+            Shapes {
+                corner: Corner::Buffers,
+                ..Shapes::default()
+            },
+        );
+        assert_eq!(buffers.corner, layout.corner);
+        assert_eq!(buffers.terminal, layout.terminal);
+        assert_eq!(pane_at(&buffers, 5, 20), Some(Pane::Buffers));
+        // And the third, which is what "every occupant is the same rectangle"
+        // has to keep meaning as the slot grows: a third pane that took a
+        // rectangle of its own would be a third set of columns for the shell to
+        // lose and a third hit-test to get one row off.
+        let history = panes(
+            120,
+            26,
+            30,
+            None,
+            0,
+            0,
+            Shapes {
+                corner: Corner::History,
+                ..Shapes::default()
+            },
+        );
+        assert_eq!(history.corner, layout.corner);
+        assert_eq!(history.terminal, layout.terminal);
+        assert_eq!(pane_at(&history, 5, 20), Some(Pane::History));
+        // Hidden, the same column belongs to the shell again — there is no
+        // rectangle left over to swallow a click.
+        let hidden = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        assert_eq!(pane_at(&hidden, 5, 20), Some(Pane::Terminal));
+        for column in 0..120 {
+            for row in 0..26 {
+                assert!(
+                    pane_at(&layout, column, row).is_some(),
+                    "nothing at {column},{row}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_inset_box_leaves_the_edges_showing() {
+        let box_area = inset(120, 26, 8, 3);
+        assert_eq!(
+            (box_area.x, box_area.y, box_area.width, box_area.height),
+            (8, 3, 104, 20)
+        );
+    }
+
+    /// The rectangle the results box is drawn in and the rows of results it
+    /// leaves room for, pinned together: the clamp counts rows the renderer
+    /// draws, so a change to either is a change on screen and fails here.
+    #[test]
+    fn the_results_box_leaves_room_for_its_query_and_its_borders() {
+        let box_area = super::search_box(100, 16);
+        assert_eq!((box_area.y, box_area.height), (3, 10));
+        // Ten rows: two borders and three of query above the list.
+        assert_eq!(super::search_hit_rows(100, 16), 5);
+        // A terminal too short for a list still asks for no negative rows.
+        assert_eq!(super::search_hit_rows(20, 4), 0);
+    }
+
+    #[test]
+    fn a_small_terminal_gives_up_the_margin_before_the_box() {
+        // 44 columns leaves room for 2 either side, not 8.
+        let box_area = inset(44, 12, 8, 3);
+        assert_eq!((box_area.x, box_area.width), (2, 40));
+        assert_eq!((box_area.y, box_area.height), (1, 10));
+        // And below the minimum there is simply no margin.
+        let tiny = inset(20, 6, 8, 3);
+        assert_eq!((tiny.x, tiny.width, tiny.y, tiny.height), (0, 20, 0, 6));
+    }
+
+    /// A narrow terminal must not panic or produce a negative-width pane.
+    #[test]
+    fn absurd_sizes_stay_sane() {
+        for (width, height) in [(1u16, 1u16), (10, 3), (40, 6), (0, 0)] {
+            for shapes in [
+                (Shapes::default()),
+                (Shapes {
+                    corner: Corner::Risk,
+                    ..Shapes::default()
+                }),
+                (Shapes {
+                    ai: AiPane::Tall,
+                    ..Shapes::default()
+                }),
+                (Shapes {
+                    ai: AiPane::Tall,
+                    corner: Corner::Risk,
+                }),
+            ] {
+                let layout = panes(width, height, 30, None, 6, 0, shapes);
+                assert!(layout.ai.right() <= width.max(1) || width == 0);
+                assert_eq!(layout.terminal.bottom(), height);
+            }
+        }
+    }
+
+    /// The strip's columns, which is the whole of what `ui` leaves room for
+    /// and `mouse` hit-tests. Measured, never counted: `«` is one column and
+    /// `1.25x` is five, and a count would read the same for a glyph a font
+    /// draws twice as wide.
+    #[test]
+    fn a_right_aligned_strip_is_hit_tested_where_it_is_drawn() {
+        let area = Area {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 4,
+        };
+        let labels: Vec<String> = ["\u{ab}", "\u{25b8}", "1.25x"]
+            .iter()
+            .map(|label| label.to_string())
+            .collect();
+        // One space after each, the last landing on the column before the
+        // corner: 1 + 1 + 5, plus three spaces.
+        assert_eq!(strip_width(&labels), 10);
+        assert_eq!(strip_at(area, &labels, 19), Some(0));
+        assert_eq!(strip_at(area, &labels, 21), Some(1));
+        // The whole of the speed, and neither of the spaces beside it.
+        assert_eq!(strip_at(area, &labels, 22), None);
+        assert_eq!(strip_at(area, &labels, 23), Some(2));
+        assert_eq!(strip_at(area, &labels, 27), Some(2));
+        assert_eq!(strip_at(area, &labels, 28), None);
+        // The corner is not a control, and neither is anything left of the
+        // strip.
+        assert_eq!(strip_at(area, &labels, 29), None);
+        assert_eq!(strip_at(area, &labels, 18), None);
+        // A pane narrower than its own strip has no columns to offer rather
+        // than wrapping the strip onto columns nobody pointed at.
+        assert_eq!(strip_at(Area { width: 4, ..area }, &labels, 2), None);
+    }
+}

@@ -1,0 +1,106 @@
+# Builds one binary per platform and publishes them as a GitHub Release of this repository. See
+# .scratch/binary-releases/spec.md and docs/adr/0017-a-binary-install-updates-itself-from-a-release.md.
+#
+# Trigger: a push to main that moves Cargo.toml's minor or major version. Patch bumps land on every
+# commit here (AGENTS.md's bump rule) and do not release. `workflow_dispatch` forces a release of
+# whatever main holds, for the first run and for re-runs.
+#
+# No setup: the workflow's own token tags and releases (.scratch/binary-releases/issues/01-*.md).
+#
+# Asset names are `crime-<os>-<arch>`, and the four spellings below are the ones a unit test in
+# src/ pins (issue 02). Change them in both places or every binary install reports no asset.
+
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      release: ${{ steps.read.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: read
+        run: |
+          now=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          before=$(git show HEAD~1:Cargo.toml 2>/dev/null | grep -m1 '^version' | cut -d'"' -f2 || true)
+          IFS=. read -r now_major now_minor _ <<<"$now"
+          IFS=. read -r before_major before_minor _ <<<"${before:-0.0.0}"
+          release=false
+          [ "$now_major.$now_minor" != "$before_major.$before_minor" ] && release=true
+          [ "${{ github.event_name }}" = workflow_dispatch ] && release=true
+          echo "version=$now" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "$before -> $now: release=$release"
+
+  build:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-14,         asset: crime-macos-aarch64, optional: false }
+          - { runner: macos-15-intel,   asset: crime-macos-x86_64,  optional: false }
+          # The oldest Ubuntu runner, so the glibc the binary asks for is a few years old.
+          - { runner: ubuntu-22.04,     asset: crime-linux-x86_64,  optional: false }
+          # arm64 Linux runners are not offered to every repository; a leg that cannot
+          # start must not stop the other three.
+          - { runner: ubuntu-22.04-arm, asset: crime-linux-aarch64, optional: true }
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.optional }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked
+      - run: cp target/release/crime "${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Refuse a version that is already tagged
+        run: |
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "v$VERSION is already tagged; bump Cargo.toml rather than republish" >&2
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Checksums
+        working-directory: assets
+        run: sha256sum crime-* > SHA256SUMS && cat SHA256SUMS
+      - name: Release notes from the commits since the last tag
+        run: |
+          last=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || true)
+          { echo "## v$VERSION"; echo; git log --no-merges --format='- %s' "${last:+$last..}HEAD" | head -200; } > notes.md
+      - name: Tag this repository
+        run: |
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+      - name: Create the Release
+        run: gh release create "v$VERSION" assets/* --title "CRIME $VERSION" --notes-file notes.md

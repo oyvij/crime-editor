@@ -1,0 +1,56 @@
+[package]
+name = "crime"
+version = "0.139.3"
+edition = "2021"
+description = "CRIME — Command · Review · Integrated · Modal · Editor"
+license = "MIT"
+repository = "https://github.com/oyvij/CRIME"
+readme = "README.md"
+
+[dependencies]
+anyhow = "1.0.104"
+arboard = "3.6.1"
+clap = { version = "4.6.6", features = ["derive"] }
+crossterm = "0.29.0"
+git2 = "0.21.0"
+ignore = "0.4.33"
+libc = "0.2.180"
+notify = "8.2.0"
+portable-pty = "0.9.0"
+ratatui = "0.30.2"
+textwrap = "0.16.2"
+semver = "1.0.28"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.151"
+shlex = "2.0.1"
+syntect = "5.3.0"
+terminput = "0.5.15"
+terminput-crossterm = "0.4.11"
+toml = "1.1.4"
+vt100 = "0.16.2"
+pulldown-cmark = { version = "0.13.4", default-features = false }
+mermaid-text = "0.57.0"
+unicode-width = "0.2.2"
+rust-code-analysis = "0.0.25"
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-onig"] }
+lsp-types = "0.94"
+lsp-server = "0.10"
+which = "8.0.6"
+unicode-segmentation = "1.13.3"
+hound = "3.5.1"
+linkify = "0.11.0"
+
+[dev-dependencies]
+cucumber = "0.21"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[test]]
+name = "cucumber"
+harness = false
+
+# macOS keeps DWARF in loose `.rcgu.o` files next to the artifacts and Cargo never collects them,
+# so every recompile of the edit-test loop left a new set behind: 862k of them, 157G, in one year.
+# No debug info means no object files to strip. Backtraces keep function names, not line numbers.
+[profile.dev]
+debug = 0

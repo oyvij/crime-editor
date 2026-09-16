@@ -1,0 +1,10 @@
+# Rust build output
+/target
+
+# Per-user CRIME state when dogfooding CRIME on this repo.
+/.crime/
+
+# Agent worktrees: a full checkout plus its build output, 2.3 GB of it.
+.claude/worktrees/
+# Per-user agent settings; the shared contract is CLAUDE.md and AGENTS.md.
+.claude/settings.local.json
