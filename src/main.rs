@@ -93,6 +93,7 @@ fn main() -> Result<()> {
         // Which install command a server list row offers. Read here rather than
         // in the library, exactly as the version above is (R31.22).
         os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
     };
 
     let (state, _config, startup_effects) = match startup::start(&input) {
@@ -588,6 +589,9 @@ struct Edge {
     /// a TUI that froze. The Buffer it was asked about rides along so the core
     /// can measure the answer against what is on screen now.
     formatted: Sender<(String, PathBuf, u64, format::Answer)>,
+    /// Where the latest-Release request puts its body, off the main loop so a
+    /// slow network never holds the first frame.
+    released: Sender<Option<String>>,
     /// One language server per language, held for as long as it is alive. This
     /// map *is* `State::lsp_running`: the core reads what the edge holds and
     /// never remembers that a process exists — the failure `ai_running` was, in
@@ -707,6 +711,7 @@ fn run(mut state: State, root: PathBuf, startup_effects: Vec<Effect>) -> Result<
     let (analysed_tx, analysed_rx) = channel();
     let (tested_tx, tested_rx) = channel();
     let (formatted_tx, formatted_rx) = channel();
+    let (released_tx, released_rx) = channel();
     let mut edge = Edge {
         shells: vec![pty::Pane::spawn(None, &root, size.height / 3, size.width)?],
         ai: None,
@@ -743,6 +748,7 @@ fn run(mut state: State, root: PathBuf, startup_effects: Vec<Effect>) -> Result<
         analysed: analysed_tx,
         tested: tested_tx,
         formatted: formatted_tx,
+        released: released_tx,
     };
 
     let (watch_tx, watch_rx) = channel();
@@ -797,7 +803,13 @@ fn run(mut state: State, root: PathBuf, startup_effects: Vec<Effect>) -> Result<
         sync_watches(&state, &mut watcher, &mut watched);
         let before = queue.len();
         collect_watch_events(&watch_rx, &state, &mut queue);
-        collect_job_events(&analysed_rx, &tested_rx, &formatted_rx, &mut queue);
+        collect_job_events(
+            &analysed_rx,
+            &tested_rx,
+            &formatted_rx,
+            &released_rx,
+            &mut queue,
+        );
         dirty |= queue.len() != before;
         dirty |= resize_panes(&mut terminal, &state, &mut edge, &mut queue);
 
@@ -983,8 +995,12 @@ fn collect_job_events(
     analysed: &Receiver<(u64, Figures, Option<Figures>)>,
     tested: &Receiver<(bool, String)>,
     formatted: &Receiver<(String, PathBuf, u64, format::Answer)>,
+    released: &Receiver<Option<String>>,
     queue: &mut VecDeque<Event>,
 ) {
+    while let Ok(body) = released.try_recv() {
+        queue.push_back(Event::ReleaseAnswered(body));
+    }
     while let Ok((generation, figures, before)) = analysed.try_recv() {
         queue.push_back(Event::RiskFigures {
             generation,
@@ -2625,6 +2641,12 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
         Effect::RestoreSnapshot { iteration } => {
             restore(&edge.root, edge.sidecar.as_deref(), iteration)
         }
+        Effect::CheckRelease { url } => {
+            let answer = edge.released.clone();
+            std::thread::spawn(move || {
+                let _ = answer.send(latest_release(&url));
+            });
+        }
         Effect::RunTests { command } => {
             // Off the main loop and out of the shell pane: the TUI answers keys
             // while a suite runs, and the shell stays the user's.
@@ -2659,6 +2681,38 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             });
         }
         other => debug_assert!(false, "no group executes {other:?}"),
+    }
+}
+
+/// The body of the latest-Release request, or `None` with the reason printed
+/// alongside the rest of what the edge cannot show on screen: a failed check is
+/// never a notice (ADR 0017).
+fn latest_release(url: &str) -> Option<String> {
+    let outcome = std::process::Command::new("curl")
+        .args([
+            "-fsSL",
+            "--max-time",
+            "20",
+            "-H",
+            "Accept: application/vnd.github+json",
+            url,
+        ])
+        .output();
+    match outcome {
+        Ok(finished) if finished.status.success() => {
+            Some(String::from_utf8_lossy(&finished.stdout).into_owned())
+        }
+        Ok(finished) => {
+            eprintln!(
+                "crime: release check failed: {}",
+                String::from_utf8_lossy(&finished.stderr).trim()
+            );
+            None
+        }
+        Err(error) => {
+            eprintln!("crime: release check failed: curl: {error}");
+            None
+        }
     }
 }
 

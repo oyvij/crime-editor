@@ -8,7 +8,7 @@
 # No setup: the workflow's own token tags and releases (.scratch/binary-releases/issues/01-*.md).
 #
 # Asset names are `crime-<os>-<arch>`, and the four spellings below are the ones a unit test in
-# src/ pins (issue 02). Change them in both places or every binary install reports no asset.
+# src/startup.rs pins (`asset_names_match_the_release_workflow`). Change them in both places or every binary install reports no asset.
 
 name: release
 

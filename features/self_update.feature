@@ -9,9 +9,13 @@ Feature: Staying up to date
   strictly ahead. Strictly: a checkout behind the binary is not an Update, because checking
   out an old branch must not nag anyone to downgrade.
 
-  The check is one file read and a comparison. No network, no git, no watcher and no timer:
-  the Running version cannot change while CRIME is running, and the checkout's Version only
-  changes by something the user did themselves.
+  For a checkout install the check is one file read and a comparison. No network, no git, no
+  watcher and no timer: the Running version cannot change while CRIME is running, and the
+  checkout's Version only changes by something the user did themselves.
+
+  A binary install has no checkout to read, so it asks this repository once at startup for its
+  latest Release and compares that Release's Version instead — one request, never a timer
+  (docs/adr/0017-a-binary-install-updates-itself-from-a-release.md).
 
   A checkout counts as CRIME's own only when its manifest parses and names the crime
   package. A copied binary with nothing above it, another crate's manifest, and a manifest
@@ -185,3 +189,94 @@ Feature: Staying up to date
     Then no new AI session was started
     And no file was opened in the editor
     And no file was written
+
+  # A binary install learns of an Update from a Release rather than a manifest. The edge fetches
+  # and hands the body back unread; which Version it names, whether that is newer, and which Asset
+  # is this platform's are the core's to decide. Every way the answer can be useless — offline,
+  # garbage, not newer, nothing built for this machine — is silent: a nag about the network is
+  # worse than a marker a day late.
+
+  Scenario: A binary install asks for the latest Release when it starts
+    Given there is no checkout manifest
+    When CRIME starts in the project
+    Then CRIME asks for the latest Release
+
+  Scenario: A checkout install never asks for a Release
+    Given the checkout manifest is:
+      """
+      [package]
+      name = "crime"
+      version = "0.1.0"
+      """
+    When CRIME starts in the project
+    Then CRIME does not ask for a Release
+
+  Scenario: A newer Release offers an Update and is remembered for this platform
+    Given there is no checkout manifest
+    And CRIME was built for "linux" on "x86_64"
+    And CRIME started in the project
+    When the latest Release answers:
+      """
+      {"tag_name": "v0.2.0", "assets": [
+        {"name": "crime-macos-aarch64", "browser_download_url": "https://example.test/crime-macos-aarch64"},
+        {"name": "crime-linux-x86_64", "browser_download_url": "https://example.test/crime-linux-x86_64"},
+        {"name": "SHA256SUMS", "browser_download_url": "https://example.test/SHA256SUMS"}
+      ]}
+      """
+    Then an Update is available
+    And the remembered Release is "0.2.0" with the Asset "https://example.test/crime-linux-x86_64" and the checksums "https://example.test/SHA256SUMS"
+    And no notice was raised
+
+  Scenario Outline: A Release that is not newer offers no Update
+    Given there is no checkout manifest
+    And CRIME was built for "linux" on "x86_64"
+    And CRIME started in the project
+    When the latest Release answers:
+      """
+      {"tag_name": "<tag>", "assets": [
+        {"name": "crime-linux-x86_64", "browser_download_url": "https://example.test/crime-linux-x86_64"},
+        {"name": "SHA256SUMS", "browser_download_url": "https://example.test/SHA256SUMS"}
+      ]}
+      """
+    Then no Update is available
+    And no Release is remembered
+    And no notice was raised
+
+    Examples:
+      | tag    |
+      | v0.1.0 |
+      | v0.0.9 |
+
+  Scenario: An answer that does not parse offers no Update
+    Given there is no checkout manifest
+    And CRIME started in the project
+    When the latest Release answers:
+      """
+      <html>rate limited</html>
+      """
+    Then no Update is available
+    And no Release is remembered
+    And no notice was raised
+
+  Scenario: A request that failed offers no Update
+    Given there is no checkout manifest
+    And CRIME started in the project
+    When the request for the latest Release fails
+    Then no Update is available
+    And no Release is remembered
+    And no notice was raised
+
+  Scenario: A Release with nothing built for this platform offers no Update
+    Given there is no checkout manifest
+    And CRIME was built for "linux" on "aarch64"
+    And CRIME started in the project
+    When the latest Release answers:
+      """
+      {"tag_name": "v0.2.0", "assets": [
+        {"name": "crime-linux-x86_64", "browser_download_url": "https://example.test/crime-linux-x86_64"},
+        {"name": "SHA256SUMS", "browser_download_url": "https://example.test/SHA256SUMS"}
+      ]}
+      """
+    Then no Update is available
+    And no Release is remembered
+    And no notice was raised

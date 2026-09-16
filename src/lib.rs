@@ -694,6 +694,10 @@ pub enum Event {
     /// `:update` — a release build of CRIME's own checkout. Nothing waits on it:
     /// the terminal pane the user is looking at is the whole report.
     Rebuild,
+    /// What the latest-Release request came back with, unread: the body, or
+    /// `None` when the request failed — which the edge has already logged, and
+    /// which is shown nowhere (ADR 0017).
+    ReleaseAnswered(Option<String>),
     /// Characters the edge read off a pty's grid — the one selection it has to
     /// finish itself, because there is no buffer behind a pty to anchor to.
     /// A drag over a pty pane: the span it covered and the text the edge read
@@ -1126,6 +1130,12 @@ pub enum Effect {
     /// field only the edge writes (R31.23) — the core reads what it is told and
     /// learns only that what it is reading is fresh.
     ProbePath,
+    /// Ask this repository for its latest Release, answered with
+    /// `Event::ReleaseAnswered`. Only a binary install asks: a checkout install
+    /// reads its manifest and never touches the network (ADR 0017).
+    CheckRelease {
+        url: String,
+    },
     /// One JSON-RPC message for that language's server. The library built it,
     /// for the reason `mouse::report` builds a mouse report: bytes decided in
     /// `main.rs` are bytes no test watches.
@@ -1663,6 +1673,13 @@ pub struct State {
     /// Set once at startup and never again: neither number can change while
     /// CRIME is running, so there is nothing to watch and nothing to dismiss.
     pub update_available: bool,
+    /// The Release a binary install found newer than itself, which is what
+    /// `:update` will fetch. `None` on a checkout install, and whenever the
+    /// answer offered no Update.
+    pub release: Option<startup::Release>,
+    /// `Startup::running_version`, kept because a Release is answered after
+    /// startup has returned.
+    pub running_version: String,
     /// The story artifact for the current change, or the reason there is
     /// none to walk.
     pub story_set: story::Set,
@@ -1859,6 +1876,9 @@ pub struct State {
     /// is here rather than read from the environment for the reason R31.22
     /// gives: a row's offer is then a value a scenario can set.
     pub os: String,
+    /// And the CPU, as `std::env::consts::ARCH` spells it — with `os`, the name
+    /// of this platform's Asset.
+    pub arch: String,
     /// What each server says about each file, keyed by path rather than held on
     /// the Buffer: a file's marks have to survive switching away from it and
     /// back, and Review view is told about changed files that were never opened
@@ -2044,6 +2064,8 @@ impl Default for State {
             last_tap: None,
             checkout: None,
             update_available: false,
+            release: None,
+            running_version: String::new(),
             story_set: story::Set::None,
             left_branch: None,
             guest: None,
@@ -2079,6 +2101,7 @@ impl Default for State {
             workspace_facts: BTreeMap::new(),
             recheck: None,
             os: String::new(),
+            arch: String::new(),
             diagnostics: BTreeMap::new(),
             hover: None,
             hovered_action: None,
@@ -5954,7 +5977,7 @@ fn take_the_corner(state: &State, next: &mut State, asked: layout::Corner) -> Ve
 }
 
 /// AskDefinition, ClickText, DoubleClickText, DragText, HoverLink, HoverAction, HoverMinimap,
-/// Rebuild, SelectIn
+/// Rebuild, ReleaseAnswered, SelectIn
 fn on_rebuild(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         // Ahead of the scroll clamp and returning before it, for the reason the
@@ -5970,6 +5993,13 @@ fn on_rebuild(state: &State, mut next: State, event: Event, wheeled: bool) -> An
             ))],
             None => vec![Effect::Notify("no-checkout")],
         },
+        Event::ReleaseAnswered(body) => {
+            next.release = body.and_then(|body| {
+                startup::release(&body, &state.os, &state.arch, &state.running_version)
+            });
+            next.update_available |= next.release.is_some();
+            vec![]
+        }
 
         Event::SelectIn {
             pane,

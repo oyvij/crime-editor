@@ -495,6 +495,64 @@ pub struct Startup {
     /// can set, and "the Linux row offers the Linux command" is otherwise
     /// unspecifiable on a Mac (R31.22).
     pub os: String,
+    /// And the CPU, as `std::env::consts::ARCH` spells it, for the same reason.
+    pub arch: String,
+}
+
+/// This repository's latest Release — the one place the release host is named
+/// (ADR 0017). Unauthenticated: one request per launch is far inside the
+/// anonymous limit.
+pub const RELEASE_URL: &str = "https://api.github.com/repos/oyvij/crime-editor/releases/latest";
+
+/// A published Version newer than the Running version, and the two URLs
+/// `:update` fetches: this platform's Asset and the checksum list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Release {
+    pub version: String,
+    pub asset: String,
+    pub checksums: String,
+}
+
+#[derive(serde::Deserialize)]
+struct Published {
+    tag_name: String,
+    assets: Vec<Attached>,
+}
+
+#[derive(serde::Deserialize)]
+struct Attached {
+    name: String,
+    browser_download_url: String,
+}
+
+/// The file in a Release built for this platform. The release workflow's matrix
+/// spells the same names (`.github/workflows/release.yml`).
+fn asset_name(os: &str, arch: &str) -> String {
+    format!("crime-{os}-{arch}")
+}
+
+/// The Release a latest-release body describes, if it is an Update this
+/// platform can install. Anything short of that — a body that is not the JSON,
+/// a tag that is not a newer Version, no Asset or no checksum list to verify it
+/// against — is no Release, and silently so.
+pub fn release(body: &str, os: &str, arch: &str, running: &str) -> Option<Release> {
+    let published: Published = serde_json::from_str(body).ok()?;
+    let version = published.tag_name.strip_prefix('v')?;
+    if !is_update(version, running) {
+        return None;
+    }
+    let url = |name: &str| {
+        published
+            .assets
+            .iter()
+            .find(|asset| asset.name == name)
+            .map(|asset| asset.browser_download_url.clone())
+    };
+    Some(Release {
+        version: version.to_string(),
+        asset: url(&asset_name(os, arch))?,
+        checksums: url("SHA256SUMS")?,
+    })
 }
 
 /// What runs a language's server, as configuration named it. Nothing here is a
@@ -792,6 +850,7 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
     }
     let config = Config(merged_config(input)?);
     let (checkout, update_available) = checkout(input);
+    let binary_install = checkout.is_none();
     let mut state = initial_state(input, &config, checkout, update_available);
 
     let mut effects = vec![
@@ -803,6 +862,11 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
         Effect::DeleteDir(crate::tmp_dir(&input.crime_home)),
         Effect::EnsureDir(crate::tmp_dir(&input.crime_home)),
     ];
+    if binary_install {
+        effects.push(Effect::CheckRelease {
+            url: RELEASE_URL.to_string(),
+        });
+    }
     // A reader's own settings survive every start, and the core is already
     // holding the fact that decides it: `project_config` is what the edge read
     // off `.crime/config.toml`, and it is `None` on exactly the folders that
@@ -1035,6 +1099,8 @@ fn initial_state(
         facts: config.facts(),
         speech: speech(config, &input.os),
         os: input.os.clone(),
+        arch: input.arch.clone(),
+        running_version: input.running_version.clone(),
         checkout,
         update_available,
         head: input.head.clone(),
@@ -1244,8 +1310,8 @@ fn last_view(state_json: Option<&str>) -> Option<View> {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_update, parse, start, Config, ConfigError, ConfigFault, Effect, FactValue, Startup,
-        StartupError, DEFAULTS, PROJECT_LABEL, SEEDED_CONFIG,
+        asset_name, is_update, parse, release, start, Config, ConfigError, ConfigFault, Effect,
+        FactValue, Startup, StartupError, DEFAULTS, PROJECT_LABEL, SEEDED_CONFIG,
     };
 
     /// The bottom layer on its own, as several tests below read it.
@@ -1675,6 +1741,27 @@ mod tests {
     fn a_double_digit_component_is_compared_as_a_number() {
         assert!(is_update("0.10.0", "0.9.0"));
         assert!(!is_update("0.9.0", "0.10.0"));
+    }
+
+    /// Held equal by hand to the matrix in `.github/workflows/release.yml`,
+    /// which points back here: YAML and Rust share no compiler, so a renamed
+    /// Asset on either side would leave every binary install finding nothing
+    /// built for it.
+    #[test]
+    fn asset_names_match_the_release_workflow() {
+        assert_eq!(asset_name("macos", "aarch64"), "crime-macos-aarch64");
+        assert_eq!(asset_name("macos", "x86_64"), "crime-macos-x86_64");
+        assert_eq!(asset_name("linux", "x86_64"), "crime-linux-x86_64");
+        assert_eq!(asset_name("linux", "aarch64"), "crime-linux-aarch64");
+    }
+
+    /// An Asset nobody can verify is not one `:update` may install.
+    #[test]
+    fn a_release_without_a_checksum_list_is_no_release() {
+        let body = r#"{"tag_name": "v0.2.0", "assets": [
+            {"name": "crime-linux-x86_64", "browser_download_url": "https://example.test/a"}
+        ]}"#;
+        assert_eq!(release(body, "linux", "x86_64", "0.1.0"), None);
     }
 
     #[test]

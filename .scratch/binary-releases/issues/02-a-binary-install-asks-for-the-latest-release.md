@@ -1,6 +1,6 @@
 # 02 — A binary install asks for the latest Release, and an Update comes from it
 
-Status: ready-for-agent
+Status: resolved
 
 **What to build:** Startup decides the install kind. With a known checkout, nothing changes. With
 none, startup returns an effect asking the edge for the latest Release of this repository;
@@ -31,12 +31,21 @@ near it.
 
 ## Acceptance criteria
 
-- [ ] A start with no checkout manifest returns `CheckRelease`; a start with a known checkout does not.
-- [ ] A body naming a Version strictly newer than the Running version makes an Update available and
+- [x] A start with no checkout manifest returns `CheckRelease`; a start with a known checkout does not.
+- [x] A body naming a Version strictly newer than the Running version makes an Update available and
   remembers the Release with this platform's asset and the checksum list.
-- [ ] A body naming an equal or older Version leaves no Update.
-- [ ] A body that does not parse, and an answer with no body, leave no Update and raise no notice.
-- [ ] A Release with no asset named `crime-<os>-<arch>` leaves no Update and raises no notice.
-- [ ] The four asset names are pinned by a unit test.
-- [ ] `CONTEXT.md` gains Install kind, Release, Asset, Relaunch.
-- [ ] `docs/example-map.md` gains F39 with an entry-points row.
+- [x] A body naming an equal or older Version leaves no Update.
+- [x] A body that does not parse, and an answer with no body, leave no Update and raise no notice.
+- [x] A Release with no asset named `crime-<os>-<arch>` leaves no Update and raises no notice.
+- [x] The four asset names are pinned by a unit test.
+- [x] `CONTEXT.md` gains Install kind, Release, Asset, Relaunch.
+- [x] `docs/example-map.md` gains F39 with an entry-points row.
+
+## Comments
+
+- The core logic is `startup::release`, which parses the body and returns `Some(Release)` only when the tag is `v<Version>`, the Version is strictly newer, and the Release has both this platform's Asset and `SHA256SUMS`. Without a checksum list, `:update` can't verify the download (issue 03), so a Release missing one counts as no Release. A unit test pins this.
+- `State` now holds `running_version` and `arch`. The Release answer arrives after startup has returned, so the comparison needs both kept in state.
+- `ReleaseAnswered` runs through the ordinary scroll clamp, like every other one-shot edge answer (`FormatterAnswered`, `Branches`). It is not a tick-style exception.
+- The edge runs `curl -fsSL --max-time 20` on a thread and reports through a channel collected with the job answers. A failure is `eprintln!`-ed, which follows the existing sentinel precedent. That output can land on the alternate screen, which is a pre-existing edge wart.
+- The asset URLs are not validated in the core yet. Issue 03 downloads them and is the place to check scheme and host.
+- Four scenarios were already failing on HEAD before this ticket and are untouched: "Writing still works while previewing", "Re-entering a story returns to where it was left", "A walkthrough survives a restart", and "Re-authoring discards the walkthrough rather than reusing its position".

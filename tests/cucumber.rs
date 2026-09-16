@@ -937,6 +937,9 @@ impl CrimeWorld {
             // the asking, so a world that answered it here would make an
             // install that worked and one that did not the same scenario.
             Effect::ProbePath => {}
+            // Answered by the step that says what the Release is, for the
+            // reason the probe above is: the answer arrives after the asking.
+            Effect::CheckRelease { .. } => {}
             // The world plays the edge: the core says which files the arriving
             // artifact names, and this diffs and reads each one — the old side
             // out of what the range's base holds, the new side off the working
@@ -1209,6 +1212,65 @@ fn update_offered(world: &mut CrimeWorld) {
     assert!(world.state.update_available, "no Update was offered");
 }
 
+#[given(expr = "CRIME was built for {string} on {string}")]
+fn built_for_platform(world: &mut CrimeWorld, os: String, arch: String) {
+    world.startup.os = os;
+    world.startup.arch = arch;
+}
+
+#[then(expr = "CRIME asks for the latest Release")]
+fn asks_for_release(world: &mut CrimeWorld) {
+    assert!(
+        world.startup_effects.contains(&Effect::CheckRelease {
+            url: startup::RELEASE_URL.to_string()
+        }),
+        "starting asked for: {:?}",
+        world.startup_effects
+    );
+}
+
+#[then(expr = "CRIME does not ask for a Release")]
+fn asks_for_no_release(world: &mut CrimeWorld) {
+    assert!(
+        !world
+            .startup_effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CheckRelease { .. })),
+        "starting asked for: {:?}",
+        world.startup_effects
+    );
+}
+
+#[when("the latest Release answers:")]
+fn release_answers(world: &mut CrimeWorld, step: &Step) {
+    let body = step.docstring().expect("docstring").to_string();
+    world.send(Event::ReleaseAnswered(Some(body)));
+}
+
+#[when(expr = "the request for the latest Release fails")]
+fn release_request_fails(world: &mut CrimeWorld) {
+    world.send(Event::ReleaseAnswered(None));
+}
+
+#[then(
+    expr = "the remembered Release is {string} with the Asset {string} and the checksums {string}"
+)]
+fn release_remembered(world: &mut CrimeWorld, version: String, asset: String, checksums: String) {
+    assert_eq!(
+        world.state.release,
+        Some(startup::Release {
+            version,
+            asset,
+            checksums
+        })
+    );
+}
+
+#[then(expr = "no Release is remembered")]
+fn no_release_remembered(world: &mut CrimeWorld) {
+    assert_eq!(world.state.release, None);
+}
+
 #[then(expr = "no Update is available")]
 fn no_update_offered(world: &mut CrimeWorld) {
     assert!(!world.state.update_available, "an Update was offered");
@@ -1462,7 +1524,10 @@ fn no_language_server_started(world: &mut CrimeWorld) {
         .startup_effects
         .iter()
         .filter(|effect| {
-            !matches!(effect, Effect::EnsureDir(_) | Effect::AnalyseRisk { .. })
+            !matches!(
+                effect,
+                Effect::EnsureDir(_) | Effect::AnalyseRisk { .. } | Effect::CheckRelease { .. }
+            )
                 && !matches!(effect, Effect::DeleteDir(path) if is_scratch(world, path))
                 && !matches!(effect, Effect::WriteFile { contents, .. } if contents == startup::SEEDED_CONFIG)
         })

@@ -124,6 +124,7 @@ table is the audit; keep it current, and add a row before writing a new feature'
 | F28 Risk list | palette `k`; `Alt+j` from the tree once shown; row icons and `Enter` inside it |
 | F29 Refactor loop | the Risk pane's own action, which becomes the stop action while it runs |
 | F30 Risk in review | automatic on entering Review view; the pane's action starts the review-scoped loop |
+| F39 binary releases | automatic at startup on a binary install; `:update` or palette `u` installs the Release and relaunches; `crime --deps`; `install.sh` |
 
 `Event::AddComment` has no entry point by design — it is a `Given` shortcut so submission scenarios
 can set up a review in one step. The user's path is `V`+`c`, covered by F17.
@@ -3047,6 +3048,32 @@ review waits for the AI CLI's — and only that shell's prompt releases it.
 **⛔ Not scenarios, deliberately.** No stacked (vertical) splits and no drag to resize one: the strip
 divides its columns evenly. No kill command: `exit` in the shell closes its split, which is what a
 shell already does.
+
+## F39 — Binary releases — **PARTLY DEFINED**
+
+Scenarios extend `features/self_update.feature`. The spec is `.scratch/binary-releases/spec.md`; the
+decision hard to reverse is `docs/adr/0017-a-binary-install-updates-itself-from-a-release.md`.
+`CONTEXT.md`'s "Staying up to date" holds Install kind, Release, Asset and Relaunch.
+R39.1–R39.3 are scenarios; R39.4 and R39.5 become scenarios with issues 03 and 04.
+
+**R39.1** The **Install kind** is decided at startup from where the binary is: a known checkout is a
+checkout install and keeps F-self-update exactly — manifest comparison, no network. Anything else
+is a binary install and asks for this repository's latest Release **once**, never on a timer.
+**R39.2** **The edge fetches, the core decides.** The body comes back unread; the core parses it,
+compares its Version by the same `semver` ordering as the manifest, and picks the Asset named
+`crime-<os>-<arch>`. Only a strictly newer Version with an Asset and a checksum list raises the
+Update marker and is remembered.
+**R39.3** A failed request, a body that does not parse, a Version that is not newer and a Release
+with no Asset for this platform are all **silent**: no marker, no notice. The edge logs a failed
+request.
+**R39.4** `:update` and palette `u` on a binary install download the Asset, verify it against the
+checksum list, replace the binary at its resolved path and **Relaunch** — refused with
+`unsaved-changes` exactly as quitting is, and a second `:update` after that refusal relaunches
+without fetching. Each failed step is its own notice.
+**R39.5** `crime --deps` prints the dependency table one line per program, with no folder and no
+terminal, so `install.sh` asks the binary rather than reading the source.
+**R39.6** The four Asset names are pinned by a unit test that names `.github/workflows/release.yml`,
+and the workflow names the test.
 
 ## Spec status
 

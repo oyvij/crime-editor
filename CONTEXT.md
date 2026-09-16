@@ -217,9 +217,33 @@ certain about itself, because it was baked in when it was built.
 _Avoid_: current version, installed version, binary version
 
 **Update**:
-A Version strictly newer than the Running version: the checkout has moved on and the binary has
-not. A Version that is equal or older is not an Update, so there is nothing to offer.
+A Version strictly newer than the Running version: the checkout — or, for a binary install, the
+latest Release — has moved on and the binary has not. A Version that is equal or older is not an
+Update, so there is nothing to offer.
 _Avoid_: upgrade, new release, available version, newer build
+
+**Install kind**:
+How this CRIME got onto the machine: a **checkout install** (the binary sits inside its own
+checkout, which is `target/release/crime` under a manifest naming crime) or a **binary install**
+(anything else). Decided once at startup from where the binary is. Only a binary install asks the
+network anything.
+_Avoid_: install mode, distribution, channel
+
+**Release**:
+A published Version with one binary per platform and a checksum list, a GitHub Release of this
+repository. A Release is what a binary install compares itself against; a checkout install never
+looks for one.
+_Avoid_: tag, build, download
+
+**Asset**:
+The one file in a Release built for this platform, named `crime-<os>-<arch>`. A Release with no
+Asset for this platform offers no Update.
+_Avoid_: artifact, package, binary (that is what is running)
+
+**Relaunch**:
+CRIME replacing itself with the binary now on disk, keeping its arguments. Not a restart of the
+session: the shell and the AI pane end with the old process, as they do on quit.
+_Avoid_: restart, reload, reboot
 
 ### Settling the project's answers
 
