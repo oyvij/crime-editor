@@ -1,0 +1,30 @@
+# CRIME reads this file on every start, and what it names beats
+# ~/.crime/config.toml key by key. It arrives commented out on purpose: it is
+# here so the keys can be found, not so this version's answers can be pinned.
+# Uncomment a line to disagree with the default beside it; delete it again to
+# go back to whatever the version you are running thinks is right.
+
+[view]
+
+# How long after a key is tapped a second tap of the same key still reads as a
+# double-tap, in milliseconds. Longer if a second press meant as one keeps
+# arriving too late to count.
+# double_tap_ms = 300
+
+[editor]
+
+# What Tab lays down while inserting, and what Enter reaches for when it opens
+# a block in a file that holds no indentation of its own to copy. Indentation
+# the file already has still wins there: the lines in front of you are better
+# evidence about that file than any number here.
+# tab_width = 4
+
+[risk]
+
+# The cyclomatic complexity a function may reach before Risk names it.
+# threshold = 15
+
+# How many times the Gate may hand a refactor back before it stops. A function
+# the AI cannot get under the threshold is a function to look at yourself, and
+# an uncapped loop spends tokens discovering that.
+# max_iterations = 10

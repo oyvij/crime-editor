@@ -1,0 +1,1709 @@
+//! F1 and F9 — starting on a folder, and the configuration behind it.
+//!
+//! Reads nothing. The edge loads the files and passes their contents in; this
+//! module decides what they mean and what should exist.
+
+use crate::risk::{self, Scope};
+use crate::{Effect, State, View};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use toml::Table;
+
+/// Built-in defaults, the bottom layer of the merge. `risk.threshold` is
+/// `risk::DEFAULT_THRESHOLD` and `editor.tab_width` is
+/// `editor::DEFAULT_TAB_WIDTH`, spelled as TOML — a test below holds each pair
+/// level, since a default that disagrees with itself is a figure nobody can
+/// predict.
+///
+/// The `[lsp.*]` tables are the only place in the library a language server is
+/// named, and they are data rather than a branch on purpose: the global config
+/// beats them, and the project's own config beats that, key by key. A match arm
+/// spelling the same strings could only be beaten by a fork —
+/// `docs/adr/0011-a-language-server-is-a-second-hosted-child.md` argues why
+/// where the name lives is the whole of the distinction.
+///
+/// The `install` keys are the same kind of data for the same reasons, one per
+/// operating system, and this is the only place in the library a package
+/// manager is named at all
+/// (`docs/adr/0012-an-install-command-is-configuration.md`). Shipping them here
+/// is the whole of "the commands arrive with an update": they are the bottom
+/// layer of the merge, so a new binary's corrections are live on first run and
+/// nothing was written to anybody's config file. A language nobody has packaged
+/// for an OS gets **no key** — `zls` on Linux is a build from source and `jdtls`
+/// is in no distribution — because an invented command that fails looks
+/// configured, while a blank one is fixable in one line of TOML.
+pub const DEFAULTS: &str = r#"[view]
+double_tap_ms = 300
+
+# What Tab lays down while inserting. Named here rather than measured off the
+# file: a project's own answer beats a scan of whichever lines happen to be
+# open, and four is the width to disagree with in one line of TOML.
+[editor]
+tab_width = 4
+
+# Whether the mirror of the file down the editor's right-hand edge is up in a
+# project nobody has turned it off in. `:minimap` is the same switch from
+# inside, and what it was left at beats this.
+minimap = true
+
+# The compiler a project pins, which is a per-package dependency in every
+# JavaScript workspace and the file `@vue/language-server` resolves out of the
+# directory `--tsdk=` names. `value = "directory"` because the server wants the
+# `lib` holding it, not the file. The global install is where `tsc` points once
+# symlinks are resolved, and it is checked for the same file rather than
+# assumed: the 7.0 native preview is installed, on PATH, and has no
+# `typescript.js` at all.
+[facts.typescript_sdk]
+marker = "node_modules/typescript/lib/typescript.js"
+value = "directory"
+command = "tsc"
+command_marker = "../lib/typescript.js"
+
+# What teaches a TypeScript server to answer about a `.vue` file. It needs no
+# install of its own: `@vue/language-server` carries it in its own
+# `node_modules`, which is exactly what the command fallback reaches once
+# symlinks are resolved — so the Vue row's install brings the companion with it
+# and a workspace that installed its own copy still wins, because the marker
+# walk runs first.
+#
+# `optional` because it is named on the `[lsp.typescript]` row every TypeScript
+# project shares: required, a machine with no Vue server would have no
+# TypeScript server anywhere, which is a requirement nobody declared.
+[facts.vue_typescript_plugin]
+marker = "node_modules/@vue/typescript-plugin"
+optional = true
+command = "vue-language-server"
+command_marker = "../node_modules/@vue/typescript-plugin"
+
+[risk]
+threshold = 15
+max_iterations = 10
+
+[lsp.rust]
+command = "rust-analyzer"
+install.macos = "rustup component add rust-analyzer"
+install.linux = "rustup component add rust-analyzer"
+install.windows = "rustup component add rust-analyzer"
+
+# Every feature this server has is behind a question it puts to its client,
+# expecting the client to be running a TypeScript server as well and to relay it
+# there. CRIME does not relay — the question is refused, which is what gets the
+# server past it and answering with what it can answer on its own instead of
+# waiting forever. What answers the rest is a *second server on the same file*:
+# `also_served_by` puts every question about a `.vue` file to the TypeScript
+# server too, and the plugin named on that server's row is what lets it answer.
+# Two clients on one buffer, which is what every other editor does here, and no
+# arm anywhere names either server.
+[lsp.vue]
+command = "vue-language-server"
+args = ["--stdio", "--tsdk=${typescript_sdk}"]
+also_served_by = ["typescript"]
+unanswerable.request = "tsserver/request"
+unanswerable.response = "tsserver/response"
+install.macos = "npm install -g @vue/language-server"
+install.linux = "npm install -g @vue/language-server"
+install.windows = "npm install -g @vue/language-server"
+
+[lsp.java]
+command = "jdtls"
+install.macos = "brew install jdtls"
+
+[lsp.zig]
+command = "zls"
+install.macos = "brew install zls"
+
+# The server resolves TypeScript itself, and on a machine whose global
+# `typescript` is the 7.0 native preview it finds a package with no
+# `tsserver.js` in it and never answers `initialize` at all. Named the file
+# beside the `typescript.js` the fact already looks for, so the join is a
+# string one in TOML rather than a second fact. Forward slashes: Node accepts
+# them on Windows too, so a Windows answer joined this way still resolves.
+[lsp.typescript]
+command = "typescript-language-server"
+args = ["--stdio"]
+install.macos = "npm install -g typescript typescript-language-server"
+install.linux = "npm install -g typescript typescript-language-server"
+install.windows = "npm install -g typescript typescript-language-server"
+
+# Sub-tables rather than one inline table, which TOML would want on a single
+# line, and this one is a paragraph long. The plugin is what makes this server
+# answer about the `.vue` files `[lsp.vue].also_served_by` sends it, and it goes
+# nowhere on a machine that has no Vue server: the fact is optional, so the key
+# is dropped and the server starts exactly as it does in a project with no Vue
+# in it.
+[lsp.typescript.initialization_options.tsserver]
+path = "${typescript_sdk}/tsserver.js"
+
+[[lsp.typescript.initialization_options.plugins]]
+name = "@vue/typescript-plugin"
+location = "${vue_typescript_plugin}"
+languages = ["vue"]
+
+# The same server and the same SDK, spelled the same way as the row above so
+# that the one real difference between them is the one a reader can see: a
+# `.js` file is served by nobody else, so there is no plugin entry here.
+[lsp.javascript]
+command = "typescript-language-server"
+args = ["--stdio"]
+install.macos = "npm install -g typescript typescript-language-server"
+install.linux = "npm install -g typescript typescript-language-server"
+install.windows = "npm install -g typescript typescript-language-server"
+
+[lsp.javascript.initialization_options.tsserver]
+path = "${typescript_sdk}/tsserver.js"
+
+[lsp.python]
+command = "pyright-langserver"
+args = ["--stdio"]
+install.macos = "npm install -g pyright"
+install.linux = "npm install -g pyright"
+install.windows = "npm install -g pyright"
+
+[lsp.go]
+command = "gopls"
+install.macos = "go install golang.org/x/tools/gopls@latest"
+install.linux = "go install golang.org/x/tools/gopls@latest"
+install.windows = "go install golang.org/x/tools/gopls@latest"
+
+# No macOS command: Homebrew's `llvm` is keg-only, so a successful install
+# leaves `clangd` unreachable by name and the row still reading `missing`. A
+# command that cannot make its own row read `installed` is the invention this
+# table refuses.
+[lsp.c]
+command = "clangd"
+install.linux = "sudo apt install clangd"
+install.windows = "winget install LLVM.LLVM"
+
+[lsp.cpp]
+command = "clangd"
+install.linux = "sudo apt install clangd"
+install.windows = "winget install LLVM.LLVM"
+
+# The `[formatter.*]` tables, which are the `[lsp.*]` tables above in a second
+# shape and are data for the same three reasons: a name in the bottom layer of
+# the merge is beaten by a file, printable as a string, and extensible without a
+# release, none of which a match arm spelling the same string is (ADR 0011,
+# ADR 0012). This is also the whole of "HTML, CSS, JavaScript, JSON and YAML are
+# supported" — they are rows here, not code.
+#
+# Every command named below reads the text on stdin and writes the result on
+# stdout, because that is the only shape that can format what nobody has saved:
+# a formatter told about the file on disk formats a file the reader is not
+# looking at. A tool that can only rewrite a file in place therefore gets no row.
+# `${file}` is how a stdin-reading command is still told what it is reading —
+# JSON and YAML are the same bytes to a command with no name for them.
+#
+# `extensions` is named only where `lsp::language` cannot answer. Repeating an
+# extension it already maps would give one file two authors that can disagree,
+# and the language a file is is looked up there first.
+[formatter.rust]
+command = "rustfmt"
+install.macos = "rustup component add rustfmt"
+install.linux = "rustup component add rustfmt"
+install.windows = "rustup component add rustfmt"
+
+# `--quiet` because the diagnostics go to stdout beside the code otherwise, and
+# `-` because this one wants stdin named rather than assumed.
+[formatter.python]
+command = "black"
+args = ["--quiet", "-"]
+install.macos = "pipx install black"
+install.linux = "pipx install black"
+install.windows = "pip install black"
+
+# No install key, for the reason `[lsp.c]` has no macOS one: this ships with the
+# toolchain, so a command that installs it separately would be a row that cannot
+# make itself true.
+[formatter.go]
+command = "gofmt"
+
+# One command across eight rows, and eight rows rather than one because a
+# formatter is looked up by the language a file is. `--stdin-filepath` is what
+# tells it which of the eight it is reading, since the bytes do not say.
+[formatter.javascript]
+command = "prettier"
+args = ["--stdin-filepath", "${file}"]
+install.macos = "npm install -g prettier"
+install.linux = "npm install -g prettier"
+install.windows = "npm install -g prettier"
+
+[formatter.typescript]
+command = "prettier"
+args = ["--stdin-filepath", "${file}"]
+install.macos = "npm install -g prettier"
+install.linux = "npm install -g prettier"
+install.windows = "npm install -g prettier"
+
+[formatter.vue]
+command = "prettier"
+args = ["--stdin-filepath", "${file}"]
+install.macos = "npm install -g prettier"
+install.linux = "npm install -g prettier"
+install.windows = "npm install -g prettier"
+
+[formatter.json]
+command = "prettier"
+args = ["--stdin-filepath", "${file}"]
+extensions = ["json", "jsonc"]
+install.macos = "npm install -g prettier"
+install.linux = "npm install -g prettier"
+install.windows = "npm install -g prettier"
+
+[formatter.yaml]
+command = "prettier"
+args = ["--stdin-filepath", "${file}"]
+extensions = ["yaml", "yml"]
+install.macos = "npm install -g prettier"
+install.linux = "npm install -g prettier"
+install.windows = "npm install -g prettier"
+
+[formatter.html]
+command = "prettier"
+args = ["--stdin-filepath", "${file}"]
+extensions = ["html", "htm"]
+install.macos = "npm install -g prettier"
+install.linux = "npm install -g prettier"
+install.windows = "npm install -g prettier"
+
+[formatter.css]
+command = "prettier"
+args = ["--stdin-filepath", "${file}"]
+extensions = ["css", "scss", "less"]
+install.macos = "npm install -g prettier"
+install.linux = "npm install -g prettier"
+install.windows = "npm install -g prettier"
+
+[formatter.markdown]
+command = "prettier"
+args = ["--stdin-filepath", "${file}"]
+extensions = ["md", "markdown"]
+install.macos = "npm install -g prettier"
+install.linux = "npm install -g prettier"
+install.windows = "npm install -g prettier"
+
+# What reads a Selection aloud (F35). The synthesizer, the voice and the player
+# are named here and in no branch anywhere: a voice nobody has tried works for
+# the same reason an untried AI CLI does
+# (`docs/adr/0013-a-voice-is-an-installed-binary.md`). `${voice}` and `${scale}`
+# are filled the way a server's arguments already are.
+#
+# `voice` ships blank on purpose. It is a 61MB file on somebody else's disk, so
+# an invented path would be a row that reads as configured and cannot work —
+# worse than an honest blank, for the reason `[lsp.*]` ships no toolchain paths.
+# `install` is what puts it there: typed onto the terminal's input line and
+# never run, so it is read — and edited, if this machine wants a different
+# package manager — before it touches anything (ADR 0012).
+#
+# `--noise-w-scale` varies phoneme duration. The model defaults to 0.8 and 1.0
+# was chosen by ear from a six-way comparison on the prototype: it is the
+# difference between "static" and a voice worth listening to for a page.
+#
+# `speed` is a multiplier where higher is faster, which is the convention every
+# player has. The synthesizer's own parameter scales *duration* and runs
+# backwards, so `${scale}` is its reciprocal and the inversion never reaches a
+# file a human writes (R35.7).
+#
+# No `player.windows`: nothing ships there that plays a wav from a command line
+# without a shell of its own, and a command that cannot work is worse than a
+# missing row — the same gap `[lsp.zig]` leaves on Linux.
+[speech]
+command = "piper"
+args = ["--model", "${voice}", "--length-scale", "${scale}", "--noise-w-scale", "1.0", "--output_dir", "${dir}"]
+voice = ""
+speed = 1.0
+player.macos = "afplay"
+player.linux = "aplay"
+install.macos = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -sL --output-dir ~/.crime/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json && echo 'now set speech.voice = \"'$HOME'/.crime/voices/en_US-bryce-medium.onnx\" in ~/.crime/config.toml'"
+install.linux = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -sL --output-dir ~/.crime/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json && echo 'now set speech.voice = \"'$HOME'/.crime/voices/en_US-bryce-medium.onnx\" in ~/.crime/config.toml'"
+"#;
+
+/// What starting lays down at `<project>/.crime/config.toml` the first time,
+/// and only when nothing is there (Q38). A key nobody can find is a key nobody
+/// sets: `editor.tab_width` was layered, merged and read on every start for its
+/// whole life while no `.crime/config.toml` existed anywhere to name it.
+///
+/// **Every key is commented out**, and that is the whole design. A seeded file
+/// holding live values would make "the project sets nothing" false — the merge
+/// would see a project layer on its first run — and it would freeze *this*
+/// binary's numbers into a file that outlives it, so a later correction to
+/// [`DEFAULTS`] would arrive and change nothing, which is the same trap
+/// [`DEFAULTS`]'s own doc argues the install commands out of. The trap is only
+/// half sprung by the comment: a reader who uncomments a line that has since
+/// gone stale pins the old number by hand, so a test below uncomments every key
+/// here and holds each one against the [`DEFAULTS`] layer.
+///
+/// That test is also why this quotes only keys [`DEFAULTS`] spells. A setting
+/// whose default lives in Rust alone — `editor.theme`, `ai.command` — has no
+/// text to be held level with, and a number written here with nothing holding
+/// it is exactly the frozen answer the comments exist to prevent.
+///
+/// The table headers are live where the keys under them are not, because a
+/// reader who uncomments `tab_width` alone under a commented `[editor]` sets a
+/// top-level key that nothing reads. An empty table merges nothing, so they
+/// cost the effective config exactly what the comments do.
+pub const SEEDED_CONFIG: &str = r#"# CRIME reads this file on every start, and what it names beats
+# ~/.crime/config.toml key by key. It arrives commented out on purpose: it is
+# here so the keys can be found, not so this version's answers can be pinned.
+# Uncomment a line to disagree with the default beside it; delete it again to
+# go back to whatever the version you are running thinks is right.
+
+[view]
+
+# How long after a key is tapped a second tap of the same key still reads as a
+# double-tap, in milliseconds. Longer if a second press meant as one keeps
+# arriving too late to count.
+# double_tap_ms = 300
+
+[editor]
+
+# What Tab lays down while inserting, and what Enter reaches for when it opens
+# a block in a file that holds no indentation of its own to copy. Indentation
+# the file already has still wins there: the lines in front of you are better
+# evidence about that file than any number here.
+# tab_width = 4
+
+# Whether the mirror of the file down the editor's right-hand edge is up when a
+# project is opened. `:minimap` is the same switch while you are in there, and
+# what it was left at wins over this.
+# minimap = true
+
+[risk]
+
+# The cyclomatic complexity a function may reach before Risk names it.
+# threshold = 15
+
+# How many times the Gate may hand a refactor back before it stops. A function
+# the AI cannot get under the threshold is a function to look at yourself, and
+# an uncapped loop spends tokens discovering that.
+# max_iterations = 10
+
+[speech]
+
+# What speaks a Reading, and how it is called. `${voice}` is the row below,
+# `${scale}` the reciprocal of the speed, and `${dir}` where the stream goes.
+# command = "piper"
+# args = ["--model", "${voice}", "--length-scale", "${scale}", "--noise-w-scale", "1.0", "--output_dir", "${dir}"]
+
+# The voice model on this machine. Blank until you have one: the install
+# command CRIME offers when reading is refused is what fetches it.
+# voice = ""
+
+# How fast, as a multiplier — higher is faster. It applies to the next Reading,
+# because the pace is baked in when the stream is built.
+# speed = 1.0
+"#;
+
+pub const GLOBAL_LABEL: &str = "~/.crime/config.toml";
+pub const PROJECT_LABEL: &str = ".crime/config.toml";
+
+/// The file both layers are read from: the global one under `~/.crime`, and
+/// the project's own under [`crate::crime_dir`].
+pub const CONFIG_FILE: &str = "config.toml";
+
+/// Why CRIME refused to start. Precise enough to fix the file in another
+/// editor, which matters because a broken global config locks the user out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigError {
+    pub file: String,
+    pub line: usize,
+    pub fault: ConfigFault,
+}
+
+/// What is wrong with a layer, because the three faults send the reader to
+/// three different places. The edge printed one sentence for all of them, so a
+/// deserialize fault about a missing key wore the parse fault's words and sent
+/// whoever read it hunting a syntax error that was not there — the same failure
+/// as a notice blaming a server for CRIME's own refusal, one layer down.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigFault {
+    /// The text is not TOML at all.
+    NotToml,
+    /// TOML, but a value is not the shape its key must be (R9.5) — including
+    /// half of a pair that is one fact, such as an `unanswerable` naming a
+    /// request and no response. The `toml` crate's own words, which name the
+    /// type found and the type wanted; the line points at the key.
+    WrongType(String),
+    /// An entry that parsed, typed, and is still unusable: no layer ever gave
+    /// it the one key it cannot be used without. Found after the merge,
+    /// because a layer is a patch and completeness is not a patch's to satisfy.
+    Incomplete { entry: String, key: String },
+}
+
+impl std::fmt::Display for ConfigError {
+    /// The words, here rather than at the edge: a reason the edge has to
+    /// supply is a reason no test can read, which is how one sentence came to
+    /// stand for three faults.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}: ", self.file, self.line)?;
+        match &self.fault {
+            ConfigFault::NotToml => write!(f, "config is not valid TOML"),
+            ConfigFault::WrongType(detail) => write!(f, "{detail}"),
+            ConfigFault::Incomplete { entry, key } => write!(f, "[{entry}] names no {key}"),
+        }
+    }
+}
+
+/// What the edge found at the path it was asked to open.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum PathStatus {
+    #[default]
+    Folder,
+    Missing,
+    NotAFolder,
+    Unreadable,
+}
+
+/// Everything the edge read before starting.
+#[derive(Debug, Default)]
+pub struct Startup {
+    pub root: PathBuf,
+    /// The Sidecar, if the edge was given no folder to open: `crime` with no
+    /// argument is a Bare workspace, `crime <folder>` is a project. The edge
+    /// reports which it was by handing one or none — it never interprets argv,
+    /// and `crime` and `crime .` name the same folder
+    /// (`docs/adr/0016-a-bare-workspace-leaves-nothing-behind.md`).
+    pub sidecar: Option<PathBuf>,
+    /// `~/.crime`, the user's own directory — where a submitted review goes
+    /// when the workspace has nowhere durable to keep it (ADR 0016). Read at
+    /// the edge like the Sidecar is, for the same reason: a home directory is
+    /// not the library's to observe.
+    pub crime_home: PathBuf,
+    /// The reviews already kept, by number, as the edge found them in
+    /// [`crate::reviews_dir`]. Read from the directory rather than remembered
+    /// in `state.json`: a Bare workspace has no state to remember it in, and
+    /// the one directory is shared by every one of them.
+    pub reviews: BTreeSet<u32>,
+    pub path_status: PathStatus,
+    pub global_config: Option<String>,
+    pub project_config: Option<String>,
+    pub state_json: Option<String>,
+    /// `.crime/risk.json` as the edge found it, and what `HEAD` resolves to.
+    /// Whether the cached figure still describes the workspace is decided here,
+    /// not there.
+    pub risk_json: Option<String>,
+    pub head: Option<String>,
+    /// The directory above the running binary, if the edge found one. Whether it
+    /// is CRIME's own checkout is decided here, not there.
+    pub checkout: Option<PathBuf>,
+    pub checkout_manifest: Option<String>,
+    /// What this binary was compiled from — the one version a running CRIME
+    /// knows for certain.
+    pub running_version: String,
+    /// Which operating system this binary was built for, as
+    /// `std::env::consts::OS` spells it. Handed in rather than read here for
+    /// the reason `running_version` is: a value handed in is a value a scenario
+    /// can set, and "the Linux row offers the Linux command" is otherwise
+    /// unspecifiable on a Mac (R31.22).
+    pub os: String,
+}
+
+/// What runs a language's server, as configuration named it. Nothing here is a
+/// claim that a process exists: that is the edge's to observe, never the core's
+/// to remember.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Server {
+    /// Defaulted, because a layer is a patch: naming one key of a language
+    /// `DEFAULTS` ships must not mean repeating a command the reader would have
+    /// to copy out of a binary's built-in defaults and which then silently
+    /// stops tracking them. Empty means no layer named one, which
+    /// `refuse_incomplete` refuses before any `Server` reaches `State`.
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Which *other* languages' servers also serve this language's files. A
+    /// `.vue` file is served by the Vue server and by a TypeScript server, a
+    /// linter server sits beside a type server, and every arrangement other
+    /// editors reach by attaching several clients to one buffer is this key —
+    /// so which servers serve a path is data, and no arm anywhere names a
+    /// language (R31.1, ADR 0011).
+    ///
+    /// Named from the file's own side rather than the serving server's: a
+    /// `.vue` file is what needs two answers, and resolving them is then one
+    /// lookup in the table the path already found rather than a scan over
+    /// every configured server asking whether it fancies this extension.
+    #[serde(default)]
+    pub also_served_by: Vec<String>,
+    /// What installs this server, keyed by the OS the binary was built for.
+    /// Typed like the rest, so `install.macos = 12` faults with a file and a
+    /// line rather than being dropped (R9.5), and a map rather than three
+    /// fields because which key applies is a lookup by the string `Startup`
+    /// carried in — never a branch on the OS.
+    #[serde(default)]
+    pub install: BTreeMap<String, String>,
+    /// What the server is told about its own world in the `initializationOptions`
+    /// of `initialize` — where its toolchain lives, most often, which several
+    /// servers will not run without. An arbitrary table, and that is the point:
+    /// CRIME inspects none of it, so a requirement nobody here anticipated is a
+    /// row in a file rather than a release
+    /// (`docs/adr/0012-an-install-command-is-configuration.md`, R31.26).
+    ///
+    /// Deserialized straight into the shape the message wants rather than into
+    /// a `toml::Table` converted later: serde does not care which format a
+    /// value came from, so there is nothing to convert and nothing that can
+    /// fail on the way out — a re-serialise into JSON has one failure mode
+    /// (TOML has `nan`, JSON has no number for it) and it would surface as a
+    /// panic in a running TUI. A map rather than a bare value so that
+    /// `initialization_options = 12` faults with a file and a line (R9.5)
+    /// instead of being sent as a number no server can read.
+    #[serde(default)]
+    pub initialization_options: Option<serde_json::Map<String, serde_json::Value>>,
+    /// What this server, installed and running, still cannot do — the reader's
+    /// words, shown on its row. R31.25 forbids a language that reads as
+    /// configured and answers nothing, and a language that answers *some* of it
+    /// is the same silence in a smaller shape: nothing CRIME can observe tells
+    /// a server with less to say from a file with less wrong in it. Named here
+    /// for the reason a command is named here, and read nowhere except onto the
+    /// row.
+    #[serde(default)]
+    pub partial: Option<String>,
+    /// A question this server asks the *client* that CRIME will not answer, and
+    /// the method to say so on. Data for the reason a command is data: which
+    /// servers ask one, and what they ask it on, is a fact about a server, and
+    /// an arm naming either is the one R31.1 forbids.
+    ///
+    /// It exists because a question asked and never answered is a server that
+    /// waits forever — alive, configured, and silent, which is what R31.25
+    /// refuses. The question arrives as a notification, so the protocol has no
+    /// reply of its own for it; only the sender knows the method its answer
+    /// comes back on, so only configuration can say.
+    #[serde(default)]
+    pub unanswerable: Option<Unanswerable>,
+}
+
+/// The two method names one such question needs: what the server asks on, and
+/// what CRIME answers on. Both, because they are one fact — a request method
+/// with no response method is a refusal that cannot be spoken, and neither is
+/// any use alone. Named for what the key holds rather than for what CRIME does
+/// about it: `preview::Refusal` is already a different thing, and two of that
+/// word would send a reader to the wrong one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Unanswerable {
+    pub request: String,
+    pub response: String,
+}
+
+/// What lays a language's files out, as configuration named it. The `[lsp.*]`
+/// table's shape a second time, and deliberately so: a formatter is a command
+/// on this machine that a project chooses, an OS packages differently, and
+/// nobody at CRIME can enumerate — the three properties
+/// `docs/adr/0012-an-install-command-is-configuration.md` argues a name into
+/// the bottom layer of the merge for.
+///
+/// Not merged into [`Server`]. They share four field *names* and no field
+/// meaning: a server is spoken to over stdio for the life of the session and a
+/// formatter is one process per keystroke, so `also_served_by`,
+/// `initialization_options` and `unanswerable` are nonsense here and
+/// `extensions` is nonsense there. Two similar things are a coincidence.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Formatter {
+    /// Defaulted, and held to being named by the merged table, for the reason
+    /// [`Server::command`] is: a layer is a patch, and a project naming only
+    /// this language's `args` must not have to repeat a command out of a
+    /// binary's built-in defaults.
+    #[serde(default)]
+    pub command: String,
+    /// What it is run with. `${file}` is the Buffer's own path and every
+    /// `[facts.*]` name resolves here too, which is what lets a command that
+    /// reads stdin still be told which language it is reading.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// What installs it, keyed by the OS the binary was built for — a lookup
+    /// under the string `Startup` carried in, never a branch on it (R31.22).
+    #[serde(default)]
+    pub install: BTreeMap<String, String>,
+    /// The file extensions this row claims, for the languages `lsp::language`
+    /// has no entry for. It is what keeps `html`, `css`, `json` and `yaml` out
+    /// of that table — a language named there is a language CRIME goes looking
+    /// for a server for — without a second hand-written map in `src/`. Named
+    /// only where the first table is silent, so no extension has two authors.
+    #[serde(default)]
+    pub extensions: Vec<String>,
+}
+
+/// A path on this machine a server's configuration may name, and how to find
+/// it. Data for the reason a command is data: which marker file means "this
+/// directory configures the language" is the whole of what differs between
+/// `node_modules/typescript/lib/typescript.js`, `.venv/bin/python` and
+/// `compile_commands.json`, and an arm per ecosystem is a server's name in an
+/// arm with more in it (R31.1, ADR 0011). The edge runs one search for every
+/// fact and knows nothing about any of them.
+///
+/// Deliberately not a template language and not an expression: a marker path,
+/// and which of the two things found the answer is. Anything a marker cannot
+/// say is a fact CRIME does not ship, which is the same bargain
+/// `docs/adr/0012-an-install-command-is-configuration.md` strikes for installs.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Fact {
+    /// Looked for under each directory from the file being served up to the
+    /// workspace root, nearest first. A monorepo installs its dependencies per
+    /// package, so the toolchain that must serve a package's files is the one
+    /// that package installed.
+    ///
+    /// Defaulted for the reason `Server::command` is, and held to the same
+    /// check on the merged table.
+    #[serde(default)]
+    pub marker: String,
+    #[serde(default)]
+    pub value: FactValue,
+    /// A machine-wide install to fall back to: a command on `PATH`, and where
+    /// the marker sits relative to the directory holding it once symlinks are
+    /// resolved. Both keys or neither — a command with nowhere to look from is
+    /// no answer, and a marker with no command has nothing to look from.
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub command_marker: Option<String>,
+    /// Whether the server starts without it. A fact a server cannot run at all
+    /// without and a fact it is merely better with are two different facts, and
+    /// nothing CRIME can observe tells them apart — so configuration says,
+    /// which is the reason a command is configuration.
+    ///
+    /// Required is the default and the interesting case is why the other exists:
+    /// the plugin that gives a TypeScript server its `.vue` intelligence is
+    /// named on the `[lsp.typescript]` row *every* TypeScript project shares.
+    /// Required, a machine that never installed a Vue server would have no
+    /// TypeScript server in any project — a requirement nobody declared, and
+    /// machine-dependent, so it would work for whoever tested it. Optional
+    /// changes only the spawn: a value that was found is filled in like any
+    /// other, and the key naming one that was not is dropped exactly as it
+    /// already would be.
+    #[serde(default)]
+    pub optional: bool,
+}
+
+/// What is handed over once the marker is found: the marker itself, or the
+/// directory holding it. Both are real — clangd wants the directory holding
+/// `compile_commands.json` and pyright wants the interpreter itself — and
+/// guessing from the marker's shape would make `.venv/bin/python` and
+/// `compile_commands.json` indistinguishable.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FactValue {
+    #[default]
+    Marker,
+    Directory,
+}
+
+/// The `[lsp.*]` and `[facts.*]` tables of one layer, typed, so that reading
+/// them is a deserialize the `toml` crate can fault with a span rather than a
+/// walk over `Value`s that has to decide what to do about each wrong shape
+/// itself.
+#[derive(serde::Deserialize)]
+struct Layer {
+    #[serde(default)]
+    lsp: BTreeMap<String, Server>,
+    #[serde(default)]
+    formatter: BTreeMap<String, Formatter>,
+    #[serde(default)]
+    facts: BTreeMap<String, Fact>,
+}
+
+/// The same two tables read off a layer's source text, keeping where each entry
+/// was named. A second type rather than a parameter on the first because
+/// `Spanned` cannot be deserialized from a `toml::Value` at all — only the text
+/// deserializer carries spans — and `Config` reads the merged table, which is
+/// values by then.
+#[derive(serde::Deserialize)]
+struct SourceLayer {
+    #[serde(default)]
+    lsp: BTreeMap<String, toml::Spanned<Server>>,
+    #[serde(default)]
+    formatter: BTreeMap<String, toml::Spanned<Formatter>>,
+    #[serde(default)]
+    facts: BTreeMap<String, toml::Spanned<Fact>>,
+}
+
+/// Where each layer named an `[lsp.*]` or `[facts.*]` entry: the dotted name
+/// the fault message prints, against the file and the line it was named on. A
+/// later layer overwrites an earlier one, so the file named is the nearest one
+/// — whose values won, and the one the reader is editing.
+type Origins = BTreeMap<String, (String, usize)>;
+
+#[derive(Debug, Clone, Default)]
+pub struct Config(Table);
+
+impl Config {
+    /// Which languages have a server, and what runs each one. `get` below
+    /// cannot answer this: a dotted scalar lookup reaches a value it is told the
+    /// name of, and the languages are the names. A language in no layer is
+    /// absent from the map, which is what makes "no server for this language" a
+    /// value the core can hold rather than a silence it infers.
+    ///
+    /// Every layer was held to these same types as it was parsed and the merged
+    /// table was held to being complete, so nothing here can fail for a config
+    /// CRIME started on — which is why this is a deserialize and not a walk
+    /// deciding what to do about each wrong shape it meets, and why every
+    /// `command` it returns is non-empty.
+    pub fn servers(&self) -> BTreeMap<String, Server> {
+        toml::Value::Table(self.0.clone())
+            .try_into::<Layer>()
+            .map(|layer| layer.lsp)
+            .unwrap_or_default()
+    }
+
+    /// And which command lays each language out, read the same way and for the
+    /// same reasons: a project that formats its own files with its own tool is
+    /// a row in a file rather than a release.
+    pub fn formatters(&self) -> BTreeMap<String, Formatter> {
+        toml::Value::Table(self.0.clone())
+            .try_into::<Layer>()
+            .map(|layer| layer.formatter)
+            .unwrap_or_default()
+    }
+
+    /// Which paths on this machine configuration lets a server name, and how
+    /// the edge is to find each one. Read the same way and for the same
+    /// reasons: a project declaring a fact its own toolchain needs is a row in
+    /// a file rather than a release.
+    pub fn facts(&self) -> BTreeMap<String, Fact> {
+        toml::Value::Table(self.0.clone())
+            .try_into::<Layer>()
+            .map(|layer| layer.facts)
+            .unwrap_or_default()
+    }
+
+    /// Looks up a dotted key such as `editor.tab_width`.
+    pub fn get(&self, dotted: &str) -> Option<String> {
+        let mut parts = dotted.split('.');
+        let mut value = self.0.get(parts.next()?)?;
+        for part in parts {
+            value = value.as_table()?.get(part)?;
+        }
+        Some(match value {
+            toml::Value::String(text) => text.clone(),
+            other => other.to_string(),
+        })
+    }
+}
+
+/// Why CRIME would not open. Each way a path can be unusable gets its own
+/// reason, because a typo, a file and a permissions problem are three
+/// different things for the user to fix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupError {
+    Path(&'static str),
+    Config(ConfigError),
+}
+
+pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupError> {
+    if let Some(reason) = path_refusal(input.path_status) {
+        return Err(StartupError::Path(reason));
+    }
+    let config = Config(merged_config(input)?);
+    let (checkout, update_available) = checkout(input);
+    let mut state = initial_state(input, &config, checkout, update_available);
+
+    let mut effects = vec![
+        Effect::EnsureDir(crate::crime_dir(&input.root, input.sidecar.as_deref())),
+        // Swept before it is made, because a crash mid-Reading escapes both
+        // the deletion the player's exit makes and the one quitting makes.
+        // Safe with no pattern to match against precisely because everything
+        // under it is CRIME's (ADR 0014).
+        Effect::DeleteDir(crate::tmp_dir(&input.crime_home)),
+        Effect::EnsureDir(crate::tmp_dir(&input.crime_home)),
+    ];
+    // A reader's own settings survive every start, and the core is already
+    // holding the fact that decides it: `project_config` is what the edge read
+    // off `.crime/config.toml`, and it is `None` on exactly the folders that
+    // have no file to lose. An `Effect` that asked the disk again would put
+    // this promise in `main.rs`, where no scenario can reach it.
+    // A Bare workspace seeds nothing: the file would land in a Sidecar deleted
+    // at exit, and a key written where nobody can find it is worse than a key
+    // never written — the same argument the seed itself makes, read the other
+    // way. It also has no project layer to lose, so `project_config` cannot be
+    // what decides it.
+    if input.sidecar.is_none() && input.project_config.is_none() {
+        effects.push(Effect::WriteFile {
+            path: crate::crime_dir(&input.root, input.sidecar.as_deref()).join(CONFIG_FILE),
+            contents: SEEDED_CONFIG.to_string(),
+        });
+    }
+    // The editor comes back to the files it had, which is the only part of the
+    // saved state the core cannot simply be started holding: a Buffer needs its
+    // contents, and contents are the edge's to read.
+    let buffers = saved_buffers(&input.root, input.state_json.as_deref());
+    state.restoring = buffers.len();
+    effects.extend(buffers.into_iter().map(Effect::OpenBuffer));
+
+    // Measuring starts without being asked: the figure is there when the user
+    // wants it rather than after they remember to ask for it. Unless the cache
+    // already answers for the commit that is checked out — reopening on code
+    // nobody has changed is the common case, and re-measuring it spends seconds
+    // to arrive at the number already on disk.
+    // A Bare workspace is the exception, and for the same reason the seed is:
+    // the figure would be measured into a Sidecar deleted at exit. Nothing is
+    // removed — the Risk pane's own recompute still measures on demand.
+    match cached(input) {
+        Some(figures) => state.risk.figure = risk::Figure::Current(figures),
+        None if input.sidecar.is_none() => {
+            effects.push(risk::analyse(&mut state, Scope::Workspace));
+        }
+        None => {}
+    }
+    Ok((state, config, effects))
+}
+
+/// Why the path CRIME was opened on is not a workspace, if it is not one.
+fn path_refusal(status: PathStatus) -> Option<&'static str> {
+    match status {
+        PathStatus::Folder => None,
+        PathStatus::Missing => Some("no-such-folder"),
+        PathStatus::NotAFolder => Some("not-a-folder"),
+        PathStatus::Unreadable => Some("folder-not-readable"),
+    }
+}
+
+/// The defaults, under the global config, under the project's own. A layer that
+/// is not there is an empty one, which merges nothing.
+///
+/// Each layer is held to the types as it is parsed, because only the source
+/// text can name a line — but a layer is a *patch*, so completeness is the
+/// merged table's to satisfy and is checked once, at the end. `origins` is what
+/// lets that fault still name a file and a line after the source text is gone.
+fn merged_config(input: &Startup) -> Result<toml::Table, StartupError> {
+    let mut table = toml::Table::new();
+    let mut origins = BTreeMap::new();
+    for (source, label) in [
+        (DEFAULTS, "defaults"),
+        (
+            input.global_config.as_deref().unwrap_or_default(),
+            GLOBAL_LABEL,
+        ),
+        (
+            // A Bare workspace has no project configuration layer at all, so a
+            // `.crime/config.toml` that happens to sit in the folder — most
+            // likely somebody else's — is not read. Skipped rather than
+            // refused: an unparseable file CRIME never looks at must not stop
+            // it starting either.
+            match &input.sidecar {
+                Some(_) => "",
+                None => input.project_config.as_deref().unwrap_or_default(),
+            },
+            PROJECT_LABEL,
+        ),
+    ] {
+        let (overlay, mentioned) = parse(source, label).map_err(StartupError::Config)?;
+        origins.extend(mentioned);
+        merge(&mut table, overlay);
+    }
+    refuse_incomplete(&table, &origins).map_err(StartupError::Config)?;
+    Ok(table)
+}
+
+/// The merged table is what must be complete. The one key an entry cannot be
+/// used without — a server's `command`, a fact's `marker` — is required of the
+/// merge rather than of each layer, because requiring it of a layer refuses
+/// every partial override of a shipped language, and requiring it only of a
+/// layer that introduces a *new* entry refuses a project patching what the
+/// global config introduced, which is the same defect one layer up.
+///
+/// A presence check over the merged values rather than a deserialize: every
+/// layer was already held to the types, so nothing here can be the wrong shape
+/// — only absent. Blamed on the last layer that mentioned the entry, whose
+/// values won and whose file the reader is the one editing.
+fn refuse_incomplete(table: &Table, origins: &Origins) -> Result<(), ConfigError> {
+    for (section, key) in [
+        ("lsp", "command"),
+        ("formatter", "command"),
+        ("facts", "marker"),
+    ] {
+        let Some(entries) = table.get(section).and_then(toml::Value::as_table) else {
+            continue;
+        };
+        for (name, values) in entries {
+            let named = values
+                .get(key)
+                .and_then(toml::Value::as_str)
+                .is_some_and(|value| !value.is_empty());
+            if named {
+                continue;
+            }
+            // Every entry in the merged table was named by some layer, so the
+            // origin is there. Were one ever missing, the entry and the fault
+            // are still spoken — that is the part that must not be silent.
+            let entry = format!("{section}.{name}");
+            let (file, line) = origins.get(&entry).cloned().unwrap_or_default();
+            return Err(ConfigError {
+                file,
+                line,
+                fault: ConfigFault::Incomplete {
+                    entry,
+                    key: key.to_string(),
+                },
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The workspace as the saved state and the config leave it.
+fn initial_state(
+    input: &Startup,
+    config: &Config,
+    checkout: Option<PathBuf>,
+    update_available: bool,
+) -> State {
+    State {
+        root: input.root.clone(),
+        sidecar: input.sidecar.clone(),
+        crime_home: input.crime_home.clone(),
+        reviews: input.reviews.clone(),
+        view: last_view(input.state_json.as_deref()).unwrap_or(View::Edit),
+        expanded: saved_paths(&input.root, input.state_json.as_deref(), "expanded")
+            .into_iter()
+            .collect(),
+        tree_divider: saved_number(input.state_json.as_deref(), "tree_divider").unwrap_or(30),
+        // Absent until the AI pane's edge has been dragged, which is what the
+        // layout reads as its share of the screen.
+        ai_width: saved_number(input.state_json.as_deref(), "ai_width"),
+        // Beside the editor unless the project was last worked in the tall
+        // shape — including state recorded before `:tall` existed, which names
+        // no shape at all.
+        ai_pane: match saved_text(input.state_json.as_deref(), "ai_pane").as_deref() {
+            Some("Tall") => crate::layout::AiPane::Tall,
+            _ => crate::layout::AiPane::Beside,
+        },
+        // A corner nobody opened stays closed: unlike the key reminder, no pane
+        // that can sit there is the box that says which keys there are, so an
+        // absent key reads as hidden.
+        //
+        // The legacy key second, and only when the new one says nothing: state
+        // written before the corner held more than the Risk list names the pane
+        // rather than the slot, and reading it is what keeps a session saved by
+        // an older CRIME from silently resetting its layout.
+        corner: match saved_text(input.state_json.as_deref(), "corner").as_deref() {
+            Some("Risk") => crate::layout::Corner::Risk,
+            Some("Buffers") => crate::layout::Corner::Buffers,
+            Some("History") => crate::layout::Corner::History,
+            Some(_) => crate::layout::Corner::Hidden,
+            None => match saved_text(input.state_json.as_deref(), "risk_list").as_deref() {
+                Some("Shown") => crate::layout::Corner::Risk,
+                _ => crate::layout::Corner::Hidden,
+            },
+        },
+        // Up unless it was taken down: state recorded before `:help` existed
+        // has no such key, and reading its absence as hidden would lose the
+        // one box that says which keys there are.
+        cheatsheet: saved_flag(input.state_json.as_deref(), "cheatsheet").unwrap_or(true),
+        // On unless it was turned off, the reminder's rule: state recorded
+        // before `:dim` existed has no such key.
+        editor_field: saved_flag(input.state_json.as_deref(), "editor_field").unwrap_or(true),
+        // What you turned it to here last time wins; `editor.minimap` is only
+        // where a project with no history starts, the same shape `ai_command`
+        // has.
+        minimap: saved_flag(input.state_json.as_deref(), "minimap")
+            .unwrap_or_else(|| config.get("editor.minimap").as_deref() != Some("false")),
+        editor_theme: config
+            .get("editor.theme")
+            .unwrap_or_else(|| "dark".to_string()),
+        // What you used here last time wins; config is the default when there
+        // is no history.
+        ai_command: saved_text(input.state_json.as_deref(), "ai_command")
+            .or_else(|| config.get("ai.command"))
+            .unwrap_or_else(|| "claude".to_string()),
+        double_tap_ms: config
+            .get("view.double_tap_ms")
+            .and_then(|ms| ms.parse().ok())
+            .unwrap_or(300),
+        tab_width: config
+            .get("editor.tab_width")
+            .and_then(|width| width.parse().ok())
+            .unwrap_or(crate::editor::DEFAULT_TAB_WIDTH),
+        risk_threshold: config
+            .get("risk.threshold")
+            .and_then(|figure| figure.parse().ok())
+            .unwrap_or(risk::DEFAULT_THRESHOLD),
+        max_iterations: config
+            .get("risk.max_iterations")
+            .and_then(|cap| cap.parse().ok())
+            .unwrap_or(risk::DEFAULT_MAX_ITERATIONS),
+        // Absent unless the project said so: what the Gate runs is then read
+        // off the project's shape instead, and a project whose shape says
+        // nothing refuses the loop rather than passing a Gate having run
+        // nothing.
+        test_command: config.get("risk.test_command"),
+        // Which command serves which language, as the merged layers left it.
+        // Naming one is not starting one: the spawn is the edge's, and only
+        // when a Buffer in that language is open.
+        servers: config.servers(),
+        // And what lays each language out, which is the same table in a second
+        // shape: a formatter is named in a file, never in an arm.
+        formatters: config.formatters(),
+        // And which paths a server may name, which is data for the same
+        // reason: the edge searches, the library decides nothing (R31.27).
+        facts: config.facts(),
+        speech: speech(config, &input.os),
+        os: input.os.clone(),
+        checkout,
+        update_available,
+        head: input.head.clone(),
+        ..State::default()
+    }
+}
+
+/// The `[speech]` row, with the two per-OS tables already resolved for the OS
+/// this binary was built for — a lookup under the string `Startup` carried in,
+/// never a branch on it (R31.22). A row this machine has no entry on is a
+/// blank, which is the refusal `reading::start` names out loud rather than a
+/// command that cannot work.
+fn speech(config: &Config, os: &str) -> crate::reading::Speech {
+    let named = |key: &str| config.get(key).unwrap_or_default();
+    crate::reading::Speech {
+        command: named("speech.command"),
+        // The one key `get` cannot answer, because it is a list and `get`
+        // flattens what it cannot name into a printing nobody can split back.
+        args: config
+            .0
+            .get("speech")
+            .and_then(|row| row.get("args")?.as_array())
+            .map(|args| {
+                args.iter()
+                    .filter_map(|arg| Some(arg.as_str()?.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        voice: named("speech.voice"),
+        speed: named("speech.speed").parse().unwrap_or(1.0),
+        player: named(&format!("speech.player.{os}")),
+        install: named(&format!("speech.install.{os}")),
+    }
+}
+
+/// The figure on disk, if it describes the commit that is checked out. A folder
+/// that is no repository has no commit to check against, so its cache is never
+/// believed — there is nothing that could say the code had moved.
+fn cached(input: &Startup) -> Option<risk::Figures> {
+    risk::cached(input.risk_json.as_deref()?, input.head.as_deref()?)
+}
+
+/// Which checkout the running binary came from, and whether it has moved ahead.
+///
+/// A directory counts as CRIME's checkout only when its manifest parses and names
+/// the `crime` package. Another crate's manifest, a manifest that is not valid
+/// TOML, and a copied binary with nothing above it are all somebody else's
+/// directory, so none of them yields a checkout — which is what stops CRIME from
+/// ever running a build somewhere the user did not expect. Note the deliberate
+/// contrast with the config files above: one that does not parse stops CRIME
+/// from starting, because the user handed it over and needs to fix it, while the
+/// checkout manifest was never handed to CRIME at all.
+fn checkout(input: &Startup) -> (Option<PathBuf>, bool) {
+    let Some(root) = input.checkout.as_ref() else {
+        return (None, false);
+    };
+    let Some(package) = input
+        .checkout_manifest
+        .as_ref()
+        .and_then(|source| source.parse::<Table>().ok())
+        .and_then(|manifest| manifest.get("package")?.as_table().cloned())
+    else {
+        return (None, false);
+    };
+    if package.get("name").and_then(toml::Value::as_str) != Some("crime") {
+        return (None, false);
+    }
+    let version = package.get("version").and_then(toml::Value::as_str);
+    (
+        Some(root.clone()),
+        version.is_some_and(|version| is_update(version, &input.running_version)),
+    )
+}
+
+/// An Update is a Version *strictly newer* than the Running version: a checkout
+/// behind the binary offers nothing, so checking out an old branch cannot nag
+/// anyone to downgrade. Ordering comes from `semver` because a string comparison
+/// puts `0.10.0` below `0.9.0` and calls the older one newer.
+fn is_update(checkout: &str, running: &str) -> bool {
+    match (
+        semver::Version::parse(checkout),
+        semver::Version::parse(running),
+    ) {
+        (Ok(checkout), Ok(running)) => checkout > running,
+        _ => false,
+    }
+}
+
+/// Project values override global ones key by key; a table on both sides is
+/// merged rather than replaced, so naming one key does not drop its siblings.
+fn merge(base: &mut Table, overlay: Table) {
+    for (key, value) in overlay {
+        match (base.get_mut(&key), value) {
+            (Some(toml::Value::Table(existing)), toml::Value::Table(incoming)) => {
+                merge(existing, incoming);
+            }
+            (_, value) => {
+                base.insert(key, value);
+            }
+        }
+    }
+}
+
+/// One layer of the merge, and where it mentioned each `[lsp.*]` and
+/// `[facts.*]` entry. Two ways it can be unusable are refused here: TOML that
+/// does not parse, and a table naming a value that is not the shape it must be.
+/// The second is checked here rather than where the servers are read, because
+/// only the source text can say which line to name — and a server entry CRIME
+/// cannot use, dropped quietly, is a language the user configured and nothing
+/// serves.
+///
+/// The third way — an entry no layer ever completed — cannot be seen from one
+/// layer, so the spans come back with the table and `refuse_incomplete` decides.
+fn parse(source: &str, label: &str) -> Result<(Table, Origins), ConfigError> {
+    let line = |offset: usize| source[..offset].matches('\n').count() + 1;
+    let at = |error: &toml::de::Error| error.span().map_or(1, |span| line(span.start));
+    let table = source.parse::<Table>().map_err(|error| ConfigError {
+        file: label.to_string(),
+        line: at(&error),
+        fault: ConfigFault::NotToml,
+    })?;
+    let layer = toml::from_str::<SourceLayer>(source).map_err(|error| ConfigError {
+        file: label.to_string(),
+        line: at(&error),
+        fault: ConfigFault::WrongType(error.message().to_string()),
+    })?;
+    let origins = layer
+        .lsp
+        .iter()
+        .map(|(name, entry)| (format!("lsp.{name}"), entry.span()))
+        .chain(
+            layer
+                .formatter
+                .iter()
+                .map(|(name, entry)| (format!("formatter.{name}"), entry.span())),
+        )
+        .chain(
+            layer
+                .facts
+                .iter()
+                .map(|(name, entry)| (format!("facts.{name}"), entry.span())),
+        )
+        .map(|(entry, span)| (entry, (label.to_string(), line(span.start))))
+        .collect();
+    Ok((table, origins))
+}
+
+/// A list of project-relative paths the last session recorded — which folders
+/// the tree had open, which files were in the editor. Absent state means a
+/// fresh project, so the answer is empty rather than a guess.
+fn saved_paths(root: &Path, state_json: Option<&str>, key: &str) -> Vec<PathBuf> {
+    let Some(parsed) = state_json.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+    else {
+        return Vec::new();
+    };
+    parsed
+        .get(key)
+        .and_then(|value| value.as_array())
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(|p| p.as_str())
+                .map(|p| root.join(p))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The files that were open last time, the one that was current *last*: the
+/// buffers are restored by opening them, and opening a file is what makes it
+/// current, so the order is the whole of "you come back where you left".
+fn saved_buffers(root: &Path, state_json: Option<&str>) -> Vec<PathBuf> {
+    let mut paths = saved_paths(root, state_json, "buffers");
+    let current = saved_text(state_json, "current_buffer").map(|rest| root.join(rest));
+    if let Some(at) = current.and_then(|path| paths.iter().position(|open| *open == path)) {
+        let current = paths.remove(at);
+        paths.push(current);
+    }
+    paths
+}
+
+fn saved_text(state_json: Option<&str>, key: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(state_json?).ok()?;
+    parsed.get(key)?.as_str().map(str::to_string)
+}
+
+fn saved_number(state_json: Option<&str>, key: &str) -> Option<u32> {
+    let parsed: serde_json::Value = serde_json::from_str(state_json?).ok()?;
+    parsed.get(key)?.as_u64().map(|n| n as u32)
+}
+
+fn saved_flag(state_json: Option<&str>, key: &str) -> Option<bool> {
+    let parsed: serde_json::Value = serde_json::from_str(state_json?).ok()?;
+    parsed.get(key)?.as_bool()
+}
+
+fn last_view(state_json: Option<&str>) -> Option<View> {
+    let parsed: serde_json::Value = serde_json::from_str(state_json?).ok()?;
+    match parsed.get("last_view")?.as_str()? {
+        "Review" => Some(View::Review),
+        "Story" => Some(View::Story),
+        "Edit" => Some(View::Edit),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        is_update, parse, start, Config, ConfigError, ConfigFault, Effect, FactValue, Startup,
+        StartupError, DEFAULTS, PROJECT_LABEL, SEEDED_CONFIG,
+    };
+
+    /// The bottom layer on its own, as several tests below read it.
+    fn defaults() -> Config {
+        Config(parse(DEFAULTS, "defaults").expect("valid TOML").0)
+    }
+
+    /// The refusal a project layer earns, so that the tests below assert the
+    /// file, the line *and* which of the three faults it was.
+    fn refusal(project_config: &str) -> ConfigError {
+        let error = start(&Startup {
+            project_config: Some(project_config.to_string()),
+            ..Startup::default()
+        })
+        .expect_err("CRIME started on a config it cannot use");
+        match error {
+            StartupError::Config(problem) => problem,
+            other => panic!("expected a config fault, got {other:?}"),
+        }
+    }
+
+    /// R9.5's refusal, for the half of "malformed" that still parses: an entry
+    /// naming a command that is not a string is a server CRIME cannot run, and
+    /// dropping it quietly leaves a language the user configured served by
+    /// nothing, with no message and nothing to fix. The line comes from the
+    /// source text, which is why the check is at the layer and not where the
+    /// servers are read.
+    #[test]
+    fn a_command_that_is_not_a_string_refuses_to_start() {
+        let problem = refusal("[lsp.rust]\ncommand = 12\n");
+        assert_eq!((problem.file.as_str(), problem.line), (PROJECT_LABEL, 2));
+        assert!(
+            matches!(problem.fault, ConfigFault::WrongType(_)),
+            "{problem}"
+        );
+    }
+
+    /// The arguments are checked with the command, since a server started with
+    /// an argument nobody can spell is the same unusable entry.
+    #[test]
+    fn an_argument_that_is_not_a_string_refuses_to_start() {
+        let problem = refusal("[lsp.rust]\ncommand = \"rust-analyzer\"\nargs = [\"--stdio\", 3]\n");
+        assert_eq!((problem.file.as_str(), problem.line), (PROJECT_LABEL, 3));
+        assert!(
+            matches!(problem.fault, ConfigFault::WrongType(_)),
+            "{problem}"
+        );
+    }
+
+    /// A shipped default nothing can reach is a language served by nobody: the
+    /// spawn is decided from the file that was opened, so a `[lsp.<language>]`
+    /// whose spelling no extension produces is data that never fires.
+    #[test]
+    fn every_default_language_is_the_language_of_some_file() {
+        let files = [
+            "a.rs", "a.ts", "a.js", "a.vue", "a.java", "a.zig", "a.py", "a.go", "a.c", "a.cpp",
+        ];
+        let reachable: std::collections::BTreeSet<&str> = files
+            .iter()
+            .filter_map(|name| crate::lsp::language(std::path::Path::new(name)))
+            .collect();
+        for language in defaults().servers().keys() {
+            assert!(
+                reachable.contains(language.as_str()),
+                "no file reaches {language}"
+            );
+        }
+    }
+
+    /// The bottom layer held to the same check as the two above it, and named
+    /// here so a typo in the data fails as itself rather than as every scenario
+    /// that starts CRIME.
+    #[test]
+    fn every_default_language_names_a_server() {
+        let config = defaults();
+        let named = config.0["lsp"].as_table().expect("lsp tables").len();
+        assert_eq!(config.servers().len(), named);
+    }
+
+    /// R9.5 again, for the key this ticket adds: an install command that is not
+    /// a string is an entry CRIME cannot type, and dropping it quietly leaves a
+    /// row that offers nothing for a reason nobody can see.
+    #[test]
+    fn an_install_command_that_is_not_a_string_refuses_to_start() {
+        let problem = refusal("[lsp.zig]\ncommand = \"zls\"\ninstall.macos = 12\n");
+        assert_eq!((problem.file.as_str(), problem.line), (PROJECT_LABEL, 3));
+        assert!(
+            matches!(problem.fault, ConfigFault::WrongType(_)),
+            "{problem}"
+        );
+    }
+
+    /// An install key spelled for an OS no binary is built for is a command
+    /// that can never fire, and it would look configured in the file that
+    /// carries it. The three spellings are `std::env::consts::OS`'s, which is
+    /// what `main.rs` hands in.
+    #[test]
+    fn every_default_install_command_is_keyed_by_an_os_that_can_run_crime() {
+        for (language, server) in defaults().servers() {
+            for os in server.install.keys() {
+                assert!(
+                    ["macos", "linux", "windows"].contains(&os.as_str()),
+                    "{language} names an install command for {os:?}"
+                );
+            }
+        }
+    }
+
+    /// Honesty, held to by the two languages the ADR names: `zls` on Linux is a
+    /// build from source and `jdtls` is in no distribution, so neither has a key
+    /// there. An invented command that fails looks configured; a blank one is
+    /// one line of TOML away from being right.
+    #[test]
+    fn a_language_nobody_has_packaged_for_an_os_has_no_key_for_it() {
+        let servers = defaults().servers();
+        for language in ["zig", "java"] {
+            assert_eq!(
+                servers[language].install.keys().collect::<Vec<_>>(),
+                vec!["macos"],
+                "{language} claims a command somewhere it is not packaged"
+            );
+        }
+    }
+
+    /// A layer is a patch, so naming one key of a language `DEFAULTS` ships
+    /// leaves every key it did not name standing. Held over the whole entry
+    /// rather than over the one key the caller went looking for: `[lsp.vue]` is
+    /// the entry with the most on it, and a `command` that survived while
+    /// `unanswerable` was dropped is a server that starts and then waits
+    /// forever.
+    ///
+    /// Before this, `Server::command` was required of each layer, so a project
+    /// naming one key was refused outright — and the only workaround was to
+    /// copy `command` out of a binary's built-in defaults, which then silently
+    /// stopped tracking them.
+    #[test]
+    fn a_layer_may_name_one_key_of_a_shipped_server() {
+        let (state, _config, _effects) = start(&Startup {
+            project_config: Some("[lsp.vue]\nargs = [\"--from-project\"]\n".to_string()),
+            ..Startup::default()
+        })
+        .expect("CRIME started");
+        let patched = &state.servers["vue"];
+        let shipped = &defaults().servers()["vue"];
+        assert_eq!(patched.args, ["--from-project"]);
+        assert_eq!(
+            (
+                &patched.command,
+                &patched.also_served_by,
+                &patched.install,
+                &patched.unanswerable
+            ),
+            (
+                &shipped.command,
+                &shipped.also_served_by,
+                &shipped.install,
+                &shipped.unanswerable
+            )
+        );
+    }
+
+    /// The same for a `[facts.*]` table, because it is the same mechanism: a
+    /// layer is a patch for both, and `marker` is to a fact what `command` is
+    /// to a server. Left asymmetric, a project overriding a shipped fact's
+    /// `value` alone would meet the refusal this ticket removed.
+    #[test]
+    fn a_layer_may_name_one_key_of_a_shipped_fact() {
+        let (state, _config, _effects) = start(&Startup {
+            project_config: Some("[facts.typescript_sdk]\nvalue = \"marker\"\n".to_string()),
+            ..Startup::default()
+        })
+        .expect("CRIME started");
+        let patched = &state.facts["typescript_sdk"];
+        assert_eq!(patched.value, FactValue::Marker);
+        assert_eq!(patched.marker, defaults().facts()["typescript_sdk"].marker);
+    }
+
+    /// The `[lsp.*]` half of this is a scenario; the `[facts.*]` half is only
+    /// here, because a fact is not a stakeholder-visible thing to write one
+    /// about — and it is a table with a key the entry is no use without, so
+    /// leaving it unchecked would let a project declare a fact the edge is then
+    /// asked to find nothing for.
+    #[test]
+    fn a_fact_no_layer_gave_a_marker_refuses_to_start() {
+        let problem = refusal("[facts.python_env]\nvalue = \"directory\"\n");
+        assert_eq!((problem.file.as_str(), problem.line), (PROJECT_LABEL, 1));
+        assert_eq!(
+            problem.fault,
+            ConfigFault::Incomplete {
+                entry: "facts.python_env".to_string(),
+                key: "marker".to_string()
+            }
+        );
+    }
+
+    /// The three faults, as they read on screen. Pinned because the whole of
+    /// the second half of this ticket is that they read *differently*: one
+    /// sentence stood for all three, so a missing key wore the parse fault's
+    /// words and sent the reader hunting a syntax error that was not there.
+    /// Valid TOML is never called invalid.
+    #[test]
+    fn the_three_faults_read_differently() {
+        let messages = [
+            "[lsp.rust]\ncommand = \"rust-analyzer\n",
+            "[lsp.rust]\ncommand = 12\n",
+            "[lsp.brainfuck]\nargs = [\"--stdio\"]\n",
+        ]
+        .map(|source| refusal(source).to_string());
+        assert_eq!(
+            messages,
+            [
+                ".crime/config.toml:2: config is not valid TOML",
+                ".crime/config.toml:2: invalid type: integer `12`, expected a string",
+                ".crime/config.toml:1: [lsp.brainfuck] names no command",
+            ]
+        );
+    }
+
+    /// The merge is key by key inside the install table too, so replacing the
+    /// command for this machine does not silently drop the others — the point
+    /// of shipping the defaults at all is that a later binary's corrections
+    /// arrive for every OS the user did not override. The layer repeats
+    /// `command` because each one is checked against `Server` on its own, which
+    /// is what buys the file and the line R9.5 asks for.
+    #[test]
+    fn a_config_overrides_one_install_command_and_leaves_its_siblings() {
+        let (state, _config, _effects) = start(&Startup {
+            project_config: Some(
+                "[lsp.rust]\ncommand = \"rust-analyzer\"\ninstall.macos = \"my-own-installer\"\n"
+                    .to_string(),
+            ),
+            ..Startup::default()
+        })
+        .expect("CRIME started");
+        let install = &state.servers["rust"].install;
+        assert_eq!(install["macos"], "my-own-installer");
+        assert_eq!(install["linux"], "rustup component add rust-analyzer");
+    }
+
+    /// A name a `[facts.*]` table declares is expanded, and every other
+    /// `${...}` is passed through as the string it is (R31.27) — so a typo in
+    /// the data ships an argument that reaches the server literally, and
+    /// nobody would see it until a server complained. Arguments *and*
+    /// initialization options, because the same substitution reaches both.
+    /// Held here, where the data is.
+    ///
+    /// **Every occurrence, not every string.** Asking whether some declared
+    /// name appears in the text is satisfied by one correct name in a string
+    /// holding two, and the options table is serialized whole — so once the
+    /// TypeScript row named both an SDK and a plugin, a typo in either was
+    /// covered by the other's match. The names are pulled out of the text
+    /// instead, which is what makes the assertion count.
+    #[test]
+    fn every_name_the_defaults_interpolate_is_one_the_defaults_declare() {
+        let config = defaults();
+        let declared = config.facts();
+        let mut seen = 0;
+        for (language, server) in config.servers() {
+            let options = server
+                .initialization_options
+                .map(|options| serde_json::Value::Object(options).to_string())
+                .unwrap_or_default();
+            for text in server.args.iter().chain(std::iter::once(&options)) {
+                for asked in interpolated(text) {
+                    seen += 1;
+                    assert!(
+                        declared.contains_key(&asked),
+                        "{language} asks for ${{{asked}}}, which nothing declares"
+                    );
+                }
+            }
+        }
+        // A test that found nothing to check would pass for a `DEFAULTS` that
+        // stopped interpolating at all.
+        assert!(seen >= 3, "only {seen} interpolated names found");
+    }
+
+    /// Every `${name}` in one configured string, in order. Only used by the
+    /// test above: `lsp::filled` substitutes by walking the declared names
+    /// rather than by parsing the text, which is what leaves an undeclared
+    /// `${...}` alone (R31.27), and this is the reverse question.
+    fn interpolated(text: &str) -> Vec<String> {
+        text.split("${")
+            .skip(1)
+            .filter_map(|rest| rest.split_once('}'))
+            .map(|(name, _)| name.to_string())
+            .collect()
+    }
+
+    /// The shipped fact, read back as the shape the edge searches with. A
+    /// `value` key that stopped deserializing would leave the SDK resolving to
+    /// `typescript.js` itself and every Vue server pointed at a file.
+    #[test]
+    fn the_shipped_fact_names_a_marker_and_the_directory_holding_it() {
+        let facts = defaults().facts();
+        let sdk = &facts["typescript_sdk"];
+        assert_eq!(sdk.marker, "node_modules/typescript/lib/typescript.js");
+        assert_eq!(sdk.value, FactValue::Directory);
+        assert_eq!(sdk.command.as_deref(), Some("tsc"));
+    }
+
+    #[test]
+    fn a_newer_version_in_any_component_is_an_update() {
+        assert!(is_update("0.1.1", "0.1.0"));
+        assert!(is_update("0.2.0", "0.1.0"));
+        assert!(is_update("1.0.0", "0.1.0"));
+    }
+
+    /// Two spellings of one default: the TOML the merge starts from, and the
+    /// number the library counts with when no config was read at all. Every
+    /// key, because a default that disagrees with itself is a figure — a cap,
+    /// or an indent width — nobody can predict.
+    #[test]
+    fn the_defaults_are_the_ones_the_library_documents() {
+        let table: toml::Table = DEFAULTS.parse().expect("valid TOML");
+        assert_eq!(
+            table["risk"]["threshold"].as_integer(),
+            Some(i64::from(crate::risk::DEFAULT_THRESHOLD))
+        );
+        assert_eq!(
+            table["risk"]["max_iterations"].as_integer(),
+            Some(i64::from(crate::risk::DEFAULT_MAX_ITERATIONS))
+        );
+        assert_eq!(
+            table["editor"]["tab_width"].as_integer(),
+            Some(crate::editor::DEFAULT_TAB_WIDTH as i64)
+        );
+    }
+
+    /// The seed is decided by one fact: `project_config` is `None`. The edge
+    /// hands `Some("")` for a file it found and could not read — not UTF-8, or
+    /// write-only — because an empty layer merges nothing and still says "a
+    /// file is here". Seeding over it would be a silent delete of settings
+    /// CRIME could not parse, which is the one way this feature can destroy
+    /// something.
+    #[test]
+    fn a_project_config_that_is_there_but_says_nothing_is_not_seeded_over() {
+        let (_state, _config, effects) = start(&Startup {
+            project_config: Some(String::new()),
+            ..Startup::default()
+        })
+        .expect("CRIME started");
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::WriteFile { .. })),
+            "starting wrote over a config file that is already there: {effects:?}"
+        );
+    }
+
+    /// Three promises about the file starting lays down, and the first is the
+    /// one no scenario can see break. Every table it holds must be *empty*: a
+    /// live key would make "the project sets nothing" false on a project's
+    /// first run, and the effective-settings scenario cannot catch it, because
+    /// the numbers quoted here are the defaults — uncommenting them changes
+    /// nothing and every assertion stays green.
+    ///
+    /// The second is why quoting the defaults is safe at all. Uncomment every
+    /// key and what is left must be the [`DEFAULTS`] layer, value for value, so
+    /// a number that moves there and not here is caught before it ships. A
+    /// stale line is worse than no line: it reads as advice and pins the answer
+    /// the reader was trying to accept.
+    ///
+    /// The third is the same promise read the other way, and it is the one
+    /// this feature exists for: every scalar [`DEFAULTS`] spells must be named
+    /// here. Walking only seeded → defaults leaves a tunable the defaults grow
+    /// findable nowhere while the whole suite stays green, which is precisely
+    /// the state `editor.tab_width` was in for its whole life. `[lsp.*]`,
+    /// `[formatter.*]` and `[facts.*]` are excluded by holding no scalar
+    /// directly under their own table: they are data a reader reaches for a
+    /// language, not numbers to tune, and listing every server here would bury
+    /// the four that are.
+    #[test]
+    fn the_seeded_config_is_commented_out_and_quotes_the_live_defaults() {
+        let seeded: toml::Table = SEEDED_CONFIG.parse().expect("valid TOML");
+        assert!(
+            seeded
+                .values()
+                .all(|table| table.as_table().is_some_and(toml::Table::is_empty)),
+            "a live key in the seeded config: {seeded:?}"
+        );
+
+        let uncommented: String = SEEDED_CONFIG
+            .lines()
+            .map(|line| match line.strip_prefix("# ") {
+                Some(key) if key.split_once(" = ").is_some_and(|(k, _)| !k.contains(' ')) => key,
+                _ => line,
+            })
+            .collect::<Vec<&str>>()
+            .join("\n");
+        let uncommented: toml::Table = uncommented.parse().expect("valid TOML uncommented");
+        let defaults: toml::Table = DEFAULTS.parse().expect("valid TOML");
+        assert!(
+            !uncommented.is_empty()
+                && uncommented
+                    .values()
+                    .all(|table| !table.as_table().is_some_and(toml::Table::is_empty)),
+            "the seeded config names nothing: {uncommented:?}"
+        );
+        for (table, keys) in &uncommented {
+            for (key, value) in keys.as_table().expect("a table") {
+                assert_eq!(
+                    Some(value),
+                    defaults[table].get(key),
+                    "the seeded {table}.{key} is not what the defaults say"
+                );
+            }
+        }
+        for (table, keys) in &defaults {
+            for (key, value) in keys.as_table().expect("a table") {
+                assert!(
+                    value.is_table()
+                        || uncommented
+                            .get(table)
+                            .and_then(|named| named.get(key))
+                            .is_some(),
+                    "the defaults spell {table}.{key} and the seeded config never names it"
+                );
+            }
+        }
+    }
+
+    /// The reason `semver` is a dependency: `"0.10.0" < "0.9.0"` as strings,
+    /// because `1` sorts below `9`, so a hand-rolled compare would call the
+    /// newer checkout older and never offer the Update.
+    #[test]
+    fn a_double_digit_component_is_compared_as_a_number() {
+        assert!(is_update("0.10.0", "0.9.0"));
+        assert!(!is_update("0.9.0", "0.10.0"));
+    }
+
+    #[test]
+    fn an_equal_version_is_not_an_update() {
+        assert!(!is_update("0.1.0", "0.1.0"));
+    }
+
+    /// Strictly greater, so checking out an old branch does not offer to
+    /// downgrade the binary that is already newer.
+    #[test]
+    fn a_version_behind_the_binary_is_not_an_update() {
+        assert!(!is_update("0.0.9", "0.1.0"));
+        assert!(!is_update("1.0.0", "2.0.0"));
+    }
+
+    /// A pre-release sits below its own release and above the version before it,
+    /// which is what makes an rc in the checkout an Update but not a downgrade
+    /// of the release it precedes.
+    #[test]
+    fn a_pre_release_qualifier_orders_below_its_release() {
+        assert!(is_update("0.2.0-rc.1", "0.1.0"));
+        assert!(!is_update("0.2.0-rc.1", "0.2.0"));
+        assert!(is_update("0.2.0", "0.2.0-rc.1"));
+    }
+
+    /// Neither side is something CRIME wrote, so neither is trusted to parse.
+    #[test]
+    fn a_version_that_is_not_a_version_is_not_an_update() {
+        assert!(!is_update("nightly", "0.1.0"));
+        assert!(!is_update("0.2.0", ""));
+    }
+}

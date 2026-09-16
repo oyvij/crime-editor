@@ -1,0 +1,24 @@
+# Rust build output
+/target
+
+# Per-user CRIME state when dogfooding CRIME on this repo.
+# Config is committable; state is not. See F9 in docs/example-map.md.
+.crime/state.json
+
+# Agent worktrees: a full checkout plus its build output, 2.3 GB of it.
+.claude/worktrees/
+# Per-user agent settings; the shared contract is CLAUDE.md and AGENTS.md.
+.claude/settings.local.json
+
+# Derived per-user Risk data when dogfooding CRIME on this repo: the figure
+# cache, the Refactor loop's per-Iteration snapshots and its completion
+# sentinel. Unlike reviews and stories these are computed, not authored, and
+# they change on every commit — a committed cache is a merge conflict in a file
+# nobody reads by hand. See F27 in docs/example-map.md.
+.crime/risk.json
+.crime/snapshots/
+.crime/refactor-done
+
+# One transcript per language server, written by the edge while dogfooding.
+# Derived, per-user and per-session, for the same reason the Risk cache above is.
+.crime/lsp-*.log

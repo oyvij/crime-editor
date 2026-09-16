@@ -1,0 +1,19 @@
+{
+  "protocolVersion": 1,
+  "range": { "base": "7f8e854a", "head": "worktree", "spelling": "HEAD..worktree" },
+  "stories": [
+    {
+      "id": "s1",
+      "name": "Keys reach the child",
+      "premise": "p",
+      "steps": [
+        {
+          "id": "s1e1",
+          "claim": "c",
+          "why": "w",
+          "site": { "file": "src/keys.rs", "side": "new", "kind": "changed", "from": 1, "to": 1, "text": "x" }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,206 @@
+{
+  "protocolVersion": 1,
+  "range": {
+    "base": "970c1868c151",
+    "head": "worktree",
+    "spelling": "HEAD..worktree"
+  },
+  "stories": [
+    {
+      "id": "s1",
+      "name": "The scaffold comes down",
+      "premise": "The whole range is one deletion — a hand-written watcher fixture — so follow the removal through the code that notices it.",
+      "steps": [
+        {
+          "id": "s1e1",
+          "claim": "This ten-line file is the only hunk in the range, and it is not source: every line is an instruction to a human running the watcher by hand.",
+          "why": "Commit d079793 ('Fixed auto update buffer on change and dirty vs file changes') shipped this alongside the fix it was used to check. Read line 4 and line 8: they address the person watching the screen, and line 8 states the exact failure the fix was for — a reload clobbering an unsaved edit. AGENTS.md's test strategy forbids fixture folders and real terminals in the suite, so a file like this can only ever be driven by hand. Once the same behaviour is asserted in a unit test, keeping it means keeping a second, unrunnable copy of the test at the workspace root, where it also shows up in the tree for every reviewer.",
+          "flow": {
+            "in": "Nothing reads it. `grep -rn 'test.md'` finds three unit tests that use the string \"test.md\" as a name — twice as a buffer title, once as a path under a test-only root — and none of them open this file.",
+            "out": "Removing it changes no behaviour — it changes what the tree shows and what the next reader has to explain."
+          },
+          "site": {
+            "file": "test.md",
+            "side": "old",
+            "kind": "changed",
+            "from": 1,
+            "to": 10,
+            "text": "Hie hei!\n\nLine two, added at 17:50:27.\nWatcher check: if the editor is following this file, this text appeared without reopening it.\nLine four.\n\nDISK EDIT at 17:51:21 — written by Claude while your buffer was dirty.\nIf you see this line, the reload clobbered your unsaved edit.\n\nAnother test"
+          }
+        },
+        {
+          "id": "s1e2",
+          "claim": "Control enters here: with CRIME running, deleting the file is itself an event, and the edge turns notify's removal into `Event::FilesRemoved` without deciding anything about it.",
+          "why": "This is AGENTS.md's edge rule in three lines. `collect_watch_events` is the edge, so it is allowed to touch the filesystem and the watcher — and nothing else. It does not ask whether the removed path is open in a buffer, selected in the tree, or shown in the diff, because that is product behaviour and product behaviour lives in `update` with a scenario behind it. Contrast the arm directly above it, which does call `fs::metadata`: that is a fact only the edge can observe (notify reports a create kind of `Any` on some platforms), not a decision.",
+          "flow": {
+            "in": "A `notify::Event` with kind `Remove` and one or more paths, drained from the watcher channel.",
+            "out": "`Event::FilesRemoved(vec![path])` pushed onto the queue `pump` feeds to `update`."
+          },
+          "site": {
+            "file": "src/main.rs",
+            "side": "new",
+            "kind": "context",
+            "from": 1361,
+            "to": 1363,
+            "text": "                notify::EventKind::Remove(_) => {\n                    queue.push_back(Event::FilesRemoved(vec![path]));\n                }"
+          },
+          "prediction": {
+            "question": "Why does this arm push an event instead of removing the entry from the tree itself?",
+            "choices": [
+              {
+                "text": "Because `update` owns all mutation, so a change made here would be a change no scenario can drive or assert.",
+                "correct": true,
+                "feedback": "Right. `update(&State, Event) -> (State, Vec<Effect>)` is the one behaviour seam; state changed at the edge is state changed without a test."
+              },
+              {
+                "text": "Because the watcher callback runs on another thread and cannot borrow the state mutably.",
+                "correct": false,
+                "feedback": "It could — `collect_watch_events` already takes `&State` on the main thread, and the channel has decoupled the threads. The constraint is architectural, not a borrow-checker one."
+              },
+              {
+                "text": "Because a removal may be a rename, so the event has to be batched with the matching create.",
+                "correct": false,
+                "feedback": "No batching happens here — each path is pushed as it arrives, and `FilesRemoved` takes a vec only because one notify event can carry several paths."
+              }
+            ]
+          }
+        },
+        {
+          "id": "s1e3",
+          "claim": "`update` forgets the file by dropping its name from the cached entries of its parent folder, and returns no effects at all.",
+          "why": "The tree's contents are a map from folder to the entries that folder held when it was expanded, so forgetting a file is a `retain` on one vec — there is no other copy to keep in sync. The empty effect vec is the load-bearing half: a vanished file needs nothing executed, so nothing is returned, and the assertion 'no command has been executed' stays a comparison of two values. Note what is *not* here: no buffer is closed and no diff is dropped. A buffer whose file is gone keeps what it is showing, which is why deleting this fixture out from under an open editor loses nothing.",
+          "flow": {
+            "in": "`Event::FilesRemoved` carrying the absolute path of the deleted file.",
+            "out": "A `State` whose `contents` no longer lists it, and an empty `Vec<Effect>`."
+          },
+          "site": {
+            "file": "src/lib.rs",
+            "side": "new",
+            "kind": "context",
+            "from": 1022,
+            "to": 1031,
+            "text": "        Event::FilesRemoved(paths) => {\n            for path in paths {\n                let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {\n                    continue;\n                };\n                if let Some(entries) = next.contents.get_mut(parent) {\n                    entries.retain(|entry| Some(entry.name.as_str()) != name.to_str());\n                }\n            }\n            vec![]"
+          },
+          "values": [
+            {
+              "name": "effects returned",
+              "value": "vec![]",
+              "provenance": "literal",
+              "cite": {
+                "file": "src/lib.rs",
+                "line": 1031
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "name": "What the fixture was for",
+      "premise": "The deleted lines script one specific test — a disk write arriving under a dirty buffer — so walk the path they were probing and end on the test that replaced them.",
+      "steps": [
+        {
+          "id": "s2e1",
+          "claim": "The fixture's line 4 ('this text appeared without reopening it') was probing this arm: a modify becomes `Event::FileChanged` carrying the file's contents.",
+          "why": "Two guards, both explained in the comment above them. `.git` and `.crime/stories` are excluded because git's own bookkeeping churns constantly and a story artifact is a report, not a tree entry — it is handled by the arm further up. The `if let Ok` is the subtler one: a file that cannot be read as text is skipped rather than reported as empty, because reporting empty would blank the buffer this mechanism exists to keep truthful. The edge reads bytes and states a fact; whether the change matters is still not decided here.",
+          "flow": {
+            "in": "A `notify::Event` with kind `Modify` for a path under the workspace root.",
+            "out": "`Event::FileChanged { path, contents }`, or nothing at all if the path is git's, a story artifact, or unreadable as UTF-8."
+          },
+          "site": {
+            "file": "src/main.rs",
+            "side": "new",
+            "kind": "context",
+            "from": 1364,
+            "to": 1375,
+            "text": "                // What a change means is update's decision — an open buffer,\n                // the diff on screen, or nothing. The edge only keeps git's own\n                // bookkeeping out, and a file it cannot read as text: reporting\n                // that as empty would blank the buffer it claims to follow.\n                notify::EventKind::Modify(_)\n                    if !path.starts_with(&git_dir) && !path.starts_with(&stories_dir) =>\n                {\n                    if let Ok(contents) = std::fs::read_to_string(&path) {\n                        queue.push_back(Event::FileChanged { path, contents });\n                    }\n                }\n                _ => {}"
+          }
+        },
+        {
+          "id": "s2e2",
+          "claim": "`update` hands the new contents to the buffer and, if that leaves the buffer diverged, adds one notice — it never chooses between the draft and the disk.",
+          "why": "The choice is delegated on purpose: `Buffer::follow` decides, and this arm only reports. That is why the notice is `Effect::Notify`, data the edge prints, rather than a write here. The comment says why the notice exists at all — `changed_on_disk` also paints a standing warning in the buffer title, and a standing marker is easy to miss on a screen an AI is actively writing to, so the moment a draft is at risk is worth a word on the status line. This branch is the exact scenario the fixture's line 7 announced ('DISK EDIT ... written by Claude while your buffer was dirty').",
+          "flow": {
+            "in": "`Event::FileChanged` and, if the path is open, the `Buffer` already in `state.buffers`.",
+            "out": "A buffer whose `disk` is current and whose `revision` has moved, plus `Effect::Notify(\"buffer-diverged\")` when a draft was in the way."
+          },
+          "site": {
+            "file": "src/lib.rs",
+            "side": "new",
+            "kind": "context",
+            "from": 1054,
+            "to": 1065,
+            "text": "            let mut effects = Vec::new();\n            if let Some(buffer) = next.buffers.get_mut(&path) {\n                // Unsaved edits are never overwritten — flag and wait. A clean\n                // buffer has nothing to lose, so it just follows the file.\n                buffer.follow(contents);\n                // The ⚠ in the title is a standing marker, easy to miss on a\n                // screen an AI is writing to. Losing a draft is worth a word\n                // on the status line the moment it is at risk.\n                if buffer.changed_on_disk {\n                    effects.push(Effect::Notify(\"buffer-diverged\"));\n                }\n            }"
+          },
+          "values": [
+            {
+              "name": "notice slug",
+              "value": "buffer-diverged",
+              "provenance": "literal",
+              "cite": {
+                "file": "src/lib.rs",
+                "line": 1063
+              }
+            }
+          ]
+        },
+        {
+          "id": "s2e3",
+          "claim": "One line decides the whole question the fixture was asking: `changed_on_disk` becomes true only if a draft exists, so the draft is never assigned over.",
+          "why": "`disk` and `draft` are separate fields and `shown()` prefers the draft, so following the file writes the incoming text into `disk` and the user's unsaved work simply keeps winning — the guard is a flag, not an if. The `revision += 1` is the second half and the reason this is a method rather than a public field: the edge caches the syntax parse against `revision`, so assigning `disk` from outside would leave the screen painting the old file while `shown()` already returned the new one. Following the file *is* a content change. `clamp()` then pulls the cursor back inside a file that shrank.",
+          "flow": {
+            "in": "The contents the edge read off disk.",
+            "out": "A buffer at a new revision, flagged if it had a draft, with the cursor inside the new line count."
+          },
+          "site": {
+            "file": "src/editor.rs",
+            "side": "new",
+            "kind": "context",
+            "from": 126,
+            "to": 131,
+            "text": "    pub fn follow(&mut self, contents: String) {\n        self.disk = contents;\n        self.changed_on_disk = self.draft.is_some();\n        self.revision += 1;\n        self.clamp();\n    }"
+          },
+          "nudge": "Read it as two independent facts rather than a branch: `disk` is always overwritten, and `changed_on_disk` is just a record of whether anyone cared. Nothing here can touch `draft`.",
+          "prediction": {
+            "question": "Why does `follow` overwrite `disk` unconditionally instead of refusing the update while a draft is unsaved?",
+            "choices": [
+              {
+                "text": "Because `shown()` prefers the draft, so `disk` can hold the truth and still be invisible — and the reload the user may ask for needs it.",
+                "correct": true,
+                "feedback": "Exactly. `reload()` drops the draft and shows `disk`, so `disk` must already be the current file or `:e` would restore something stale."
+              },
+              {
+                "text": "Because a refused update would leave notify with no way to tell CRIME again later.",
+                "correct": false,
+                "feedback": "The watcher would happily report the next change; the reason is that `disk` has a job to do while it is hidden, not that the news would be lost."
+              },
+              {
+                "text": "Because the diff pane reads `disk` directly and would otherwise show the wrong side.",
+                "correct": false,
+                "feedback": "The diff is loaded by `Effect::ReadDiff` in the `FileChanged` arm, not read out of the buffer."
+              }
+            ]
+          }
+        },
+        {
+          "id": "s2e4",
+          "claim": "This unit test is what made the fixture disposable: it asserts the fixture's warning line as a comparison of two values, in milliseconds and with no terminal.",
+          "why": "Line by line it is the manual procedure from the deleted file: open a buffer, type into it (`key('x')` is the unsaved edit), record what is on screen, then let the file change underneath. The three assertions split what the fixture could only check by eye — the draft survives, `disk` took the incoming text anyway, and the flag is set. The message on the first assertion, 'unsaved work is never overwritten', is the sentence the fixture's line 8 was written to catch the violation of. Per AGENTS.md this is where such a test belongs: a fast unit test beside the code it covers, not a behaviour scenario re-proving wiring.",
+          "flow": {
+            "in": "A `Buffer` built from a literal, dirtied by one keypress.",
+            "out": "Three assertions over `shown()`, `disk` and `changed_on_disk` — and a red test the moment the guard in `follow` is removed."
+          },
+          "site": {
+            "file": "src/editor.rs",
+            "side": "new",
+            "kind": "context",
+            "from": 728,
+            "to": 738,
+            "text": "    #[test]\n    fn a_dirty_buffer_keeps_its_draft_and_is_flagged() {\n        let mut buffer = Buffer::open(\"one\\ntwo\");\n        buffer.key('x');\n        let draft = buffer.shown().to_string();\n        buffer.follow(\"three\".to_string());\n        assert_eq!(buffer.shown(), draft, \"unsaved work is never overwritten\");\n        assert_eq!(buffer.disk, \"three\");\n        assert!(buffer.changed_on_disk);\n    }\n"
+          }
+        }
+      ]
+    }
+  ]
+}

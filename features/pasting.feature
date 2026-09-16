@@ -1,0 +1,72 @@
+Feature: Pasting from the clipboard
+
+  Copying and pasting are one gesture with two keys, and each key has two
+  spellings: Ctrl and Command are aliases on both, so whichever hand's habit
+  copies also pastes. Command+V worked long before Ctrl+V did, because the host
+  terminal answers Command+V itself and sends CRIME the text as a paste — which
+  made copying and pasting feel like two unrelated features.
+
+  The clipboard is the edge's to read: the core asks for it and the text comes
+  back as the one edit a paste is. `y` and `p` stay the register's, which is a
+  separate world on purpose — `selection.feature` says why.
+
+  Background:
+    Given the workspace root is "/home/me/projects/crime"
+
+  Scenario Outline: Either spelling of paste puts the clipboard in the buffer
+    Given a system clipboard is available
+    And the clipboard holds "pasted "
+    And "src/tree.js" is open in the editor holding:
+      """
+      one two
+      """
+    When I press "<key>" in the editor
+    Then the buffer holds:
+      """
+      pasted one two
+      """
+
+    Examples:
+      | key    |
+      | Ctrl+v |
+      | Cmd+v  |
+
+  Scenario Outline: Either spelling of copy takes the selection
+    Given a system clipboard is available
+    And "src/tree.js" is open in the editor holding:
+      """
+      run("unquoted path")
+      """
+    And I drag across "unquoted path" in the editor pane
+    When I press "<key>" in the editor
+    Then the clipboard holds "unquoted path"
+
+    Examples:
+      | key    |
+      | Ctrl+c |
+      | Cmd+c  |
+
+  Scenario: Pasting what was just copied needs no other application
+    Given a system clipboard is available
+    And "src/tree.js" is open in the editor holding:
+      """
+      one two
+      """
+    And I drag across "one" in the editor pane
+    And I press "Ctrl+c" in the editor
+    When I press "Ctrl+v" in the editor
+    Then the buffer holds:
+      """
+      oneone two
+      """
+
+  Scenario: Pasting into a preview is refused rather than editing it unseen
+    Given a system clipboard is available
+    And the clipboard holds "pasted"
+    And "README.md" is open in the editor holding:
+      """
+      # Setup
+      """
+    When I press "Ctrl+v" in the editor
+    Then the buffer is unchanged
+    And the editor refuses with "read-only-preview"

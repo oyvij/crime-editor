@@ -1,0 +1,125 @@
+{
+  "protocolVersion": 2,
+  "title": "Entering a story or remainder now hands focus to the editor pane",
+  "range": {
+    "base": "739a73e0cbc2",
+    "head": "worktree",
+    "spelling": "HEAD..worktree"
+  },
+  "stories": [
+    {
+      "id": "s1",
+      "name": "Entering a story or remainder focuses the editor",
+      "premise": "Two new scenarios pin that stepping into a Story or the unclaimed Remainder from the spine hands focus to the editor pane, and the two `update()` arms that start a walk each grow the one line that does it.",
+      "steps": [
+        {
+          "id": "s1e1",
+          "name": "Story-entry spec",
+          "claim": "A new scenario pins the missing behaviour: with the file tree focused, entering a Story from the spine must leave the editor pane focused.",
+          "why": "Before this scenario, `walking_a_story.feature` only asserted what the site mark and cursor did once a Story was entered — never which pane held focus. A reviewer who opens Story view from the tree and presses Enter on a row expects to land in the editor reading the code, not still sitting in the tree with nothing to press `n`/`p` against.",
+          "flow": {
+            "in": "The reviewer opens Story view with the file tree pane focused, then enters the Story \"Keys reach the child\".",
+            "out": "`then the editor pane has focus` — a new assertion the old `EnterStory` arm did not satisfy."
+          },
+          "site": {
+            "file": "features/walking_a_story.feature",
+            "side": "new",
+            "kind": "changed",
+            "from": 80,
+            "to": 84,
+            "text": "  Scenario: Entering a story from the spine focuses the editor\n    Given I opened Story view\n    And the file tree pane has focus\n    When I enter the story \"Keys reach the child\"\n    Then the editor pane has focus"
+          }
+        },
+        {
+          "id": "s1e2",
+          "name": "EnterStory focus",
+          "claim": "`Event::EnterStory` now sets `next.focus = Pane::Editor` alongside starting the walk, right where it already computes the step to open.",
+          "why": "`Pane` (`Tree`, `Editor`, `Terminal`, `Ai`) is the enum AGENTS.md asks for in place of a loose bool — one field the router already reads to decide where keys go, so setting it here is the whole fix; nothing downstream needs to know a Story was just entered versus focus being changed any other way.",
+          "flow": {
+            "in": "`Event::EnterStory(index)`, once the Story and its first Step have been found in the loaded `Artifact`.",
+            "out": "`next.focus = Pane::Editor` alongside the existing `Effect::OpenAt` that moves the cursor to the step's site."
+          },
+          "site": {
+            "file": "src/lib.rs",
+            "side": "new",
+            "kind": "changed",
+            "from": 2446,
+            "to": 2446,
+            "text": "            next.focus = Pane::Editor;"
+          }
+        },
+        {
+          "id": "s1e3",
+          "name": "Remainder spec",
+          "claim": "The same gap is pinned for the Remainder: entering it from a focused file tree must also land focus on the editor.",
+          "why": "The Remainder is chosen from the spine and stepped through the same way a Story is (per the comment above `Event::EnterRemainder`), so the focus behaviour has to match — a reviewer walking a Remainder location has no reason to expect a different outcome than walking a Story.",
+          "flow": {
+            "in": "The reviewer opens Story view with the file tree focused, on a range with an unclaimed hunk in \"src/mouse.rs\", then enters the Remainder.",
+            "out": "`then the editor pane has focus`."
+          },
+          "site": {
+            "file": "features/walking_a_story.feature",
+            "side": "new",
+            "kind": "changed",
+            "from": 386,
+            "to": 391,
+            "text": "  Scenario: Entering the remainder from the spine focuses the editor\n    Given \"src/mouse.rs\" has an unclaimed hunk\n    And I opened Story view\n    And the file tree pane has focus\n    When I enter the remainder\n    Then the editor pane has focus"
+          }
+        },
+        {
+          "id": "s1e4",
+          "name": "Remainder focus",
+          "claim": "`Event::EnterRemainder` grows the identical line, setting focus to the editor before returning the `OpenAt` effect for the first unclaimed location.",
+          "why": "Same fix, same shape, in the sibling arm — the Remainder has no Story or Step to load, only a bare location, so this line is the entire behavioural difference between the old and new handler.",
+          "flow": {
+            "in": "`Event::EnterRemainder`, once `story::remainder_locations` has produced at least one location.",
+            "out": "`next.focus = Pane::Editor` alongside the existing `Effect::OpenAt` for the first location."
+          },
+          "site": {
+            "file": "src/lib.rs",
+            "side": "new",
+            "kind": "changed",
+            "from": 2492,
+            "to": 2492,
+            "text": "            next.focus = Pane::Editor;"
+          }
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "name": "Two prior tickets marked done",
+      "premise": "The two tickets this focus fix rides alongside — Story titles/Step names, and the spine rendering the title — were already shipped in earlier commits, so this range closes them out in the tracker.",
+      "steps": [
+        {
+          "id": "s2e1",
+          "name": "Ticket 01 → done",
+          "claim": "Ticket 01, \"Story sets and Steps require a name\", flips from `ready-for-agent` to `done` — its `title`/`name` schema fields and refusal behaviour already shipped in commit c90a1c0.",
+          "why": "AGENTS.md's issue tracker records a `Status:` line per ticket rather than a separate progress checklist, so closing finished work means editing that line in place, not deleting the file.",
+          "site": {
+            "file": ".scratch/story-titles-and-step-menu/issues/01-story-sets-and-steps-require-a-name.md",
+            "side": "new",
+            "kind": "changed",
+            "from": 20,
+            "to": 20,
+            "text": "**Status:** done"
+          }
+        },
+        {
+          "id": "s2e2",
+          "name": "Ticket 02 → done",
+          "claim": "Ticket 02, \"The spine shows the Story set's title\", is closed the same way — the spine header and indented Story rows it specifies already shipped in commit 739a73e.",
+          "why": "Ticket 02 was blocked on ticket 01's `Artifact.title` field; both are now implemented and this range simply records that in the tracker.",
+          "site": {
+            "file": ".scratch/story-titles-and-step-menu/issues/02-the-spine-shows-the-story-set-title.md",
+            "side": "new",
+            "kind": "changed",
+            "from": 16,
+            "to": 16,
+            "text": "**Status:** done"
+          }
+        }
+      ]
+    }
+  ]
+}
