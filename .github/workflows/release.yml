@@ -28,7 +28,7 @@ jobs:
       version: ${{ steps.read.outputs.version }}
       release: ${{ steps.read.outputs.release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: read
@@ -85,11 +85,11 @@ jobs:
     runs-on: ${{ matrix.runner }}
     continue-on-error: ${{ matrix.optional }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --release --locked
       - run: cp target/release/crime "${{ matrix.asset }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
@@ -102,7 +102,7 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Refuse a version that is already tagged
@@ -111,7 +111,7 @@ jobs:
             echo "v$VERSION is already tagged; bump Cargo.toml rather than republish" >&2
             exit 1
           fi
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: assets
           merge-multiple: true
