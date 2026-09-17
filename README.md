@@ -34,26 +34,31 @@ essentially no equivalent elsewhere.
 One command, interactive, on macOS or Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/oyvij/CRIME/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/oyvij/crime-editor/main/install.sh | bash
 ```
 
-Or clone and run the same script from the clone, which builds into that checkout instead:
+By default it installs the prebuilt binary for your platform from the latest Release — checked
+against the Release's `SHA256SUMS` before anything is written — to `~/.local/bin/crime`. No Rust
+toolchain, no compile, and `:update` inside the editor keeps it current.
+
+Answer "source" at its first prompt, or clone and run the same script from the clone, and it builds
+into a checkout instead:
 
 ```sh
-git clone https://github.com/oyvij/CRIME.git && CRIME/install.sh
+git clone https://github.com/oyvij/crime-editor.git && crime-editor/install.sh
 ```
 
-It asks which features you want — the AI pane, language servers, formatters, reading aloud — then
-installs the Rust toolchain and git if they are missing, clones CRIME, builds it, and links
-`~/.local/bin/crime` at the release binary. Every external program is checked before it is
-installed, and each missing one is a `y/N` prompt with the exact command it will run. Declining a
-required one aborts; declining an optional one skips it. Run the same command again later and it
-updates the checkout it finds behind `crime`, rebuilds, and offers whatever is still missing.
-`./install.sh --list` prints every program CRIME can be configured to run and whether it is
-installed, without touching anything.
+It asks which features you want — the AI pane, language servers, formatters, reading aloud — and
+then asks the installed `crime` what those need (`crime --deps`). Every external program is checked
+before it is installed, and each missing one is a `y/N` prompt with the exact command it will run.
+Declining a required one aborts; declining an optional one skips it. Run the same command again
+later and it updates what it finds behind `crime` — replacing a binary with the latest Release, or
+pulling and rebuilding a checkout — and offers whatever is still missing. `./install.sh --list`
+prints every program CRIME can be configured to run and whether it is installed, without touching
+anything.
 
-By hand, CRIME is a symlink on your PATH pointing at the release binary inside your checkout.
-Nothing is added to your shell configuration either way:
+From source by hand, CRIME is a symlink on your PATH pointing at the release binary inside your
+checkout:
 
 ```sh
 cargo build --release
@@ -67,7 +72,7 @@ crime .            # open the current folder as the workspace
 crime ~/some/repo  # open a folder somewhere else
 ```
 
-Thereafter the ordinary release build *is* the install — `cargo build --release` overwrites the file
+On a source install the ordinary release build *is* the install — `cargo build --release` overwrites the file
 the symlink names. `docs/install.md` covers the consequences of that, and how to reclaim build space
 without uninstalling.
 

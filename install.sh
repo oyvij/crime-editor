@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # Install or update CRIME and everything it shells out to.
 #
-#   curl -fsSL https://raw.githubusercontent.com/oyvij/CRIME/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/oyvij/crime-editor/main/install.sh | bash
 #
-# Interactive: every prompt reads /dev/tty, so it works piped from curl. A
-# `crime` already on PATH means the checkout it links into is pulled and rebuilt;
-# otherwise the repo is cloned and linked the way docs/install.md describes.
+# Interactive: every prompt reads /dev/tty, so it works piped from curl. A fresh
+# machine gets the binary from the latest Release by default, verified against
+# its SHA256SUMS; run from inside a checkout, or answered "source", it clones and
+# builds instead. Re-run, it updates whichever kind it finds behind `crime`.
 #
 # What CRIME can be configured to run — language servers, formatters, the voice —
-# is read straight out of `DEFAULTS` in src/startup.rs, so a new row there with an
-# `install.<os>` key is installable here with no change to this file. Only what
-# the edge runs *without* configuration is spelled out below: the build
+# is asked of the installed binary with `crime --deps`, so a new row in `DEFAULTS`
+# with an `install.<os>` key is installable here with no change to this file. Only
+# what the edge runs *without* configuration is spelled out below: the build
 # toolchain, git, the default AI CLI and the URL opener.
 #
 # Windows is not covered: this is a bash script, and `DEFAULTS` carries its own
@@ -18,13 +19,21 @@
 
 set -euo pipefail
 
-REPO="${CRIME_REPO:-https://github.com/oyvij/CRIME.git}"
+# Clone URL and Release source both: a fork overrides one variable.
+REPO="${CRIME_REPO:-https://github.com/oyvij/crime-editor.git}"
 BIN="${CRIME_BIN:-$HOME/.local/bin/crime}"
 
 case "$(uname -s)" in
   Darwin) OS=macos ;;
   Linux) OS=linux ;;
   *) echo "install.sh runs on macOS and Linux only" >&2; exit 1 ;;
+esac
+
+# Spelled as the release workflow's asset names, `crime-<os>-<arch>`.
+case "$(uname -m)" in
+  x86_64 | amd64) ARCH=x86_64 ;;
+  arm64 | aarch64) ARCH=aarch64 ;;
+  *) ARCH=$(uname -m) ;;
 esac
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -107,34 +116,21 @@ ensure_installer() { # ensure_installer "<install command>" -> 0 if its package 
   have "$tool"
 }
 
-# ---- rows out of DEFAULTS ----------------------------------------------------
+# ---- rows out of `crime --deps` ------------------------------------------------
 
-# Prints `kind|name|command|install` for every [lsp.*], [formatter.*] and
-# [speech] table in DEFAULTS, install being the `install.<os>` key or blank.
-rows() {
-  awk -v os="$OS" '
-    /^pub const DEFAULTS: &str = r#"/ { on = 1; next }
-    on && /^"#;/ { flush(); exit }
-    !on { next }
-    /^\[/ { flush(); sect = $0; gsub(/[][]/, "", sect); split(sect, parts, "."); kind = parts[1]; name = parts[2]; if (kind == "speech") name = "speech" }
-    /^command = "/ { cmd = $0; sub(/^command = "/, "", cmd); sub(/"$/, "", cmd) }
-    $0 ~ "^install\\." os " = \"" { inst = $0; sub(/^install\.[a-z]+ = "/, "", inst); sub(/"$/, "", inst); gsub(/\\"/, "\"", inst) }
-    function flush() {
-      if ((kind == "lsp" || kind == "formatter" || kind == "speech") && cmd != "") print kind "|" name "|" cmd "|" inst
-      cmd = ""; inst = ""; kind = ""; name = ""
-    }
-  ' "$CHECKOUT/src/startup.rs"
+# `kind<TAB>name<TAB>command<TAB>install` for every [lsp.*], [formatter.*] and
+# [speech] row, plus the speech row's `player`. Asked once, up front: a failure
+# inside `< <(rows)` would not stop the script and would read as nothing missing.
+ask_deps() {
+  DEPS=$("$EXE" --deps) || { echo "$EXE --deps failed; cannot tell what CRIME needs." >&2; exit 1; }
 }
-
-# Player is `player.<os>` on the speech row: no install key, since afplay ships
-# with macOS and aplay is alsa-utils.
-player() {
-  awk -v os="$OS" '$0 ~ "^player\\." os " = \"" { sub(/^player\.[a-z]+ = "/, ""); sub(/"$/, ""); print; exit }' "$CHECKOUT/src/startup.rs"
+rows() {
+  printf '%s\n' "$DEPS"
 }
 
 install_rows() { # install_rows <kind> — one y/N per missing command, deduplicated
   local seen=" "
-  while IFS='|' read -r kind name cmd inst; do
+  while IFS=$'\t' read -r kind name cmd inst; do
     [ "$kind" = "$1" ] || continue
     [[ "$seen" == *" $cmd "* ]] && continue
     seen="$seen$cmd "
@@ -143,7 +139,7 @@ install_rows() { # install_rows <kind> — one y/N per missing command, deduplic
       continue
     fi
     if [ -z "$inst" ]; then
-      echo "  $cmd ($name): missing, and DEFAULTS has no install command for $OS — install it by hand"
+      echo "  $cmd ($name): missing, and crime --deps names no install command for $OS — install it by hand"
       continue
     fi
     ask "  $cmd ($name) is missing. Install with: $inst ?" || continue
@@ -156,7 +152,7 @@ install_rows() { # install_rows <kind> — one y/N per missing command, deduplic
 
 voice_path() { # where the speech install command puts its .onnx: `--output-dir` plus the URL's basename
   local inst dir url
-  inst=$(rows | awk -F'|' '$1 == "speech" { print $4 }')
+  inst=$(rows | awk -F'\t' '$1 == "speech" { print $4 }')
   dir=$(grep -oE -- '--output-dir [^ ]+' <<<"$inst" | cut -d' ' -f2)
   url=$(grep -oE 'https?://[^ ]+\.onnx( |$)' <<<"$inst" | head -1)
   [ -n "$dir" ] && [ -n "$url" ] && echo "${dir/#\~/$HOME}/$(basename "${url% }")"
@@ -165,7 +161,7 @@ voice_path() { # where the speech install command puts its .onnx: `--output-dir`
 reading() {
   install_rows speech
   local p
-  p=$(player)
+  p=$(rows | awk -F'\t' '$1 == "player" { print $3 }')
   if [ -n "$p" ] && ! have "$p"; then
     if [ $OS = linux ]; then
       ask "  $p (plays the speech) is missing. Install with: sudo apt install -y alsa-utils ?" && run "sudo apt install -y alsa-utils"
@@ -203,34 +199,79 @@ opener() {
   ask "  xdg-open (opens URLs clicked in a pane) is missing. Install with: sudo apt install -y xdg-utils ?" && run "sudo apt install -y xdg-utils"
 }
 
-# ---- the checkout -------------------------------------------------------------
+# ---- which install, and where ---------------------------------------------------
 
-locate() { # sets CHECKOUT and MODE
+locate() { # sets MODE (binary or source), and CHECKOUT for source; UPDATE=1 when crime is already installed
+  UPDATE=0
   if have crime; then
-    local link
-    link=$(readlink "$(command -v crime)" || true)
+    UPDATE=1
+    local path link
+    path=$(command -v crime)
+    link=$(readlink "$path" || true)
     if [[ "$link" == */target/release/crime ]] && grep -qs '^name = "crime"' "${link%/target/release/crime}/Cargo.toml"; then
-      CHECKOUT="${link%/target/release/crime}"; MODE=update; return
+      CHECKOUT="${link%/target/release/crime}"; MODE=source; return
     fi
+    if [ -L "$path" ]; then
+      echo "$path is a symlink to $link, which is neither a CRIME checkout nor a binary this script installed; remove it and rerun." >&2
+      exit 1
+    fi
+    # Replaced where it is found, so an install outside ~/.local/bin is not duplicated there.
+    BIN=$path; MODE=binary; return
   fi
-  MODE=fresh
   # Run from inside a checkout — `./install.sh` after a clone by hand — that
-  # checkout is the default, so a private repo never needs a second clone.
-  local here default="$HOME/.crime/src"
+  # checkout is built, so a private fork never needs a second clone.
+  local here default="$HOME/.crime/src" answer
   here=$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd)
-  grep -qs '^name = "crime"' "$here/Cargo.toml" && default=$here
+  if grep -qs '^name = "crime"' "$here/Cargo.toml"; then
+    default=$here
+  else
+    read -r -p "Install the prebuilt binary, or build from source? [binary/source] " answer </dev/tty || answer=""
+    [[ "$answer" =~ ^[Ss] ]] || { MODE=binary; return; }
+  fi
+  MODE=source
   local where
   read -r -p "Where should CRIME's checkout live? [$default] " where </dev/tty || where=""
   CHECKOUT="${where:-$default}"
   CHECKOUT="${CHECKOUT/#\~/$HOME}"
 }
 
+# ---- the binary path ------------------------------------------------------------
+
+sha256() { # the hash alone; sha256sum on Linux, shasum on macOS
+  if have sha256sum; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1
+}
+
+download() {
+  local web="${REPO/#git@github.com:/https://github.com/}"
+  local asset="crime-$OS-$ARCH" base="${web%.git}/releases/latest/download"
+  TMP=$(mktemp -d)
+  trap 'rm -rf "$TMP"' EXIT
+  say "Downloading $asset from the latest Release"
+  curl -fsSL "$base/SHA256SUMS" -o "$TMP/SHA256SUMS" \
+    || { echo "Could not fetch $base/SHA256SUMS. Nothing was installed." >&2; exit 1; }
+  local want
+  want=$(awk -v a="$asset" '$2 == a || $2 == "*" a { print $1 }' "$TMP/SHA256SUMS")
+  [ -n "$want" ] || { echo "The latest Release has no $asset. Rerun and answer \"source\" to build it. Nothing was installed." >&2; exit 1; }
+  curl -fsSL "$base/$asset" -o "$TMP/$asset" \
+    || { echo "Could not fetch $base/$asset. Nothing was installed." >&2; exit 1; }
+  [ "$(sha256 "$TMP/$asset")" = "$want" ] \
+    || { echo "$asset does not match its SHA256SUMS line; the download is corrupt or tampered with. Nothing was installed." >&2; exit 1; }
+  echo "  checksum verified"
+  mkdir -p "$(dirname "$BIN")"
+  # A temporary file beside the target and a rename, so a crime that is running
+  # keeps its file and the next start gets the new one whole.
+  chmod +x "$TMP/$asset"
+  cp "$TMP/$asset" "$BIN.new" && mv -f "$BIN.new" "$BIN" \
+    || { echo "Could not write $BIN. Nothing was installed." >&2; exit 1; }
+  echo "  installed $BIN"
+  EXE=$BIN
+}
+
+# ---- the source path ------------------------------------------------------------
+
 fetch_and_build() {
-  if [ $MODE = update ]; then
-    say "Updating $CHECKOUT"
-    run "git -C '$CHECKOUT' pull --ff-only"
-  elif [ -d "$CHECKOUT/.git" ]; then
-    say "Reusing the checkout at $CHECKOUT"
+  if [ -d "$CHECKOUT/.git" ]; then
+    if [ "$UPDATE" = 1 ]; then say "Updating $CHECKOUT"; else say "Reusing the checkout at $CHECKOUT"; fi
     run "git -C '$CHECKOUT' pull --ff-only"
   else
     say "Cloning into $CHECKOUT"
@@ -246,6 +287,7 @@ fetch_and_build() {
   mkdir -p "$(dirname "$BIN")"
   ln -sfn "$CHECKOUT/target/release/crime" "$BIN"
   echo "  $BIN -> $CHECKOUT/target/release/crime"
+  EXE="$CHECKOUT/target/release/crime"
 }
 
 # ---- the menu -----------------------------------------------------------------
@@ -256,7 +298,7 @@ ON=(1 1 1 1)
 menu() {
   local i pick
   while :; do
-    say "Features to install or check (the editor, git and the build toolchain are always required):"
+    say "Features to install or check (the editor itself is always installed):"
     for i in "${!FEATURES[@]}"; do
       printf '  %d. [%s] %s\n' $((i + 1)) "$( [ "${ON[$i]}" = 1 ] && echo x || echo ' ')" "${FEATURES[$i]}"
     done
@@ -271,29 +313,39 @@ menu() {
 # ---- --list: what would be checked, and its state, without touching anything --
 
 list() {
-  CHECKOUT=$PWD
-  local link
-  link=$(readlink "$(command -v crime 2>/dev/null || true)" 2>/dev/null || true)
-  [[ "$link" == */target/release/crime ]] && CHECKOUT="${link%/target/release/crime}"
-  [ -f "$CHECKOUT/src/startup.rs" ] || { echo "run --list from a CRIME checkout, or with crime installed" >&2; exit 1; }
+  EXE=$(command -v crime 2>/dev/null || true)
+  [ -n "$EXE" ] || { [ -x "$BIN" ] && EXE=$BIN; }
+  [ -n "$EXE" ] || { echo "crime is not installed; --list asks the installed binary what it needs" >&2; exit 1; }
+  ask_deps
   printf '%-10s %-12s %-28s %s\n' kind name command state
-  rows | while IFS='|' read -r kind name cmd inst; do
+  rows | while IFS=$'\t' read -r kind name cmd inst; do
     printf '%-10s %-12s %-28s %s\n' "$kind" "$name" "$cmd" "$(have "$cmd" && echo installed || echo "missing${inst:+ ($inst)}")"
   done
   printf '%-10s %-12s %-28s %s\n' ai default claude "$(have claude && echo installed || echo missing)"
-  printf '%-10s %-12s %-28s %s\n' player speech "$(player)" "$(have "$(player)" && echo installed || echo missing)"
 }
 
 main() {
   [ "${1:-}" = --list ] && { list; exit 0; }
   [ -r /dev/tty ] || { echo "install.sh is interactive and needs a terminal" >&2; exit 1; }
-  say "CRIME installer ($OS)"
+  say "CRIME installer ($OS, $ARCH)"
   locate
-  [ $MODE = update ] && echo "crime is installed from $CHECKOUT; updating it." || echo "Fresh install."
+  case "$UPDATE:$MODE" in
+    1:source) echo "crime is installed from $CHECKOUT; updating it." ;;
+    1:binary) echo "crime is installed as a binary at $BIN; replacing it with the latest Release." ;;
+    0:binary) echo "Fresh install of the prebuilt binary." ;;
+    0:source) echo "Fresh install from source." ;;
+  esac
   menu
-  say "Required toolchain"
-  toolchain
-  fetch_and_build
+  if [ "$MODE" = binary ]; then
+    say "CRIME"
+    require curl "curl" "sudo apt install -y curl"
+    download
+  else
+    say "Required toolchain"
+    toolchain
+    fetch_and_build
+  fi
+  ask_deps
   [ "${ON[0]}" = 1 ] && { say "AI pane"; ai; }
   [ "${ON[1]}" = 1 ] && { say "Language servers"; install_rows lsp; }
   [ "${ON[2]}" = 1 ] && { say "Formatters"; install_rows formatter; }
