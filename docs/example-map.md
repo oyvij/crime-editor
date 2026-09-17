@@ -3049,12 +3049,12 @@ review waits for the AI CLI's — and only that shell's prompt releases it.
 divides its columns evenly. No kill command: `exit` in the shell closes its split, which is what a
 shell already does.
 
-## F39 — Binary releases — **PARTLY DEFINED**
+## F39 — Binary releases — **DEFINED**
 
 Scenarios extend `features/self_update.feature`. The spec is `.scratch/binary-releases/spec.md`; the
 decision hard to reverse is `docs/adr/0017-a-binary-install-updates-itself-from-a-release.md`.
 `CONTEXT.md`'s "Staying up to date" holds Install kind, Release, Asset and Relaunch.
-R39.1–R39.4 are scenarios; R39.5 becomes one with issue 04.
+R39.1–R39.4 are scenarios; R39.5 and R39.6 are unit tests in `src/startup.rs`.
 
 **R39.1** The **Install kind** is decided at startup from where the binary is: a known checkout is a
 checkout install and keeps F-self-update exactly — manifest comparison, no network. Anything else
