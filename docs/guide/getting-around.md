@@ -328,11 +328,18 @@ file read — no network, no git.
 | Gesture | Effect |
 |---|---|
 | `:update` or palette `u` | run `cd <checkout> && cargo build --release` in the terminal |
+| `:update` or palette `u`, binary install | download the newer Release, verify it, replace the binary and relaunch |
 
 The command names CRIME's checkout, not the open workspace, and it works whether or not an Update is
 offered. It starts no AI session, opens and writes no file — everything happens in the terminal
-where the compiler's output is readable. With no known checkout (a copied binary, a manifest that is
-not CRIME's) you are told so and nothing runs.
+where the compiler's output is readable.
+
+A binary install has no checkout, so `:update` fetches the Release it found at startup instead,
+checks the download against the Release's published checksums, and swaps it in for the running
+binary. A bad download is refused and the old binary stays. CRIME then relaunches with the same
+arguments — unless a buffer is unsaved, which is refused the way quitting is; save and `:update`
+again, and it relaunches without downloading twice. With neither a checkout nor a newer Release you
+are told there is nothing to update from and nothing runs.
 
 `cargo build --release` overwrites the file the symlink names, so the next `crime` you launch is the
 new one; the session you are in keeps running the old binary until you restart it. A build that

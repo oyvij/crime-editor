@@ -158,12 +158,13 @@ Feature: Staying up to date
     When I ask CRIME to update from the command line
     Then the terminal has executed "cd '/home/me/my src/crime' && cargo build --release"
 
-  Scenario: With no known checkout the command notifies and runs nothing
+  Scenario: With neither a checkout nor a Release the command notifies and runs nothing
     Given there is no checkout manifest
     And CRIME started in the project
     When I ask CRIME to update from the command line
-    Then the user is told there is no known checkout
+    Then the user is told there is nothing to update from
     And no command has been executed
+    And CRIME does not fetch a Release
 
   Scenario: The command is reachable when there is no Update to install
     Given the checkout manifest is:
@@ -280,3 +281,80 @@ Feature: Staying up to date
     Then no Update is available
     And no Release is remembered
     And no notice was raised
+
+  # A binary install has no build to run, so `:update` puts the Release's Asset where the running
+  # binary is and relaunches onto it. Fetching, verifying and replacing are the edge's; what each
+  # outcome means is the core's. Relaunching is leaving, so it is refused exactly as quitting is —
+  # and the binary on disk stays replaced across that refusal, so saving and asking again costs a
+  # save and not a second download.
+
+  Scenario: A binary install fetches the Release rather than building
+    Given there is no checkout manifest
+    And CRIME was built for "linux" on "x86_64"
+    And CRIME started in the project
+    And a newer Release for this platform has been found
+    When I ask CRIME to update from the command line
+    Then CRIME fetches the remembered Release
+    And no command has been executed
+
+  Scenario: The palette's Update fetches the Release on a binary install
+    Given there is no checkout manifest
+    And CRIME was built for "linux" on "x86_64"
+    And CRIME started in the project
+    And a newer Release for this platform has been found
+    And the view palette is shown
+    When I press "u"
+    Then CRIME fetches the remembered Release
+    And no command has been executed
+
+  Scenario Outline: A replacement that failed says which step and keeps the old binary
+    Given there is no checkout manifest
+    And CRIME started in the project
+    When replacing the binary fails at the <step> step
+    Then the notice is "<notice>"
+    And the binary is not known to be replaced
+    And CRIME does not relaunch
+
+    Examples:
+      | step     | notice          |
+      | download | update-download |
+      | no-asset | update-no-asset |
+      | checksum | update-checksum |
+      | replace  | update-replace  |
+
+  Scenario: A replaced binary relaunches
+    Given there is no checkout manifest
+    And CRIME started in the project
+    When the binary has been replaced
+    Then CRIME relaunches
+    And the project state was saved
+
+  Scenario: A replaced binary with unsaved edits does not relaunch
+    Given there is no checkout manifest
+    And CRIME started in the project
+    And "notes.md" is open in the editor with unsaved edits
+    When the binary has been replaced
+    Then the reviewer is told there are unsaved changes
+    And CRIME does not relaunch
+    And the binary is known to be replaced
+
+  Scenario: Updating again after that refusal relaunches without fetching
+    Given there is no checkout manifest
+    And CRIME started in the project
+    And a newer Release for this platform has been found
+    And "notes.md" is open in the editor with unsaved edits
+    And the binary has been replaced
+    And I write the buffer
+    When I ask CRIME to update from the command line
+    Then CRIME relaunches
+    And CRIME does not fetch a Release
+
+  Scenario: Updating a binary install touches nothing but the binary
+    Given there is no checkout manifest
+    And CRIME started in the project
+    And a newer Release for this platform has been found
+    When I ask CRIME to update from the command line
+    Then no new AI session was started
+    And no file was opened in the editor
+    And no file was written
+    And no command has been executed

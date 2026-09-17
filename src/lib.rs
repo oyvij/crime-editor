@@ -393,6 +393,17 @@ pub enum Resolution {
     Merge,
 }
 
+/// Which step of putting a Release in place of the running binary failed. One
+/// notice each, because "the update failed" sends nobody anywhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplaceFailed {
+    Download,
+    /// The checksum list names no file for this platform.
+    NoAsset,
+    Checksum,
+    Replace,
+}
+
 // No `Eq`: a speed is a multiplier, and a float has no total order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -691,9 +702,12 @@ pub enum Event {
     Quit,
     /// The same, abandoning unsaved work.
     QuitForce,
-    /// `:update` — a release build of CRIME's own checkout. Nothing waits on it:
-    /// the terminal pane the user is looking at is the whole report.
+    /// `:update` — a release build of CRIME's own checkout, or on a binary
+    /// install the remembered Release put in place of the running binary.
     Rebuild,
+    /// How putting the Release in place of the running binary ended. Success
+    /// carries nothing: all it means is that a relaunch would land on it.
+    BinaryReplaced(Result<(), ReplaceFailed>),
     /// What the latest-Release request came back with, unread: the body, or
     /// `None` when the request failed — which the edge has already logged, and
     /// which is shown nowhere (ADR 0017).
@@ -1163,6 +1177,15 @@ pub enum Effect {
     /// core's.
     DwellHover(u64),
     Exit,
+    /// Leaving, onto the binary now on disk with the same arguments, in place
+    /// of `Exit` (ADR 0017).
+    Relaunch,
+    /// Put this Release's Asset in place of the running binary, verified
+    /// against the checksum list, answered with `Event::BinaryReplaced`.
+    ReplaceBinary {
+        asset: String,
+        checksums: String,
+    },
     StopAi,
     ReadDiff(PathBuf),
     RunSearch(String),
@@ -1680,6 +1703,10 @@ pub struct State {
     /// `Startup::running_version`, kept because a Release is answered after
     /// startup has returned.
     pub running_version: String,
+    /// The binary on disk is already the Release, so `:update` relaunches
+    /// rather than fetching again. Dies with the process, which is right: the
+    /// next process is that binary.
+    pub replaced: bool,
     /// The story artifact for the current change, or the reason there is
     /// none to walk.
     pub story_set: story::Set,
@@ -2066,6 +2093,7 @@ impl Default for State {
             update_available: false,
             release: None,
             running_version: String::new(),
+            replaced: false,
             story_set: story::Set::None,
             left_branch: None,
             guest: None,
@@ -5986,13 +6014,30 @@ fn on_rebuild(state: &State, mut next: State, event: Event, wheeled: bool) -> An
         // unscrollable for as long as the pointer sits over it. Nothing here is
         // decided — what is under the pointer is `lsp::pointed`'s question,
         // asked of the place rather than answered into a field.
-        Event::Rebuild => match state.checkout.as_ref() {
-            Some(checkout) => vec![Effect::RunInTerminal(format!(
+        Event::Rebuild => match (&state.checkout, &state.release) {
+            _ if state.replaced => return Ok(relaunching(next)),
+            (Some(checkout), _) => vec![Effect::RunInTerminal(format!(
                 "{} && cargo build --release",
                 tree_actions::command("cd", checkout)
             ))],
-            None => vec![Effect::Notify("no-checkout")],
+            (None, Some(release)) => vec![Effect::ReplaceBinary {
+                asset: release.asset.clone(),
+                checksums: release.checksums.clone(),
+            }],
+            (None, None) => vec![Effect::Notify("nothing-to-update")],
         },
+        // Replaced stays true across a refusal, so saving and asking again is
+        // the whole cost of an unsaved buffer.
+        Event::BinaryReplaced(Ok(())) => {
+            next.replaced = true;
+            return Ok(relaunching(next));
+        }
+        Event::BinaryReplaced(Err(failed)) => vec![Effect::Notify(match failed {
+            ReplaceFailed::Download => "update-download",
+            ReplaceFailed::NoAsset => "update-no-asset",
+            ReplaceFailed::Checksum => "update-checksum",
+            ReplaceFailed::Replace => "update-replace",
+        })],
         Event::ReleaseAnswered(body) => {
             next.release = body.and_then(|body| {
                 startup::release(&body, &state.os, &state.arch, &state.running_version)
@@ -7450,6 +7495,20 @@ fn leaving(state: &State) -> Vec<Effect> {
         Some(sidecar) => vec![stop, Effect::DeleteDir(sidecar.clone()), Effect::Exit],
         None => vec![stop, Effect::SaveState(state_json(state)), Effect::Exit],
     }
+}
+
+/// Restarting, with `Relaunch` where it would `Exit`: a relaunch discards what a
+/// quit discards, so it is refused by the same refusal rather than a second one.
+fn relaunching(next: State) -> (State, Vec<Effect>) {
+    let (next, effects) = update(&next, Event::Restart);
+    let effects = effects
+        .into_iter()
+        .map(|effect| match effect {
+            Effect::Exit => Effect::Relaunch,
+            other => other,
+        })
+        .collect();
+    (next, effects)
 }
 
 /// What CRIME remembers about a project between sessions.

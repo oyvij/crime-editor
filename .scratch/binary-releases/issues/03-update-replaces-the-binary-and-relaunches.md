@@ -1,6 +1,6 @@
 # 03 — `:update` on a binary install replaces the binary and relaunches
 
-Status: ready-for-agent
+Status: resolved
 
 Blocked by: 02
 
@@ -32,13 +32,28 @@ checkout nor a Release. `sha2` is named in `docs/stack.md` with the reason the s
 
 ## Acceptance criteria
 
-- [ ] `:update` with a Release and no checkout returns `ReplaceBinary` and runs nothing in the terminal.
-- [ ] `:update` with a checkout returns the build command exactly as today.
-- [ ] `:update` with neither notifies and returns no effect.
-- [ ] The palette's `u` does what `:update` does on a binary install.
-- [ ] Each `ReplaceFailed` kind raises a distinct notice and leaves `replaced` false.
-- [ ] `BinaryReplaced(Ok)` with no unsaved buffers returns `Relaunch`.
-- [ ] `BinaryReplaced(Ok)` with an unsaved buffer raises `unsaved-changes`, returns no `Relaunch`,
+- [x] `:update` with a Release and no checkout returns `ReplaceBinary` and runs nothing in the terminal.
+- [x] `:update` with a checkout returns the build command exactly as today.
+- [x] `:update` with neither notifies and returns no effect.
+- [x] The palette's `u` does what `:update` does on a binary install.
+- [x] Each `ReplaceFailed` kind raises a distinct notice and leaves `replaced` false.
+- [x] `BinaryReplaced(Ok)` with no unsaved buffers returns `Relaunch`.
+- [x] `BinaryReplaced(Ok)` with an unsaved buffer raises `unsaved-changes`, returns no `Relaunch`,
   and sets `replaced`.
-- [ ] `:update` with `replaced` set returns `Relaunch` and no `ReplaceBinary`.
-- [ ] Updating touches nothing but the binary: no AI session, no buffer, no file written.
+- [x] `:update` with `replaced` set returns `Relaunch` and no `ReplaceBinary`.
+- [x] Updating touches nothing but the binary: no AI session, no buffer, no file written.
+
+## Comments
+
+- `startup::verify` holds the checksum decision in the library, where a unit test can see it: it
+  finds the `sha256sum` line for the Asset's name (the last segment of its download URL), hashes
+  with `sha2`, and answers `NoAsset` or `Checksum`. The edge only downloads, writes and renames.
+- The binary's path is resolved once, at startup, and kept on the edge. On Linux, asking
+  `current_exe` again after the rename gives `crime (deleted)`.
+- A binary install needs no symlink: `install.sh` (issue 05) puts a real file at
+  `~/.local/bin/crime`. The rename still targets the resolved path, so a symlink someone makes by
+  hand names the new binary afterwards instead of being replaced by a copy.
+- `relaunching` goes through `Event::Restart`, not `Quit`, so a modal open when the download ends
+  is closed before `unsaved-changes` is shown.
+- Not yet verified end to end against a real Release. The swap is covered by a `file://` test in
+  `main.rs`; the relaunch `exec` is not.

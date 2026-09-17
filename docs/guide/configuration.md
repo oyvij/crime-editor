@@ -288,8 +288,10 @@ an old branch checked out is never offered as one.
 
 Palette `u` (or `:update`) runs `cd <checkout> && cargo build --release` in the terminal pane; since
 the symlink already names the file that build writes, the build *is* the install, and the next
-launch is the new version. With no checkout above the binary — a copied binary, or a directory whose
-manifest is not CRIME's — `:update` refuses with `no-checkout` and builds nothing.
+launch is the new version. With no checkout above the binary it is a binary install instead: palette
+`u` downloads the newer Release for this platform, verifies its checksum, puts it in place of the
+running binary and relaunches CRIME on it. With neither a checkout nor a newer Release, `:update`
+refuses with `nothing-to-update` and does nothing.
 
 The comparison is of version numbers, not commits, so a change committed without a version bump is
 invisible here; that is accepted over a notice that fires on every commit and teaches you to ignore

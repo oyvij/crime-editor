@@ -4,7 +4,8 @@
 //! module decides what they mean and what should exist.
 
 use crate::risk::{self, Scope};
-use crate::{Effect, State, View};
+use crate::{Effect, ReplaceFailed, State, View};
+use sha2::Digest;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use toml::Table;
@@ -553,6 +554,27 @@ pub fn release(body: &str, os: &str, arch: &str, running: &str) -> Option<Releas
         asset: url(&asset_name(os, arch))?,
         checksums: url("SHA256SUMS")?,
     })
+}
+
+/// Whether a downloaded Asset is the file the checksum list names. The Asset's
+/// name is the last segment of its download URL, and its line is the one
+/// `sha256sum` wrote for exactly that name.
+pub fn verify(list: &str, asset_url: &str, downloaded: &[u8]) -> Result<(), ReplaceFailed> {
+    let name = asset_url.rsplit('/').next().unwrap_or(asset_url);
+    let expected = list
+        .lines()
+        .filter_map(|line| line.split_once(char::is_whitespace))
+        .find(|(_, file)| file.trim_start().trim_start_matches('*') == name)
+        .map(|(sum, _)| sum)
+        .ok_or(ReplaceFailed::NoAsset)?;
+    let actual: String = sha2::Sha256::digest(downloaded)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    match actual.eq_ignore_ascii_case(expected) {
+        true => Ok(()),
+        false => Err(ReplaceFailed::Checksum),
+    }
 }
 
 /// What runs a language's server, as configuration named it. Nothing here is a
@@ -1310,8 +1332,9 @@ fn last_view(state_json: Option<&str>) -> Option<View> {
 #[cfg(test)]
 mod tests {
     use super::{
-        asset_name, is_update, parse, release, start, Config, ConfigError, ConfigFault, Effect,
-        FactValue, Startup, StartupError, DEFAULTS, PROJECT_LABEL, SEEDED_CONFIG,
+        asset_name, is_update, parse, release, start, verify, Config, ConfigError, ConfigFault,
+        Effect, FactValue, ReplaceFailed, Startup, StartupError, DEFAULTS, PROJECT_LABEL,
+        SEEDED_CONFIG,
     };
 
     /// The bottom layer on its own, as several tests below read it.
@@ -1753,6 +1776,28 @@ mod tests {
         assert_eq!(asset_name("macos", "x86_64"), "crime-macos-x86_64");
         assert_eq!(asset_name("linux", "x86_64"), "crime-linux-x86_64");
         assert_eq!(asset_name("linux", "aarch64"), "crime-linux-aarch64");
+    }
+
+    /// `sha256sum`'s own line shape, which is what the release workflow writes.
+    #[test]
+    fn a_download_matching_its_line_is_verified() {
+        let list = "\
+2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae  crime-linux-x86_64
+0000000000000000000000000000000000000000000000000000000000000000  crime-linux-aarch64
+";
+        let url = "https://example.test/download/v0.2.0/crime-linux-x86_64";
+        assert_eq!(verify(list, url, b"foo"), Ok(()));
+        assert_eq!(verify(list, url, b"bar"), Err(ReplaceFailed::Checksum));
+    }
+
+    /// A name that only ends in the Asset's is another file's line.
+    #[test]
+    fn a_list_without_the_assets_line_names_no_asset() {
+        let list = "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae  old-crime-linux-x86_64\n";
+        assert_eq!(
+            verify(list, "https://example.test/crime-linux-x86_64", b"foo"),
+            Err(ReplaceFailed::NoAsset)
+        );
     }
 
     /// An Asset nobody can verify is not one `:update` may install.

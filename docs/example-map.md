@@ -3054,7 +3054,7 @@ shell already does.
 Scenarios extend `features/self_update.feature`. The spec is `.scratch/binary-releases/spec.md`; the
 decision hard to reverse is `docs/adr/0017-a-binary-install-updates-itself-from-a-release.md`.
 `CONTEXT.md`'s "Staying up to date" holds Install kind, Release, Asset and Relaunch.
-R39.1–R39.3 are scenarios; R39.4 and R39.5 become scenarios with issues 03 and 04.
+R39.1–R39.4 are scenarios; R39.5 becomes one with issue 04.
 
 **R39.1** The **Install kind** is decided at startup from where the binary is: a known checkout is a
 checkout install and keeps F-self-update exactly — manifest comparison, no network. Anything else
