@@ -34,6 +34,12 @@ spelled out in `install.sh` itself: the build toolchain, git, the default AI CLI
 speech player and the URL opener. **When a feature adds a program CRIME shells out to, it goes in
 one of those two places, and `./install.sh --list` shows whether it is picked up.**
 
+`crime --deps` is the same table asked of a binary instead of a source tree: one line per row,
+tab-separated as `kind`, `name`, `command`, `install`, the install command being this OS's
+`install.<os>` or blank. The kinds are `lsp`, `formatter`, `speech`, and `player` for the speech
+row's `player.<os>`. It needs no folder and no terminal, and exits before touching either — which
+is what lets a machine with no checkout learn what to offer.
+
 Windows is not covered: `DEFAULTS` carries `install.windows` rows for a hand install.
 
 ## The one-time step, by hand

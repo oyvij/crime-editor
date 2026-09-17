@@ -1158,6 +1158,48 @@ fn speech(config: &Config, os: &str) -> crate::reading::Speech {
     }
 }
 
+/// A program CRIME can be configured to run, and what installs it on one OS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dep {
+    pub kind: &'static str,
+    pub name: String,
+    pub command: String,
+    pub install: Option<String>,
+}
+
+/// The `[lsp.*]`, `[formatter.*]` and `[speech]` rows of [`DEFAULTS`], read by
+/// the same parse startup does, so a machine with no source can ask the binary
+/// what it needs rather than keeping a second table that drifts. The speech
+/// row's player is a row of its own, kind `player`, with no install: the table
+/// names none, since it ships with macOS and comes with alsa-utils on Linux.
+pub fn deps(os: &str) -> Vec<Dep> {
+    let (table, _) = parse(DEFAULTS, "defaults").expect("the shipped defaults parse");
+    let config = Config(table);
+    let row = |kind, name: &str, command: &str, install: Option<&String>| Dep {
+        kind,
+        name: name.to_string(),
+        command: command.to_string(),
+        install: install.cloned(),
+    };
+    let speech = speech(&config, os);
+    let install = (!speech.install.is_empty()).then_some(&speech.install);
+    config
+        .servers()
+        .iter()
+        .map(|(name, s)| row("lsp", name, &s.command, s.install.get(os)))
+        .chain(
+            config
+                .formatters()
+                .iter()
+                .map(|(name, f)| row("formatter", name, &f.command, f.install.get(os))),
+        )
+        .chain([
+            row("speech", "speech", &speech.command, install),
+            row("player", "speech", &speech.player, None),
+        ])
+        .collect()
+}
+
 /// The figure on disk, if it describes the commit that is checked out. A folder
 /// that is no repository has no commit to check against, so its cache is never
 /// believed — there is nothing that could say the code had moved.
@@ -1332,9 +1374,9 @@ fn last_view(state_json: Option<&str>) -> Option<View> {
 #[cfg(test)]
 mod tests {
     use super::{
-        asset_name, is_update, parse, release, start, verify, Config, ConfigError, ConfigFault,
-        Effect, FactValue, ReplaceFailed, Startup, StartupError, DEFAULTS, PROJECT_LABEL,
-        SEEDED_CONFIG,
+        asset_name, deps, is_update, parse, release, start, verify, Config, ConfigError,
+        ConfigFault, Dep, Effect, FactValue, ReplaceFailed, Startup, StartupError, DEFAULTS,
+        PROJECT_LABEL, SEEDED_CONFIG,
     };
 
     /// The bottom layer on its own, as several tests below read it.
@@ -1382,6 +1424,162 @@ mod tests {
             matches!(problem.fault, ConfigFault::WrongType(_)),
             "{problem}"
         );
+    }
+
+    #[test]
+    fn the_dependency_table_is_every_shipped_row_with_its_install_for_the_os() {
+        let rustup = |c: &str| Some(format!("rustup component add {c}"));
+        let npm = |p: &str| Some(format!("npm install -g {p}"));
+        let brew = |p: &str| Some(format!("brew install {p}"));
+        let apt = Some("sudo apt install clangd".to_string());
+        let gopls = Some("go install golang.org/x/tools/gopls@latest".to_string());
+        let ts = "typescript typescript-language-server";
+        let pinned = [
+            ("lsp", "c", "clangd", None, apt.clone()),
+            ("lsp", "cpp", "clangd", None, apt),
+            ("lsp", "go", "gopls", gopls.clone(), gopls),
+            ("lsp", "java", "jdtls", brew("jdtls"), None),
+            (
+                "lsp",
+                "javascript",
+                "typescript-language-server",
+                npm(ts),
+                npm(ts),
+            ),
+            (
+                "lsp",
+                "python",
+                "pyright-langserver",
+                npm("pyright"),
+                npm("pyright"),
+            ),
+            (
+                "lsp",
+                "rust",
+                "rust-analyzer",
+                rustup("rust-analyzer"),
+                rustup("rust-analyzer"),
+            ),
+            (
+                "lsp",
+                "typescript",
+                "typescript-language-server",
+                npm(ts),
+                npm(ts),
+            ),
+            (
+                "lsp",
+                "vue",
+                "vue-language-server",
+                npm("@vue/language-server"),
+                npm("@vue/language-server"),
+            ),
+            ("lsp", "zig", "zls", brew("zls"), None),
+            (
+                "formatter",
+                "css",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+            ("formatter", "go", "gofmt", None, None),
+            (
+                "formatter",
+                "html",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+            (
+                "formatter",
+                "javascript",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+            (
+                "formatter",
+                "json",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+            (
+                "formatter",
+                "markdown",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+            (
+                "formatter",
+                "python",
+                "black",
+                Some("pipx install black".into()),
+                Some("pipx install black".into()),
+            ),
+            (
+                "formatter",
+                "rust",
+                "rustfmt",
+                rustup("rustfmt"),
+                rustup("rustfmt"),
+            ),
+            (
+                "formatter",
+                "typescript",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+            (
+                "formatter",
+                "vue",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+            (
+                "formatter",
+                "yaml",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+        ];
+        for (os, player) in [("macos", "afplay"), ("linux", "aplay")] {
+            let rows = deps(os);
+            let (table, speech) = rows.split_last_chunk::<2>().expect("the speech rows");
+            let expected: Vec<Dep> = pinned
+                .iter()
+                .map(|(kind, name, command, macos, linux)| Dep {
+                    kind,
+                    name: name.to_string(),
+                    command: command.to_string(),
+                    install: if os == "macos" { macos } else { linux }.clone(),
+                })
+                .collect();
+            assert_eq!(table, expected, "{os}");
+            let [synth, play] = speech;
+            assert_eq!(
+                (synth.kind, synth.name.as_str(), synth.command.as_str()),
+                ("speech", "speech", "piper")
+            );
+            assert!(synth
+                .install
+                .as_deref()
+                .is_some_and(|line| line.starts_with("uv tool install piper-tts")
+                    && line.contains(r#"speech.voice = ""#)));
+            assert_eq!(
+                play,
+                &Dep {
+                    kind: "player",
+                    name: "speech".into(),
+                    command: player.into(),
+                    install: None
+                }
+            );
+        }
     }
 
     /// A shipped default nothing can reach is a language served by nobody: the

@@ -48,10 +48,21 @@ struct Args {
     /// Folder to open as the workspace. Omitted, the current folder is opened
     /// as a Bare workspace: nothing of CRIME's is written into it.
     folder: Option<PathBuf>,
+    /// Print the programs CRIME can be configured to run and what installs
+    /// each on this OS, one tab-separated line each, and exit.
+    #[arg(long, conflicts_with = "folder")]
+    deps: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.deps {
+        for dep in crime::startup::deps(std::env::consts::OS) {
+            let install = dep.install.unwrap_or_default();
+            println!("{}\t{}\t{}\t{install}", dep.kind, dep.name, dep.command);
+        }
+        return Ok(());
+    }
     // Optional rather than defaulted to ".", because `crime` and `crime .`
     // name the same folder and must not mean the same thing: which it was is
     // the library's decision, and a default here would have thrown the fact

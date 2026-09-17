@@ -1,6 +1,6 @@
 # 04 — `crime --deps` prints the dependency table
 
-Status: ready-for-agent
+Status: resolved
 
 **What to build:** A library function that returns the `[lsp.*]`, `[formatter.*]` and `[speech]`
 rows of the shipped defaults as records — kind, name, command, and the install command for a given
