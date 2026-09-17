@@ -2466,7 +2466,7 @@ fn marked_code(
     shift(&mut code, state, 1);
     let dark = state.editor_theme != "light";
     let diff = story::site_diff(state);
-    // Only a mark divides the file into inside and outside — or `D` over an
+    // Only a mark divides the file into inside and outside — or `d` over an
     // old-side Site, whose lines are all outside: they are the removed rows.
     let site = match marked {
         story::SiteMark::Site { kind, .. } => Some(bar(*kind)),
@@ -2984,7 +2984,7 @@ fn change_colours(removed: bool, dark: bool) -> (char, Color, Color) {
     }
 }
 
-/// A walked Site's line under `D`: the bar and the text take the change's
+/// A walked Site's line under `d`: the bar and the text take the change's
 /// colours, and the text keeps its language's foreground over the tint, as a
 /// diff row does. `removed` has no line number, since it has no line.
 fn changed_row(

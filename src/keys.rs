@@ -168,8 +168,8 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
     (":submit", "send the review", &[View::Review, View::Story]),
     ("n p", "step", &[View::Story]),
     ("j k", "scroll", &[View::Story]),
-    ("d", "step detail", &[View::Story]),
-    ("D", "show the diff", &[View::Story]),
+    ("d", "show the diff", &[View::Story]),
+    ("D", "step detail", &[View::Story]),
     ("g", "jump to citation", &[View::Story]),
     ("c", "comment", &[View::Story]),
     ("Esc", "back to spine", &[View::Story]),
@@ -531,13 +531,13 @@ fn diverged_answer(event: KeyEvent) -> Vec<Event> {
     }
 }
 
-/// `d` toggled it open, and toggles it shut again: the overlay's own "why" and
+/// `D` toggled it open, and toggles it shut again: the overlay's own "why" and
 /// flow are read straight from state, never typed here.
 fn step_detail_answer(event: KeyEvent) -> Vec<Event> {
     match event.code {
         KeyCode::Esc => vec![Event::Cancel],
         _ => match typed(event) {
-            Some('d') => vec![Event::Key('d')],
+            Some('D') => vec![Event::Key('D')],
             _ => vec![],
         },
     }
@@ -3728,7 +3728,7 @@ mod tests {
     /// A chord candidate's own contribution: the second key measured against
     /// the state the operator alone already left, not the untouched state —
     /// so an operator with a persisting effect of its own (the Step-detail
-    /// overlay `d` opens and leaves open) does not make every possible
+    /// overlay `D` opens and leaves open) does not make every possible
     /// second key look like part of a distinct two-key binding. A genuine
     /// chord ("gt", "dd") still shows up: the operator's pending key
     /// survives into the second call exactly as it does when driven live.

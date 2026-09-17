@@ -159,7 +159,8 @@ below do the moving.
 | `j` `k` | scroll the code, without stepping |
 | arrows | move the cursor through the code, without stepping or editing |
 | `l` `h` `0` | slide the code sideways, and home |
-| `d` | open and close the Step's detail: claim, why, flow, and the nudge when there is one |
+| `d` | show and hide the range's diff over the Site: added lines in green, removed lines as red rows where they were |
+| `D` | open and close the Step's detail: claim, why, flow, and the nudge when there is one |
 | `g` | jump to a cited value's source |
 | `Ctrl+P` `Ctrl+N` | jump back and forward through cursor history |
 | `c` | comment on this Step |
@@ -181,7 +182,7 @@ line it cites and nothing more; whether it is really a literal is not something 
 ### Stale Steps
 
 A Step whose Site no longer holds the text it was written against is **stale**. The band warns
-before you read the claim, and `d` shows what the Site used to hold beside what it holds now.
+before you read the claim, and `D` shows what the Site used to hold beside what it holds now.
 Three things make a Step stale: its file is gone, its line range no longer fits, or the text
 changed. Whitespace-only reformatting does not count. Editing the file in Edit view makes the Step
 stale as soon as the text differs.

@@ -181,7 +181,7 @@ Feature: Reviewing a repository that is not on this machine
     And the site mark is drawn on the file on screen
     And step 1 is not stale
 
-  Scenario: A Guest repo's step shows its range's diff on D
+  Scenario: A Guest repo's step shows its range's diff on d
     Given CRIME started with no folder in "/home/me/projects/theirs"
     And git is installed
     And the repository has branches:
@@ -226,7 +226,7 @@ Feature: Reviewing a repository that is not on this machine
       }
       """
     And I enter the story "What they did"
-    And I press "D"
+    And I press "d"
     Then line 1 of "src/theirs.rs" is marked as added
     And the code shows the removed rows:
       | under | text         |

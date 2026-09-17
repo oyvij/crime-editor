@@ -1351,7 +1351,7 @@ pub enum Walking {
     },
 }
 
-/// Whether `D` has laid the Range's diff over the Site. Part of the position
+/// Whether `d` has laid the Range's diff over the Site. Part of the position
 /// rather than a field of its own on `State`, so it cannot be shown with no
 /// Story being walked, survives `n`/`p`, and is gone with the walk it belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1430,7 +1430,7 @@ pub fn advance(total_steps: usize, current: usize, direction: Direction) -> usiz
     }
 }
 
-/// The overlay's sections, in the fixed order `d` always shows them. Claim
+/// The overlay's sections, in the fixed order `D` always shows them. Claim
 /// and why are always there; flow and nudge are each omitted when the Step
 /// does not have one, the same way the overlay itself renders — one model,
 /// not two that could disagree. `stale` sits right after why: a Step whose
@@ -2054,7 +2054,7 @@ pub fn mark(state: &State) -> SiteMark {
 }
 
 /// Whether the code surface draws the old-side notice instead of code: an
-/// old-side Site, unless `D` is showing the Range's diff over it — the one way
+/// old-side Site, unless `d` is showing the Range's diff over it — the one way
 /// its old text is shown truthfully, as the rows the change removed. Asked by
 /// the renderer, the caret and both scroll clamps, which must agree on it.
 pub fn refused(state: &State) -> bool {
@@ -2147,7 +2147,7 @@ pub struct SiteDiff {
     pub removed: Vec<(u32, String)>,
 }
 
-/// The Range's diff over the current Step's Site, or `None` wherever `D` draws
+/// The Range's diff over the current Step's Site, or `None` wherever `d` draws
 /// nothing: the diff hidden, the Remainder, a context Site — which the change
 /// did not touch by definition — or a file on screen other than the Site's,
 /// which `g` leaves the walk on.
@@ -4374,7 +4374,7 @@ from b
 
     const BASE: &str = "a\nb\nc\nd\ne\nf\n";
 
-    /// Walking a Site of `src/keys.rs` with `D` showing the diff from [`BASE`]
+    /// Walking a Site of `src/keys.rs` with `d` showing the diff from [`BASE`]
     /// to `head`, and the buffer open on `head`.
     fn diff_shown(head: &str, side: Side, from: u32, to: u32) -> State {
         let path = std::path::PathBuf::from("/work/src/keys.rs");
@@ -4500,7 +4500,7 @@ from b
     }
 
     /// The scroll clamp bounds rows, so the last line is reachable with removed
-    /// rows above it — and an old-side Site under `D` is code to scroll rather
+    /// rows above it — and an old-side Site under `d` is code to scroll rather
     /// than a notice with nothing to scroll.
     #[test]
     fn the_scroll_clamp_counts_removed_rows() {

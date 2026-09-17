@@ -300,7 +300,7 @@ pub enum Modal {
         spelling: String,
         out: String,
     },
-    /// The current Step's why, flow and Nudge, `d` away from the claim
+    /// The current Step's why, flow and Nudge, `D` away from the claim
     /// that is always on screen. Carries nothing of its own — every field
     /// it shows is read fresh from `state.walking` — so re-authoring or
     /// stepping to a new Step behind it never leaves it stale.
@@ -3072,7 +3072,7 @@ fn on_key(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
 
         // Walking a Story's own keys, reachable the same way `t` above is —
         // regardless of pane, since Story view's focus stays on the editor.
-        Event::Key(key @ ('j' | 'k' | 'e' | 'g' | 'c' | 'D'))
+        Event::Key(key @ ('j' | 'k' | 'e' | 'g' | 'c' | 'd'))
             if state.view == View::Story
                 && state.walking.is_some()
                 && state.modal == Modal::None =>
@@ -3099,14 +3099,14 @@ fn on_key_2(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
             Ok(walk_key(state, next, key))
         }
 
-        // `d` alone answers with the detail overlay already open, since that
+        // `D` alone answers with the detail overlay already open, since that
         // is the one walking key that must also close what it opened.
-        Event::Key('d')
+        Event::Key('D')
             if state.view == View::Story
                 && state.walking.is_some()
                 && matches!(state.modal, Modal::None | Modal::StepDetail) =>
         {
-            Ok(walk_key(state, next, 'd'))
+            Ok(walk_key(state, next, 'D'))
         }
 
         Event::Key(key @ ('1' | '2' | '3')) if matches!(state.modal, Modal::Prediction { .. }) => {
@@ -8487,11 +8487,11 @@ fn walk_step_key(state: &State, next: State, key: char) -> Result<(State, Vec<Ef
 fn walk_place_key(state: &State, mut next: State, key: char) -> (State, Vec<Effect>) {
     match key {
         'e' => walk_to_step_file(state, next),
-        // `d` opens the Step's detail overlay, and closes it again: the claim
+        // `D` opens the Step's detail overlay, and closes it again: the claim
         // stays on screen underneath, since the code is what the reviewer
         // came for and the overlay is one keypress away from it, not a
         // replacement for it.
-        'd' => {
+        'D' => {
             next.modal = if state.modal == Modal::StepDetail {
                 Modal::None
             } else {
@@ -8500,7 +8500,7 @@ fn walk_place_key(state: &State, mut next: State, key: char) -> (State, Vec<Effe
             (next, vec![])
         }
         'g' => walk_to_citation(state, next),
-        'D' => {
+        'd' => {
             if let Some(story::Walking::Story { diff, .. }) = &mut next.walking {
                 *diff = match diff {
                     story::Diff::Hidden => story::Diff::Shown,
