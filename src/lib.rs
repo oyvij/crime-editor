@@ -300,7 +300,7 @@ pub enum Modal {
         spelling: String,
         out: String,
     },
-    /// The current Step's why, flow and Nudge, `d` away from the claim
+    /// The current Step's why, flow and Nudge, `D` away from the claim
     /// that is always on screen. Carries nothing of its own — every field
     /// it shows is read fresh from `state.walking` — so re-authoring or
     /// stepping to a new Step behind it never leaves it stale.
@@ -3072,7 +3072,7 @@ fn on_key(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
 
         // Walking a Story's own keys, reachable the same way `t` above is —
         // regardless of pane, since Story view's focus stays on the editor.
-        Event::Key(key @ ('j' | 'k' | 'e' | 'g' | 'c'))
+        Event::Key(key @ ('j' | 'k' | 'e' | 'g' | 'c' | 'd'))
             if state.view == View::Story
                 && state.walking.is_some()
                 && state.modal == Modal::None =>
@@ -3099,14 +3099,14 @@ fn on_key_2(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
             Ok(walk_key(state, next, key))
         }
 
-        // `d` alone answers with the detail overlay already open, since that
+        // `D` alone answers with the detail overlay already open, since that
         // is the one walking key that must also close what it opened.
-        Event::Key('d')
+        Event::Key('D')
             if state.view == View::Story
                 && state.walking.is_some()
                 && matches!(state.modal, Modal::None | Modal::StepDetail) =>
         {
-            Ok(walk_key(state, next, 'd'))
+            Ok(walk_key(state, next, 'D'))
         }
 
         Event::Key(key @ ('1' | '2' | '3')) if matches!(state.modal, Modal::Prediction { .. }) => {
@@ -6643,6 +6643,7 @@ fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: 
             next.walking = Some(story::Walking::Story {
                 story: index,
                 step: 0,
+                diff: story::Diff::Hidden,
             });
             arrive_at_step(&mut next, index, 0);
             next.focus = Pane::Editor;
@@ -6656,7 +6657,7 @@ fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: 
         }
 
         Event::StepStory(direction) => {
-            let (Some(story::Walking::Story { story, step }), story::Set::Loaded(artifact)) =
+            let (Some(story::Walking::Story { story, step, diff }), story::Set::Loaded(artifact)) =
                 (state.walking, &state.story_set)
             else {
                 return Ok((next, vec![]));
@@ -6671,6 +6672,7 @@ fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: 
             next.walking = Some(story::Walking::Story {
                 story,
                 step: new_step,
+                diff,
             });
             arrive_at_step(&mut next, story, new_step);
             vec![Effect::OpenAt {
@@ -7305,7 +7307,7 @@ fn comment(
 /// argue with, or neither while walking the Remainder or not walking at all
 /// — the Remainder has no claim, and Review view has no Story.
 fn walking_position(state: &State) -> (Option<String>, Option<u32>) {
-    let Some(story::Walking::Story { story, step }) = state.walking else {
+    let Some(story::Walking::Story { story, step, .. }) = state.walking else {
         return (None, None);
     };
     let story::Set::Loaded(artifact) = &state.story_set else {
@@ -7883,7 +7885,7 @@ fn editor_focus(state: &State, rows: &[preview::Row]) -> (usize, usize) {
     // renderer subtracting its own offset: `mouse` hit-tests the editor against
     // this same clamped field, and two derivations of one offset are how a
     // click comes to land on a row nobody pointed at.
-    if matches!(story::mark(state), story::SiteMark::Refused) {
+    if story::refused(state) {
         return (0, 0);
     }
     // A Preview's rows are not its lines, so the clamp is handed the row the
@@ -7973,7 +7975,7 @@ fn slid_width(state: &State) -> usize {
     // [`editor_focus`] excludes it: the buffer behind that pane is open and
     // its cursor is somewhere, so a rule that consulted it would slide a
     // notice about code nobody can see.
-    if matches!(story::mark(state), story::SiteMark::Refused) {
+    if story::refused(state) {
         return 0;
     }
     if let Some(diff) = &state.diff {
@@ -8485,11 +8487,11 @@ fn walk_step_key(state: &State, next: State, key: char) -> Result<(State, Vec<Ef
 fn walk_place_key(state: &State, mut next: State, key: char) -> (State, Vec<Effect>) {
     match key {
         'e' => walk_to_step_file(state, next),
-        // `d` opens the Step's detail overlay, and closes it again: the claim
+        // `D` opens the Step's detail overlay, and closes it again: the claim
         // stays on screen underneath, since the code is what the reviewer
         // came for and the overlay is one keypress away from it, not a
         // replacement for it.
-        'd' => {
+        'D' => {
             next.modal = if state.modal == Modal::StepDetail {
                 Modal::None
             } else {
@@ -8498,6 +8500,15 @@ fn walk_place_key(state: &State, mut next: State, key: char) -> (State, Vec<Effe
             (next, vec![])
         }
         'g' => walk_to_citation(state, next),
+        'd' => {
+            if let Some(story::Walking::Story { diff, .. }) = &mut next.walking {
+                *diff = match diff {
+                    story::Diff::Hidden => story::Diff::Shown,
+                    story::Diff::Shown => story::Diff::Hidden,
+                };
+            }
+            (next, vec![])
+        }
         // The spine and the changed-files list share the tree pane; this key
         // toggles them regardless of whether anything is being walked (see
         // the `t` toggle in the top-level match), so walking must not swallow
@@ -9424,7 +9435,11 @@ mod tests {
         let state = State {
             view: View::Story,
             story_set: story::Set::Loaded(artifact),
-            walking: Some(story::Walking::Story { story: 0, step: 0 }),
+            walking: Some(story::Walking::Story {
+                story: 0,
+                step: 0,
+                diff: story::Diff::Hidden,
+            }),
             current_buffer: Some(path),
             buffers,
             editor_scroll: 120,
@@ -9546,7 +9561,11 @@ mod tests {
                 ..inserting.clone()
             },
             State {
-                walking: Some(story::Walking::Story { story: 0, step: 0 }),
+                walking: Some(story::Walking::Story {
+                    story: 0,
+                    step: 0,
+                    diff: story::Diff::Hidden,
+                }),
                 ..inserting.clone()
             },
         ] {
@@ -9875,7 +9894,11 @@ mod tests {
             (false, editor::Mode::Visual, "visual"),
         ] {
             let state = State {
-                walking: walking.then_some(story::Walking::Story { story: 0, step: 0 }),
+                walking: walking.then_some(story::Walking::Story {
+                    story: 0,
+                    step: 0,
+                    diff: story::Diff::Hidden,
+                }),
                 ..State::default()
             };
             let mut buffer = editor::Buffer::open("", false, editor::DEFAULT_TAB_WIDTH);

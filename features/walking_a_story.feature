@@ -231,12 +231,12 @@ Feature: Walking a story step by step
     When I press "g"
     Then the cursor is on line 3 of "src/keys.rs"
 
-  Scenario: d opens the step's detail
+  Scenario: D opens the step's detail
     Given the step "The router matches the key" holds:
       | why                        | flow in       | flow out         | nudge                     |
       | The match is the fork      | a decoded key | one of two events | Raw carries the modifiers |
     And I am walking "Keys reach the child"
-    When I press "d"
+    When I press "D"
     Then the overlay is "step-detail"
     And the overlay sections are:
       | claim  |
@@ -249,22 +249,22 @@ Feature: Walking a story step by step
       | why                   | flow in       | flow out          |
       | The match is the fork | a decoded key | one of two events |
     And I am walking "Keys reach the child"
-    When I press "d"
+    When I press "D"
     Then the overlay sections are:
       | claim |
       | why   |
       | flow  |
 
-  Scenario: d closes the step's detail again
+  Scenario: D closes the step's detail again
     Given I am walking "Keys reach the child"
-    And I pressed "d"
-    When I press "d"
+    And I pressed "D"
+    When I press "D"
     Then the overlay is "none"
     And I am walking "Keys reach the child"
 
   Scenario: Escape closes the step's detail without leaving the story
     Given I am walking "Keys reach the child"
-    And I pressed "d"
+    And I pressed "D"
     When I press "Escape"
     Then the overlay is "none"
     And I am walking "Keys reach the child"
@@ -302,7 +302,7 @@ Feature: Walking a story step by step
   Scenario: A stale step's detail shows what the site used to hold
     Given "src/keys.rs" now holds different text at line 4
     And I walked to step 2 of "Keys reach the child"
-    When I press "d"
+    When I press "D"
     Then the overlay shows the site's stored text
     And the overlay shows what the site holds now
 
@@ -497,3 +497,116 @@ Feature: Walking a story step by step
       When I press "g"
       Then the cursor is on line 20 of "src/cited.rs"
       And the editor view starts at row 12
+
+  Rule: d lays the range's diff over the site
+
+    A changed Site says the change reached these lines, and nothing about which of them are new. `d`
+    toggles the Range's own diff over the Site: its added lines are marked as added, and the lines
+    the change removed come back as rows of their own, where they were deleted. It is a toggle and
+    not a hold, because a key's release is an event stock tmux and most terminals never send — a
+    held gesture would silently not exist for whoever is on one.
+
+    The diff is the Range's, read from its two revisions, and never the buffer's or the last
+    commit's. Only the Site gets it: code outside the Site is drawn as it always is. The toggle is
+    part of where the reviewer stands in a Story, so it survives stepping and is gone once the Story
+    is left.
+
+    Background:
+      Given "src/keys.rs" held:
+        """
+        fn route(key: Key) -> Event {
+            match k {
+                Key::Char(c) => Event::Char(c),
+                Key::Esc => Event::Escape,
+                other => Event::Raw(other),
+            }
+        }
+        """
+      And "src/keys.rs" now holds:
+        """
+        fn route(k: Key) -> Event {
+            match k {
+                Key::Char(c) => Event::Type(c),
+                other => Event::Raw(other),
+            }
+        }
+        """
+      And the step "The router matches the key" covers lines 2 to 4
+
+    Scenario: d marks the site's added lines and shows its removed lines as rows
+      Given I am walking "Keys reach the child"
+      When I press "d"
+      Then line 3 of "src/keys.rs" is marked as added
+      And line 2 of "src/keys.rs" is not marked as added
+      And line 4 of "src/keys.rs" is not marked as added
+      And the code shows the removed rows:
+        | under | text                                    |
+        | 2     |         Key::Char(c) => Event::Char(c), |
+        | 2     |         Key::Esc => Event::Escape,      |
+
+    Scenario: d again returns the site to its plain mark
+      Given I am walking "Keys reach the child"
+      And I pressed "d"
+      When I press "d"
+      Then line 3 of "src/keys.rs" is not marked as added
+      And the code shows no removed rows
+      And the site mark is "changed"
+
+    Scenario: Code outside the site gains no diff while the diff is shown
+      Given I am walking "Keys reach the child"
+      When I press "d"
+      Then line 1 of "src/keys.rs" is not marked as added
+      And the code shows the removed rows:
+        | under | text                                    |
+        | 2     |         Key::Char(c) => Event::Char(c), |
+        | 2     |         Key::Esc => Event::Escape,      |
+
+    Scenario: An old-side site shows the lines it removed
+      Given the step "The router matches the key" covers lines 3 to 4
+      And the step "The router matches the key" points at the old side
+      And I am walking "Keys reach the child"
+      When I press "d"
+      Then the code shows the removed rows:
+        | under | text                                    |
+        | 2     |         Key::Char(c) => Event::Char(c), |
+        | 2     |         Key::Esc => Event::Escape,      |
+
+    Scenario: d on a context step draws nothing and edits nothing
+      Given the step "The router matches the key" points at context
+      And I am walking "Keys reach the child"
+      When I press "d"
+      Then line 3 of "src/keys.rs" is not marked as added
+      And the code shows no removed rows
+      And "src/keys.rs" has no unsaved edits
+
+    Scenario: The diff stays shown while stepping
+      Given the step "The catch-all keeps it" covers lines 2 to 4
+      And I am walking "Keys reach the child"
+      And I pressed "d"
+      When I press "n"
+      Then line 3 of "src/keys.rs" is marked as added
+
+    Scenario: Leaving the story hides the diff for the next walk
+      Given I am walking "Keys reach the child"
+      And I pressed "d"
+      And I pressed "Escape"
+      When I enter the story "Keys reach the child"
+      Then line 3 of "src/keys.rs" is not marked as added
+      And the code shows no removed rows
+
+    Scenario: The diff is the range's, not the buffer's
+      Given I am walking "Keys reach the child"
+      And I pressed "d"
+      When I change line 3 of "src/keys.rs" in the editor
+      Then line 3 of "src/keys.rs" is marked as added
+
+    Scenario Outline: The diff is shown over a committed range and an uncommitted one alike
+      Given the story set's range is "<range>"
+      And I am walking "Keys reach the child"
+      When I press "d"
+      Then line 3 of "src/keys.rs" is marked as added
+
+      Examples:
+        | range          |
+        | main..HEAD     |
+        | HEAD..worktree |

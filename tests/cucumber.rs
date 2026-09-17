@@ -6086,6 +6086,7 @@ fn set_walking(world: &mut CrimeWorld, name: String) {
     world.state.walking = Some(story::Walking::Story {
         story: index,
         step: 0,
+        diff: story::Diff::Hidden,
     });
 }
 
@@ -6304,6 +6305,67 @@ fn no_site_mark(world: &mut CrimeWorld) {
         !matches!(marked, story::SiteMark::Site { .. }),
         "expected no site mark, got {marked:?}"
     );
+}
+
+// ---- The Site's diff ----
+
+#[then(expr = "line {int} of {string} is marked as added")]
+fn line_is_marked_as_added(world: &mut CrimeWorld, line: u32, path: String) {
+    assert_eq!(story::shown_file(&world.state), path);
+    let diff = story::site_diff(&world.state);
+    assert!(
+        diff.as_ref().is_some_and(|diff| diff.added.contains(&line)),
+        "line {line} is not marked as added: {diff:?}"
+    );
+}
+
+#[then(expr = "line {int} of {string} is not marked as added")]
+fn line_is_not_marked_as_added(world: &mut CrimeWorld, line: u32, path: String) {
+    assert_eq!(story::shown_file(&world.state), path);
+    let diff = story::site_diff(&world.state);
+    assert!(
+        !diff.as_ref().is_some_and(|diff| diff.added.contains(&line)),
+        "line {line} is marked as added: {diff:?}"
+    );
+}
+
+/// Every removed row the code surface draws, with the line it sits under —
+/// read off `story::rows`, the map the renderer, the caret and the scroll
+/// clamp all read.
+fn removed_rows(world: &CrimeWorld) -> Vec<(u32, String)> {
+    let lines = current_buffer(world).shown().split('\n').count();
+    let mut under = 0;
+    let mut removed = Vec::new();
+    for row in story::rows(&world.state, lines) {
+        match row {
+            story::Row::Code(number) => under = number,
+            story::Row::Removed(text) => removed.push((under, text.to_string())),
+            story::Row::Comment(_) => {}
+        }
+    }
+    removed
+}
+
+#[then(expr = "the code shows the removed rows:")]
+fn code_shows_removed_rows(world: &mut CrimeWorld, step: &Step) {
+    let table = step.table().expect("table");
+    let expected: Vec<(u32, String)> = table
+        .rows
+        .iter()
+        .skip(1)
+        .map(|row| (row[0].parse().expect("a line number"), row[1].clone()))
+        .collect();
+    let trimmed = |rows: Vec<(u32, String)>| -> Vec<(u32, String)> {
+        rows.into_iter()
+            .map(|(under, text)| (under, text.trim().to_string()))
+            .collect()
+    };
+    assert_eq!(trimmed(removed_rows(world)), trimmed(expected));
+}
+
+#[then(expr = "the code shows no removed rows")]
+fn code_shows_no_removed_rows(world: &mut CrimeWorld) {
+    assert_eq!(removed_rows(world), vec![]);
 }
 
 /// What the pane title says keys will do — the buffer's own mode everywhere but
@@ -7089,6 +7151,22 @@ fn guest_file_holds(world: &mut CrimeWorld, file: String, step: &Step) {
     world.recompute_file_hunks();
 }
 
+/// A Guest repo's file as its range's base held it — the "held:" of the clone.
+#[given(expr = "the Guest repo's file {string} held:")]
+#[when(expr = "the Guest repo's file {string} held:")]
+fn guest_file_held(world: &mut CrimeWorld, file: String, step: &Step) {
+    let contents = step
+        .docstring()
+        .expect("docstring")
+        .trim_matches('\n')
+        .to_string();
+    let path = guest_path(world, &file);
+    world.known_files.insert(path.clone());
+    world.held.insert(path.clone(), contents.clone());
+    world.files.insert(path, contents);
+    world.recompute_file_hunks();
+}
+
 #[when(expr = "the Guest repo's file {string} is opened in the editor")]
 fn guest_file_is_opened(world: &mut CrimeWorld, file: String) {
     let path = guest_path(world, &file);
@@ -7666,7 +7744,11 @@ fn walk_a_step_pointing_at(world: &mut CrimeWorld, file: String) {
     });
     world.state.view = View::Story;
     world.state.focus = Pane::Editor;
-    world.state.walking = Some(story::Walking::Story { story: 0, step: 0 });
+    world.state.walking = Some(story::Walking::Story {
+        story: 0,
+        step: 0,
+        diff: story::Diff::Hidden,
+    });
 }
 
 #[then(expr = "row {int} is a heading")]

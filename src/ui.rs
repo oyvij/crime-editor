@@ -2464,12 +2464,24 @@ fn marked_code(
         true,
     );
     shift(&mut code, state, 1);
-    // Only a mark divides the file into inside and outside.
-    if let story::SiteMark::Site { kind, .. } = marked {
+    let dark = state.editor_theme != "light";
+    let diff = story::site_diff(state);
+    // Only a mark divides the file into inside and outside — or `d` over an
+    // old-side Site, whose lines are all outside: they are the removed rows.
+    let site = match marked {
+        story::SiteMark::Site { kind, .. } => Some(bar(*kind)),
+        _ => None,
+    };
+    if site.is_some() || diff.is_some() {
         for (index, line) in code.iter_mut().enumerate() {
             let number = index + 1;
-            *line = if marked.covers(relative, number as u32) {
-                barred(line, number, bar(*kind))
+            let added = diff
+                .as_ref()
+                .is_some_and(|diff| diff.added.contains(&(number as u32)));
+            *line = if added {
+                changed_row(line, Some(number), false, dark)
+            } else if let Some(colour) = site.filter(|_| marked.covers(relative, number as u32)) {
+                barred(line, number, colour)
             } else {
                 dimmed(line)
             };
@@ -2486,6 +2498,13 @@ fn marked_code(
             // one left behind is never read again.
             story::Row::Code(number) => std::mem::take(&mut code[number as usize - 1]),
             story::Row::Comment(comment) => comment_row(&comment.kind, &comment.body),
+            // Slid with the code, since it is code: a removed line the view had
+            // slid past would otherwise start at a column nothing else does.
+            story::Row::Removed(text) => {
+                let mut gone = [Line::from(vec![Span::raw(""), Span::raw(text)])];
+                shift(&mut gone, state, 1);
+                changed_row(&gone[0], None, true, dark)
+            }
         })
         .collect()
 }
@@ -2504,7 +2523,7 @@ fn story_widget(
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let relative = story::shown_file(state);
-    let refused = matches!(marked, story::SiteMark::Refused);
+    let refused = story::refused(state);
     let lines: Vec<Line> = if refused {
         // The Site's own file, not the buffer's: the buffer holds the working
         // tree's version of it and need not be open at all, and what the notice
@@ -2898,25 +2917,9 @@ fn diff_rows(
         // them for the same reason: plain red and green are the marker column
         // *and*, when a side could not be highlighted, the whole row's text.
         let (marker, own, tint) = match (line.removed, line.old_line.is_some()) {
-            (true, _) => (
-                '-',
-                Color::Indexed(167),
-                if dark {
-                    Color::Rgb(0x3a, 0x20, 0x24)
-                } else {
-                    Color::Indexed(224)
-                },
-            ),
+            (true, _) => change_colours(true, dark),
             (false, true) => (' ', Color::DarkGray, Color::Reset),
-            (false, false) => (
-                '+',
-                Color::Indexed(71),
-                if dark {
-                    Color::Rgb(0x1b, 0x35, 0x24)
-                } else {
-                    Color::Indexed(194)
-                },
-            ),
+            (false, false) => change_colours(false, dark),
         };
         let mut row = Style::default().bg(tint);
         if selected.is_some_and(|(from, to)| number >= from && number <= to) {
@@ -2968,6 +2971,45 @@ fn diff_rows(
         }
     }
     lines
+}
+
+/// A removed or an added row's marker, its own colour and its tint — the one
+/// red and green, whether the row is Review's diff or a walked Site's.
+fn change_colours(removed: bool, dark: bool) -> (char, Color, Color) {
+    match (removed, dark) {
+        (true, true) => ('-', Color::Indexed(167), Color::Rgb(0x3a, 0x20, 0x24)),
+        (true, false) => ('-', Color::Indexed(167), Color::Indexed(224)),
+        (false, true) => ('+', Color::Indexed(71), Color::Rgb(0x1b, 0x35, 0x24)),
+        (false, false) => ('+', Color::Indexed(71), Color::Indexed(194)),
+    }
+}
+
+/// A walked Site's line under `d`: the bar and the text take the change's
+/// colours, and the text keeps its language's foreground over the tint, as a
+/// diff row does. `removed` has no line number, since it has no line.
+fn changed_row(
+    line: &Line<'static>,
+    number: Option<usize>,
+    removed: bool,
+    dark: bool,
+) -> Line<'static> {
+    let (_, own, tint) = change_colours(removed, dark);
+    let mut spans = vec![
+        Span::styled(
+            format!("{:>4}", number.map(|n| n.to_string()).unwrap_or_default()),
+            Style::default().fg(Color::Gray),
+        ),
+        Span::styled("▌", Style::default().fg(own)),
+        Span::raw(PAD),
+    ];
+    spans.extend(line.spans.iter().skip(1).map(|span| {
+        let style = match removed {
+            true => span.style.fg(own),
+            false => span.style,
+        };
+        Span::styled(span.content.clone(), style.bg(tint))
+    }));
+    Line::from(spans)
 }
 
 /// A read-only unified diff.
@@ -3055,7 +3097,7 @@ fn place_cursor(frame: &mut Frame, state: &State, areas: &Areas, command: Option
     // An old-side Step draws a notice where its code would be, so there is no
     // line for a caret to sit on. Left in, it would point at a row of prose and
     // read as "you are here" in code that is not on screen.
-    if matches!(story::mark(state), story::SiteMark::Refused) {
+    if story::refused(state) {
         return;
     }
     let Some((line, column)) = caret_at(state) else {

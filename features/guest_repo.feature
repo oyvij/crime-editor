@@ -181,6 +181,57 @@ Feature: Reviewing a repository that is not on this machine
     And the site mark is drawn on the file on screen
     And step 1 is not stale
 
+  Scenario: A Guest repo's step shows its range's diff on d
+    Given CRIME started with no folder in "/home/me/projects/theirs"
+    And git is installed
+    And the repository has branches:
+      | name    | kind  | seconds |
+      | feature | local | 300     |
+      | main    | local | 200     |
+    And "origin/HEAD" resolves to "main"
+    And "main...HEAD" resolves to base "aaaaaaaaaaaa" and head "bbbbbbbbbbbb"
+    When I run ":story? git@github.com:them/theirs.git"
+    And the clone finishes with exit status "0"
+    And the Guest repo's file "src/theirs.rs" held:
+      """
+      fn mine() {}
+      """
+    And the Guest repo's file "src/theirs.rs" holds:
+      """
+      fn theirs() {}
+      """
+    And I pick the branch "feature"
+    And I confirm the story range
+    And the story artifact arrives:
+      """
+      {
+        "protocolVersion": 2,
+        "title": "Theirs",
+        "range": { "spelling": "main...HEAD", "base": "aaaaaaaaaaaa", "head": "bbbbbbbbbbbb" },
+        "stories": [{
+          "id": "s1",
+          "name": "What they did",
+          "premise": "one function",
+          "steps": [{
+            "id": "s1e1",
+            "name": "the function",
+            "claim": "it is renamed",
+            "why": "it is what the branch changes",
+            "site": {
+              "file": "src/theirs.rs", "side": "new", "kind": "changed",
+              "from": 1, "to": 1
+            }
+          }]
+        }]
+      }
+      """
+    And I enter the story "What they did"
+    And I press "d"
+    Then line 1 of "src/theirs.rs" is marked as added
+    And the code shows the removed rows:
+      | under | text         |
+      | 0     | fn mine() {} |
+
   # Staleness, unchanged: a Step is judged against what its Site's lines hold
   # on disk, and for a Guest repo that disk is the clone. This is why the
   # branch is checked out there in the first place.
