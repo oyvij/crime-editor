@@ -217,7 +217,7 @@ pub fn draw(
         place_pty_cursor(frame, *area, shell);
     }
     draw_ai_pane(frame, state, &areas, ai, &chrome, caret_is_free);
-    draw_status(frame, &chrome);
+    draw_status(frame, state, &chrome);
 
     // Over the panes rather than under them: the box is wrapped to the screen,
     // so it overhangs the editor's own rectangle, and anything drawn after it
@@ -285,22 +285,71 @@ fn draw_ai_pane(
     }
 }
 
-fn draw_status(frame: &mut Frame, chrome: &Chrome) {
-    if chrome.status.is_empty() {
-        return;
-    }
+fn draw_status(frame: &mut Frame, state: &State, chrome: &Chrome) {
     let line = Rect {
         y: frame.area().height.saturating_sub(1),
         height: 1,
         ..frame.area()
     };
     frame.render_widget(Clear, line);
-    let style = Style::default().fg(match chrome.tone {
+    frame.render_widget(
+        Paragraph::new(status_line(
+            chrome.status,
+            chrome.tone,
+            &state.running_version,
+            state.update.as_deref(),
+            line.width,
+        )),
+        line,
+    );
+}
+
+/// The bottom row `width` columns wide: the status on the left, and the
+/// version tag hard against the right edge in every view, so it is never a
+/// notice the next notice replaces. The status is cut short before the tag.
+/// Where the row is too narrow for both, the tag gives up its hint and then
+/// itself — a tag may take at most half the row, since the notice is what
+/// the user is being told right now.
+fn status_line(
+    status: &str,
+    tone: Tone,
+    running: &str,
+    update: Option<&str>,
+    width: u16,
+) -> Line<'static> {
+    let width = width as usize;
+    let version = |text: &str| {
+        format!(
+            "v{}",
+            text.chars().filter(|c| !c.is_control()).collect::<String>()
+        )
+    };
+    let (forms, colour) = match update {
+        None => (vec![version(running)], Color::Green),
+        Some(newer) => {
+            let short = format!("{} → {}", version(running), version(newer));
+            (
+                vec![format!("{short}  C-space u to update"), short],
+                Color::Blue,
+            )
+        }
+    };
+    let tone = Style::default().fg(match tone {
         Tone::Hint => Color::DarkGray,
         Tone::Notice => Color::Yellow,
         Tone::Warning => WARNING,
     });
-    frame.render_widget(Paragraph::new(chrome.status.to_string()).style(style), line);
+    let Some(tag) = forms.into_iter().find(|tag| 2 * (tag.width() + 1) <= width) else {
+        return Line::from(Span::styled(truncate(status, width), tone));
+    };
+    let room = width - tag.width() - 1;
+    let status = truncate(status, room);
+    let gap = " ".repeat(room - status.width() + 1);
+    Line::from(vec![
+        Span::styled(status, tone),
+        Span::raw(gap),
+        Span::styled(tag, Style::default().fg(colour)),
+    ])
 }
 
 /// The words live here: the core only says which question is being asked,
@@ -2612,7 +2661,7 @@ fn showing_cheatsheet(state: &State) -> bool {
 }
 
 /// The rows the box actually shows in a pane `height` rows tall: the table
-/// filtered to the view, the Update marker above them, and then cut to what
+/// filtered to the view, and then cut to what
 /// there is room for — the pane's height less the border the box starts under
 /// and the one it stops above.
 ///
@@ -2624,9 +2673,6 @@ fn showing_cheatsheet(state: &State) -> bool {
 /// ones nothing else teaches you. Twenty-five Edit rows compete for sixteen on
 /// a 26-row screen, so the order is the whole of the answer.
 fn cheatsheet_rows(state: &State, height: u16) -> Vec<(String, Color)> {
-    // `:help` takes the keys down; the Update marker below stays, since it is
-    // the only place CRIME says a newer build exists and one line covers one
-    // line of code, which is not what anybody hid the box over.
     let rows_for_view: Vec<(&str, &str)> = keys::CHEATSHEET
         .iter()
         .filter(|(_, _, views)| state.cheatsheet && keys::applies_to(views, state.view))
@@ -2641,22 +2687,6 @@ fn cheatsheet_rows(state: &State, height: u16) -> Vec<(String, Color)> {
         .into_iter()
         .map(|(keys, what)| (format!(" {keys:column$}  {what}"), Color::DarkGray))
         .collect();
-    // A standing marker rather than a status-line notice, which the next notice
-    // would overwrite before the user opened their first file. Nothing dismisses
-    // it: it is derived from startup, so it is gone the launch after a rebuild.
-    // It names the gesture, because the rows above no longer do: `:update` moved
-    // to the palette, and a marker announcing an Update with nothing on screen
-    // saying how to install it is the discoverability problem this box exists
-    // to solve. "palette" is a row of its own here, so the two compose.
-    //
-    // Above the keys, so it costs the bottom row rather than being the row that
-    // is lost: a marker nobody sees says nothing at all.
-    if state.update_available {
-        rows.insert(
-            0,
-            (" Update available: palette u".to_string(), Color::Yellow),
-        );
-    }
     rows.truncate(height.saturating_sub(2) as usize);
     rows
 }
@@ -3839,9 +3869,10 @@ mod tests {
     use super::{
         action_icon, branch_lines, buffer_title, cheatsheet_rows, code_lines, colour, diff_rows,
         folded, guided, highlight, icon_colour, layout, paint_drag, pane_actions_title,
-        preview_line, risk_lines, risk_title, shift, story_title, title_room, transport_title,
-        tree_lines, truncate, with_caret, Block, Borders, Color, Kind, Line, Modifier, Place,
-        Selection, Span, State, Style, UnicodeWidthStr, DIRTY, DOTS, WARNING,
+        preview_line, risk_lines, risk_title, shift, status_line, story_title, title_room,
+        transport_title, tree_lines, truncate, with_caret, Block, Borders, Color, Kind, Line,
+        Modifier, Place, Selection, Span, State, Style, Tone, UnicodeWidthStr, DIRTY, DOTS,
+        WARNING,
     };
     use crime::risk::{Figure, Figures, Function, Metrics};
 
@@ -5126,27 +5157,63 @@ mod tests {
                 "{keys:?} is drawn off the bottom at 26 rows: {drawn:?}"
             );
         }
+    }
 
-        // What the Update marker costs, spelled out because it is a decision
-        // and not a surprise: it is inserted above the keys, so it displaces
-        // the sixteenth row rather than being the row that is lost — a marker
-        // nobody sees says nothing at all. `:format` is the row it takes, and
-        // the marker names the palette in its place, whose own gesture is the
-        // fifteenth row and survives.
-        state.update_available = true;
-        let pending: Vec<String> = cheatsheet_rows(&state, editor.height)
-            .into_iter()
-            .map(|(row, _)| row)
-            .collect();
-        assert_eq!(pending.len(), 16);
-        assert!(pending[0].contains("palette u"));
-        assert!(pending
+    fn text(line: Line) -> String {
+        line.spans
             .iter()
-            .any(|row| row.trim_start().starts_with("C-space Esc Esc")));
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    /// The version tag ends the bottom row whatever the notice is: a notice too
+    /// long for the row is cut before the tag rather than drawn over it.
+    #[test]
+    fn the_version_tag_is_right_aligned_and_a_long_notice_is_cut_before_it() {
+        let short = text(status_line("saved", Tone::Notice, "0.2.0", None, 40));
+        assert_eq!(short.width(), 40);
+        assert!(short.starts_with("saved "), "{short:?}");
+        assert!(short.ends_with(" v0.2.0"), "{short:?}");
+
+        let long = "x".repeat(100);
+        let cut = text(status_line(&long, Tone::Notice, "0.2.0", Some("0.3.0"), 80));
+        assert_eq!(cut.width(), 80);
         assert!(
-            !pending.iter().any(|row| row.trim_start().starts_with(":")),
-            "the marker cost more than the bottom row: {pending:?}"
+            cut.ends_with("x… v0.2.0 → v0.3.0  C-space u to update"),
+            "{cut:?}"
         );
+    }
+
+    /// A row too narrow for the notice and the whole tag drops the tag's hint
+    /// before it drops the tag, and the tag before it drops the notice.
+    #[test]
+    fn a_narrow_row_drops_the_hint_then_the_tag() {
+        let at = |width| {
+            text(status_line(
+                "saved",
+                Tone::Notice,
+                "0.2.0",
+                Some("0.3.0"),
+                width,
+            ))
+        };
+        assert!(at(80).ends_with(" v0.2.0 → v0.3.0  C-space u to update"));
+        assert!(at(40).ends_with(" v0.2.0 → v0.3.0"), "{:?}", at(40));
+        assert_eq!(at(20), "saved");
+    }
+
+    /// A newer Version is a manifest's or a network response's, so it is text
+    /// from outside and is drawn without its control characters.
+    #[test]
+    fn the_version_tag_draws_no_control_characters() {
+        let drawn = text(status_line(
+            "",
+            Tone::Hint,
+            "0.2.0",
+            Some("0.3.0\x1b[2J"),
+            80,
+        ));
+        assert!(!drawn.contains('\x1b'), "{drawn:?}");
     }
 
     /// A thematic break is the one Preview row whose glyph is not in its text:

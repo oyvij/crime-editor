@@ -36,7 +36,7 @@ Feature: Staying up to date
       version = "0.2.0"
       """
     When CRIME starts in the project
-    Then an Update is available
+    Then an Update to "0.2.0" is available
     And CRIME's checkout is known to be "/home/me/src/crime"
 
   Scenario: A checkout at the same Version offers no Update
@@ -111,7 +111,7 @@ Feature: Staying up to date
     And the review holds no comments
     When I submit the review
     Then the reviewer is told the review is empty
-    And an Update is available
+    And an Update to "0.2.0" is available
 
   # An Update is only a fact until something acts on it, and the thing that acts is an ordinary
   # release build in the terminal pane, where the compiler's output is already readable. It has to
@@ -224,7 +224,7 @@ Feature: Staying up to date
         {"name": "SHA256SUMS", "browser_download_url": "https://example.test/SHA256SUMS"}
       ]}
       """
-    Then an Update is available
+    Then an Update to "0.2.0" is available
     And the remembered Release is "0.2.0" with the Asset "https://example.test/crime-linux-x86_64" and the checksums "https://example.test/SHA256SUMS"
     And no notice was raised
 

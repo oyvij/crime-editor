@@ -1213,9 +1213,9 @@ fn no_checkout_manifest(world: &mut CrimeWorld) {
     world.startup.checkout_manifest = None;
 }
 
-#[then(expr = "an Update is available")]
-fn update_offered(world: &mut CrimeWorld) {
-    assert!(world.state.update_available, "no Update was offered");
+#[then(expr = "an Update to {string} is available")]
+fn update_offered_to(world: &mut CrimeWorld, version: String) {
+    assert_eq!(world.state.update, Some(version));
 }
 
 #[given(expr = "CRIME was built for {string} on {string}")]
@@ -1375,7 +1375,7 @@ fn no_release_remembered(world: &mut CrimeWorld) {
 
 #[then(expr = "no Update is available")]
 fn no_update_offered(world: &mut CrimeWorld) {
-    assert!(!world.state.update_available, "an Update was offered");
+    assert_eq!(world.state.update, None, "an Update was offered");
 }
 
 #[then(expr = "CRIME's checkout is known to be {string}")]

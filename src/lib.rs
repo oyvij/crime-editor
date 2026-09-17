@@ -1692,10 +1692,10 @@ pub struct State {
     /// and not only at the edge, because the rebuild command has to name it —
     /// the terminal pane's working directory is the workspace, not the checkout.
     pub checkout: Option<PathBuf>,
-    /// Whether that checkout claims a Version newer than the Running version.
-    /// Set once at startup and never again: neither number can change while
-    /// CRIME is running, so there is nothing to watch and nothing to dismiss.
-    pub update_available: bool,
+    /// The Version of the Update, when there is one: the checkout's, set once at
+    /// startup, or the Release's, set when it is answered. Neither can change
+    /// afterwards, so there is nothing to watch and nothing to dismiss.
+    pub update: Option<String>,
     /// The Release a binary install found newer than itself, which is what
     /// `:update` will fetch. `None` on a checkout install, and whenever the
     /// answer offered no Update.
@@ -2090,7 +2090,7 @@ impl Default for State {
             comment: None,
             last_tap: None,
             checkout: None,
-            update_available: false,
+            update: None,
             release: None,
             running_version: String::new(),
             replaced: false,
@@ -6042,7 +6042,9 @@ fn on_rebuild(state: &State, mut next: State, event: Event, wheeled: bool) -> An
             next.release = body.and_then(|body| {
                 startup::release(&body, &state.os, &state.arch, &state.running_version)
             });
-            next.update_available |= next.release.is_some();
+            if let Some(release) = &next.release {
+                next.update = Some(release.version.clone());
+            }
             vec![]
         }
 
