@@ -1247,6 +1247,30 @@ fn asks_for_no_release(world: &mut CrimeWorld) {
     );
 }
 
+#[then(expr = "the story sets were read from {string}")]
+fn story_sets_read_at_start(world: &mut CrimeWorld, dir: String) {
+    assert!(
+        world.startup_effects.contains(&Effect::ReadStories {
+            dir: world.startup.root.join(dir),
+            repo: world.startup.root.clone(),
+        }),
+        "starting asked for: {:?}",
+        world.startup_effects
+    );
+}
+
+#[then(expr = "no story sets were read")]
+fn no_story_sets_read_at_start(world: &mut CrimeWorld) {
+    assert!(
+        !world
+            .startup_effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::ReadStories { .. })),
+        "starting asked for: {:?}",
+        world.startup_effects
+    );
+}
+
 #[when("the latest Release answers:")]
 fn release_answers(world: &mut CrimeWorld, step: &Step) {
     let body = step.docstring().expect("docstring").to_string();
@@ -1495,6 +1519,8 @@ fn crime_starts(world: &mut CrimeWorld) {
         world.startup.os = "macos".to_string();
     }
     world.startup.crime_home = Path::new(HOME).join(crime::CRIME_DIR);
+    // The world plays git, and the edge asks it before starting.
+    world.startup.repo = world.state.repo.clone();
     match startup::start(&world.startup) {
         Ok((state, config, effects)) => {
             world.state = state;
@@ -1590,7 +1616,7 @@ fn server_arguments_are(world: &mut CrimeWorld, language: String, step: &Step) {
 
 /// Two promises in one step: no spawn was asked for anywhere, and naming a
 /// server *configures nothing else* either — the allowlist is the two effects
-/// starting already returns.
+/// starting already returns, and the restored view it arrives in.
 #[then(expr = "no language server was started")]
 fn no_language_server_started(world: &mut CrimeWorld) {
     assert!(
@@ -1604,7 +1630,10 @@ fn no_language_server_started(world: &mut CrimeWorld) {
         .filter(|effect| {
             !matches!(
                 effect,
-                Effect::EnsureDir(_) | Effect::AnalyseRisk { .. } | Effect::CheckRelease { .. }
+                Effect::EnsureDir(_)
+                    | Effect::AnalyseRisk { .. }
+                    | Effect::CheckRelease { .. }
+                    | Effect::RenderView(_)
             )
                 && !matches!(effect, Effect::DeleteDir(path) if is_scratch(world, path))
                 && !matches!(effect, Effect::WriteFile { contents, .. } if contents == startup::SEEDED_CONFIG)
@@ -8121,6 +8150,18 @@ fn analysis_in_flight(world: &mut CrimeWorld, name: String) {
 fn analysis_asked_for(world: &mut CrimeWorld, name: String) {
     assert!(
         world
+            .analyses
+            .iter()
+            .any(|asked| asked.scope == scope(&name)),
+        "asked for {:?}",
+        world.analyses
+    );
+}
+
+#[then(expr = "no analysis was asked for over the scope {string}")]
+fn no_analysis_asked_for_scope(world: &mut CrimeWorld, name: String) {
+    assert!(
+        !world
             .analyses
             .iter()
             .any(|asked| asked.scope == scope(&name)),

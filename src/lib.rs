@@ -7626,12 +7626,19 @@ fn open_file(mut next: State, path: PathBuf) -> (State, Vec<Effect>) {
     (next, vec![Effect::OpenBuffer(path)])
 }
 
-/// The one way to change view, so every route into Review does the same work:
-/// land on the first changed file with its diff loading.
+/// The one way to change view. Switching to the view already showing is a
+/// no-op, which is why arriving is [`enter_view`] and not this.
 fn switch_view(state: &State, view: View) -> (State, Vec<Effect>) {
     if view == state.view {
         return (state.clone(), vec![]);
     }
+    enter_view(state, view)
+}
+
+/// What arriving in a view loads, whether it was switched to or started in, so
+/// every route into Review lands on the first changed file with its diff
+/// loading and every route into Story reads the story sets.
+pub(crate) fn enter_view(state: &State, view: View) -> (State, Vec<Effect>) {
     if view == View::Review {
         return update(state, Event::OpenReviewView);
     }

@@ -54,6 +54,31 @@ Feature: Configuration and state
     When CRIME starts in the project
     Then the current view is Review
 
+  Scenario: Starting in a restored Story view reads the story sets
+    Given a story set exists for the range "aaaaaaaaaaaa..bbbbbbbbbbbb"
+    And the project ".crime/state.json" records the last view as "Story"
+    When CRIME starts in the project
+    Then the story sets were read from ".crime/stories"
+    And the story view state is "spine"
+
+  Scenario: Starting in a restored Edit view reads no story sets
+    Given a story set exists for the range "aaaaaaaaaaaa..bbbbbbbbbbbb"
+    And the project ".crime/state.json" records the last view as "Edit"
+    When CRIME starts in the project
+    Then no story sets were read
+
+  Scenario: Starting in a restored Review view lands on the first changed file
+    Given the working tree contains:
+      | path        | git status |
+      | src/tree.js | modified   |
+    And the project ".crime/state.json" records the last view as "Review"
+    When CRIME starts in the project
+    Then the tree selection is "src/tree.js"
+    And the diff for "src/tree.js" is shown
+    And the file tree pane has focus
+    And an analysis was asked for over the scope "review"
+    And no analysis was asked for over the scope "workspace"
+
   Scenario: Starting never touches the project's git files
     Given the project has a ".gitignore"
     And the project has no ".crime" folder

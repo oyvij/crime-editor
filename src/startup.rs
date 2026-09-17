@@ -483,6 +483,10 @@ pub struct Startup {
     /// not there.
     pub risk_json: Option<String>,
     pub head: Option<String>,
+    /// git's answer, as `State::repo` holds it. Handed in rather than told
+    /// after starting, because a session restored into Review view lands on
+    /// the first changed file, and without it there is none to land on.
+    pub repo: Option<Vec<crate::review::GitFile>>,
     /// The directory above the running binary, if the edge found one. Whether it
     /// is CRIME's own checkout is decided here, not there.
     pub checkout: Option<PathBuf>,
@@ -920,12 +924,23 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
     // A Bare workspace is the exception, and for the same reason the seed is:
     // the figure would be measured into a Sidecar deleted at exit. Nothing is
     // removed — the Risk pane's own recompute still measures on demand.
-    match cached(input) {
-        Some(figures) => state.risk.figure = risk::Figure::Current(figures),
-        None if input.sidecar.is_none() => {
-            effects.push(risk::analyse(&mut state, Scope::Workspace));
-        }
-        None => {}
+    let cache = cached(input);
+    let unmeasured = cache.is_none();
+    if let Some(figures) = cache {
+        state.risk.figure = risk::Figure::Current(figures);
+    }
+
+    // Starting in a view is arriving in it, and arriving loads what the view
+    // shows: Story's sets, Review's first diff and its own figure. After the
+    // cache, so a restored Review treats the workspace figure exactly as
+    // switching into Review would.
+    let (mut state, entered) = crate::enter_view(&state, state.view);
+    effects.extend(entered);
+
+    // Review view asked for its own Scope on the way in, and a workspace job
+    // would only be superseded by it.
+    if unmeasured && input.sidecar.is_none() && !state.risk.in_flight() {
+        effects.push(risk::analyse(&mut state, Scope::Workspace));
     }
     Ok((state, config, effects))
 }
@@ -1126,6 +1141,7 @@ fn initial_state(
         checkout,
         update_available,
         head: input.head.clone(),
+        repo: input.repo.clone(),
         ..State::default()
     }
 }
