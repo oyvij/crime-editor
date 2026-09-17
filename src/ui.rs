@@ -286,12 +286,18 @@ fn draw_ai_pane(
 }
 
 fn draw_status(frame: &mut Frame, state: &State, chrome: &Chrome) {
-    let line = Rect {
+    let row = Rect {
         y: frame.area().height.saturating_sub(1),
         height: 1,
         ..frame.area()
     };
-    frame.render_widget(Clear, line);
+    // The whole row is cleared but only its middle is written to, so the status
+    // sits inside the columns the panes' borders occupy rather than on them.
+    let line = row.inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
+    frame.render_widget(Clear, row);
     frame.render_widget(
         Paragraph::new(status_line(
             chrome.status,
