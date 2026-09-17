@@ -278,7 +278,7 @@ process, deleted when CRIME exits and swept on start when a crash escaped that. 
 to CRIME, never what belongs to the user: a Guest repo, a story set, a session's `state.json`. A
 submitted review is the one thing that does not go here, because an output destroyed at exit is a
 different kind of nothing than a trace not left.
-_Avoid_: scratch (taken twice — `.scratch/` is the issue tracker, `~/.crime/tmp/` is a Reading's
+_Avoid_: scratch (taken twice — `.scratch/` is the old issue tracker's archive, `~/.crime/tmp/` is a Reading's
 audio), shadow, cache, temp folder
 
 ### Walking a change

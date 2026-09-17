@@ -3,9 +3,9 @@
 The skills speak in terms of five canonical triage roles. This file maps those roles to the actual
 label strings used in this repo's issue tracker.
 
-This tracker is file-based, so there are no labels to apply. The right-hand column is the string
-written to the `Status:` line near the top of an issue file — `Status: ready-for-agent`. One status
-per file; changing state means rewriting that line, not adding a second one.
+The right-hand column is the GitHub label applied to the issue. One triage label per issue; changing
+state means removing the old label as the new one is added (`gh issue edit <n> --remove-label … --add-label …`).
+A label that does not exist on the repo yet is created with `gh label create <name>`.
 
 | Label in mattpocock/skills | Label in our tracker | Meaning                                  |
 | -------------------------- | -------------------- | ---------------------------------------- |
@@ -16,8 +16,8 @@ per file; changing state means rewriting that line, not adding a second one.
 | `wontfix`                  | `wontfix`            | Will not be actioned                     |
 
 These five are the roles `/triage` moves an issue between. They are triage states, not progress: a
-finished ticket does not appear here, because on a hosted tracker finishing means *closing* the
-issue. This tracker is file-based and has no close, so `issue-tracker.md` defines one.
+finished ticket does not appear here, because finishing means *closing* the issue — see
+`issue-tracker.md`.
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label
 string from this table.

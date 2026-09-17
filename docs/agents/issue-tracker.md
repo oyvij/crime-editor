@@ -1,51 +1,63 @@
-# Issue tracker: Local Markdown
+# Issue tracker: GitHub
 
-Issues and specs for this repo live as markdown files in `.scratch/`.
+Issues and specs for this repo live as GitHub issues on `oyvij/crime-editor`. Use the `gh` CLI for
+all operations. The repo is **public**: an issue is published the moment it is created, so nothing
+goes in one that could not go in a commit.
 
 ## Conventions
 
-- One feature per directory: `.scratch/<feature-slug>/`
-- The spec is `.scratch/<feature-slug>/spec.md`
-- Implementation issues are one file per ticket at `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` — never a single combined tickets file
-- Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
-- Comments and conversation history append to the bottom of the file under a `## Comments` heading
+- **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
+- **Read an issue**: `gh issue view <number> --comments`, filtering comments by `jq` and also fetching labels.
+- **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
+- **Comment on an issue**: `gh issue comment <number> --body "..."`
+- **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
+- **Close**: `gh issue close <number> --comment "..."`
+- **A spec** is an issue of its own; its implementation tickets are sub-issues of it, so one feature
+  is still one place to look.
+
+Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
+
+## Pull requests as a triage surface
+
+**PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
+
+When set to `yes`, PRs run through the same labels and states as issues, using the `gh pr` equivalents:
+
+- **Read a PR**: `gh pr view <number> --comments` and `gh pr diff <number>` for the diff.
+- **List external PRs for triage**: `gh pr list --state open --json number,title,body,labels,author,authorAssociation,comments` then keep only `authorAssociation` of `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, or `NONE` (drop `OWNER`/`MEMBER`/`COLLABORATOR`).
+- **Comment / label / close**: `gh pr comment`, `gh pr edit --add-label`/`--remove-label`, `gh pr close`.
+
+GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42` and fall back to `gh issue view 42`.
 
 ## What this tracker is not
 
 `AGENTS.md` says the cucumber suite is the single source of truth for what is *done*, and that no
 hand-written progress checklist may live anywhere, because it drifts. That rule still holds. This
 tracker records work that is *intended* — a spec to write, a question to settle, a ticket to pick
-up. It never records feature status. Do not mirror scenario or feature completion into `.scratch/`:
-run `cargo test` instead. `docs/example-map.md` tracks the spec; the suite tracks the work; this
-tracker tracks the queue.
+up. It never records feature status. Do not mirror scenario or feature completion into issues: run
+`cargo test` instead. `docs/example-map.md` tracks the spec; the suite tracks the work; this tracker
+tracks the queue.
 
-Issue files are committed — they are shared artifacts, not per-user scratch state.
+## The `.scratch/` archive
+
+Until this switch, issues lived as markdown files under `.scratch/<feature-slug>/`, and
+`docs/example-map.md` still points into them for the reasoning behind shipped features. They are
+kept as a read-only archive: read them when a link leads there, never add a file or rewrite a
+`Status:` line. New work goes to GitHub.
 
 ## Closing a ticket
 
-The five triage roles in `triage-labels.md` have no "done": on a hosted tracker, finishing a ticket
-means **closing the issue**, and `/triage` only ever closes for `wontfix`. A file-based tracker has
-no close, so this is it — and without it, finished tickets sit at `ready-for-agent` forever. Ten of
-them did, which is how nine shipped features came to look untouched.
-
 When the work is merged and the suite is green:
 
-- Rewrite the `Status:` line to `resolved`. Same vocabulary the wayfinding section below already
-  uses, so the tracker has one word for "out of the queue" rather than two.
-- Append what the next reader needs under `## Comments` — the decision taken, the binding chosen,
+- Tick the `- [ ]` acceptance criteria in the issue body you actually implemented and verified. Tick
+  a box only once its behaviour is covered by a passing test; never tick ahead of the suite.
+- Close with a comment carrying what the next reader needs — the decision taken, the binding chosen,
   the thing that turned out to be wrong. `/implement` does not do this; it implements and commits.
-  The rationale is the part no diff carries, and it is why these files are committed.
-- Tick the `- [ ]` acceptance criteria you actually implemented and verified — this is the only place
-  ticket-level progress is visible, and a ticket closed with boxes still unticked is as unreadable
-  as one left at `ready-for-agent`. Tick a box only once its behaviour is covered by a passing test;
-  never tick ahead of the suite.
+  The rationale is the part no diff carries.
 
-`resolved` is a queue state, never a claim about the code — `cargo test` is still the only thing
+A closed issue is a queue state, never a claim about the code — `cargo test` is still the only thing
 that says a feature works. The boxes are not a second copy of that claim: they record *which* of a
 ticket's criteria this pass covered, for a ticket only partly done or picked up by someone else.
-This is different from the hand-written *feature-status* checklist `AGENTS.md` bans elsewhere: that
-rule is about not shadowing the suite's pass/fail with a parallel tracker that can disagree with it;
-a ticket's own criteria, ticked only as the suite confirms them, cannot drift the same way.
 
 ## Do not use git worktrees for tickets
 
@@ -57,19 +69,19 @@ to the current branch". Work tickets on a branch in this checkout.
 
 ## When a skill says "publish to the issue tracker"
 
-Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
+Create a GitHub issue.
 
 ## When a skill says "fetch the relevant ticket"
 
-Read the file at the referenced path. The user will normally pass the path or the issue number directly.
+Run `gh issue view <number> --comments`.
 
 ## Wayfinding operations
 
-Used by `/wayfinder`. The **map** is a file with one **child** file per ticket.
+Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.
 
-- **Map**: `.scratch/<effort>/map.md` — the Notes / Decisions-so-far / Fog body.
-- **Child ticket**: `.scratch/<effort>/issues/NN-<slug>.md`, numbered from `01`, with the question in the body. A `Type:` line records the ticket type (`research`/`prototype`/`grilling`/`task`); a `Status:` line records `claimed`/`resolved`.
-- **Blocking**: a `Blocked by: NN, NN` line near the top. A ticket is unblocked when every file it lists is `resolved`.
-- **Frontier**: scan `.scratch/<effort>/issues/` for files that are open, unblocked, and unclaimed; first by number wins.
-- **Claim**: set `Status: claimed` and save before any work.
-- **Resolve**: append the answer under an `## Answer` heading, set `Status: resolved`, then append a context pointer (gist + link) to the map's Decisions-so-far in `map.md`.
+- **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --label wayfinder:map`.
+- **Child ticket**: an issue linked to the map as a GitHub sub-issue (`gh api` on the sub-issues endpoint). Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
+- **Blocking**: GitHub's **native issue dependencies**, the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only, the live gate). Where dependencies aren't available, fall back to a `Blocked by: #<n>, #<n>` line at the top of the child body. A ticket is unblocked when every blocker is closed.
+- **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
+- **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
+- **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.

@@ -4,11 +4,11 @@
 
 ### Issue tracker
 
-Issues live as markdown files under `.scratch/<feature-slug>/` in this repo. See `docs/agents/issue-tracker.md`.
+Issues live as GitHub issues on `oyvij/crime-editor`, driven with the `gh` CLI; `.scratch/` is a read-only archive of the old local tracker. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-The five canonical roles, unrenamed, recorded as a `Status:` line in each issue file. See `docs/agents/triage-labels.md`.
+The five canonical roles, unrenamed, applied as GitHub labels. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
