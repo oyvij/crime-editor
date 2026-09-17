@@ -96,6 +96,7 @@ fn main() -> Result<()> {
         state_json: read(&crime_dir(&root, sidecar.as_deref()).join(STATE_FILE)),
         risk_json: read(&crime_dir(&root, sidecar.as_deref()).join(crime::risk::FILE)),
         head: head_commit(&root),
+        repo: git_status(&root),
         reviews: numbered(&crime::reviews_dir(&root, sidecar.as_deref(), &crime_home)),
         root: root.clone(),
         sidecar,
@@ -789,7 +790,6 @@ fn run(
     // Over SSH there is no system clipboard, and copying has to reach the
     // machine the user is actually sitting at.
     state.system_clipboard = edge.clipboard.is_some();
-    state.repo = git_status(&root);
     state.branch = head_branch(&root);
     state.file_hunks = file_hunks(
         state.repo_root(),
