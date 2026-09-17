@@ -293,7 +293,9 @@ copying with nothing selected does nothing.
 | `Ctrl+V` or `Cmd+V` | paste the clipboard into the Buffer as one edit, in whatever mode it is in |
 
 Ctrl and Command are aliases on both. Over SSH, with no system clipboard to reach, copying falls
-back to the terminal (OSC 52) so the text still lands on the machine you are sitting at. A paste
+back to the terminal (OSC 52) so the text still lands on the machine you are sitting at — if that
+terminal honours it: iTerm2 asks you to allow clipboard access, Apple's Terminal ignores it, and a
+tmux in between needs `set -g set-clipboard on`. A paste
 keeps its line breaks however the source spelled them. A Preview refuses a paste out loud; a diff or
 a walked Site pastes nothing rather than editing a file nobody is looking at. `y` and `p` are the
 register's, a separate world from the clipboard — yanking also copies, putting does not read the

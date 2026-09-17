@@ -1,6 +1,6 @@
 [package]
 name = "crime"
-version = "0.143.0"
+version = "0.143.1"
 edition = "2021"
 description = "CRIME — Command · Review · Integrated · Modal · Editor"
 license = "MIT"
@@ -11,7 +11,7 @@ readme = "README.md"
 anyhow = "1.0.104"
 arboard = "3.6.1"
 clap = { version = "4.6.6", features = ["derive"] }
-crossterm = "0.29.0"
+crossterm = { version = "0.29.0", features = ["osc52"] }
 git2 = "0.21.0"
 ignore = "0.4.33"
 libc = "0.2.180"

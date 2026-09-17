@@ -2285,11 +2285,13 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
             }
         }
         // OSC 52: the terminal puts it on the clipboard of whatever machine you
-        // are actually sitting at.
+        // are actually sitting at. That terminal is CRIME's own stdout: sent to
+        // the shell pane, the sequence was typed at its prompt and copied nothing.
         Effect::ClipboardViaTerminal(text) => {
-            let encoded = base64(text.as_bytes());
-            edge.shell(split)
-                .send(format!("\x1b]52;c;{encoded}\x07").as_bytes());
+            let _ = execute!(
+                std::io::stdout(),
+                crossterm::clipboard::CopyToClipboard::to_clipboard_from(text)
+            );
         }
         // Exhaustive on purpose: a catch-all here sent the AI pane's bytes to
         // the shell whenever its child was gone, which would have run a review
@@ -3877,24 +3879,6 @@ fn notice_text(notice: &str) -> (&str, ui::Tone) {
         .map_or((notice, ui::Tone::Warning), |(_, text, tone)| {
             (*text, *tone)
         })
-}
-
-fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for chunk in bytes.chunks(3) {
-        let mut buffer = [0u8; 3];
-        buffer[..chunk.len()].copy_from_slice(chunk);
-        let packed = u32::from_be_bytes([0, buffer[0], buffer[1], buffer[2]]);
-        for index in 0..4 {
-            if index <= chunk.len() {
-                out.push(ALPHABET[(packed >> (18 - index * 6) & 0x3f) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
 }
 
 /// Adds and drops watches to match the folders the core says it needs — never a
