@@ -72,7 +72,7 @@ pub struct Drafts {
 /// surface does not. It lives
 /// here rather than in the renderer so a test can hold it to the bindings
 /// above; `ui` only draws it, filtered to the view on screen.
-pub const CHEATSHEET: [(&str, &str, &[View]); 42] = [
+pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
     ("i a o O x", "edit", &[View::Edit]),
     ("w b e", "word", &[View::Edit]),
     ("gg G", "file ends", &[View::Edit]),
@@ -169,6 +169,7 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 42] = [
     ("n p", "step", &[View::Story]),
     ("j k", "scroll", &[View::Story]),
     ("d", "step detail", &[View::Story]),
+    ("D", "show the diff", &[View::Story]),
     ("g", "jump to citation", &[View::Story]),
     ("c", "comment", &[View::Story]),
     ("Esc", "back to spine", &[View::Story]),
@@ -1669,7 +1670,11 @@ mod tests {
                 ..inserting.clone()
             },
             State {
-                walking: Some(story::Walking::Story { story: 0, step: 0 }),
+                walking: Some(story::Walking::Story {
+                    story: 0,
+                    step: 0,
+                    diff: story::Diff::Hidden,
+                }),
                 ..inserting.clone()
             },
         ] {
@@ -1746,7 +1751,11 @@ mod tests {
                 ..inserting.clone()
             },
             State {
-                walking: Some(story::Walking::Story { story: 0, step: 0 }),
+                walking: Some(story::Walking::Story {
+                    story: 0,
+                    step: 0,
+                    diff: story::Diff::Hidden,
+                }),
                 ..inserting.clone()
             },
         ] {
@@ -1789,7 +1798,11 @@ mod tests {
             Pasted::AsKeys(_)
         ));
         let walking = State {
-            walking: Some(story::Walking::Story { story: 0, step: 0 }),
+            walking: Some(story::Walking::Story {
+                story: 0,
+                step: 0,
+                diff: story::Diff::Hidden,
+            }),
             ..inserting.clone()
         };
         assert!(matches!(
@@ -3633,7 +3646,11 @@ mod tests {
             view: View::Story,
             focus: Pane::Editor,
             story_set: story::Set::Loaded(artifact),
-            walking: Some(story::Walking::Story { story: 0, step: 0 }),
+            walking: Some(story::Walking::Story {
+                story: 0,
+                step: 0,
+                diff: story::Diff::Hidden,
+            }),
             ..opened
         };
         // Off the buffer's corner for the same reason [`editing`] walks off it:

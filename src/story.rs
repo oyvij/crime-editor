@@ -1341,8 +1341,23 @@ pub fn same_set(loaded: &Artifact, arrived: &Artifact) -> bool {
 /// rather than letting either run off either end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Walking {
-    Story { story: usize, step: usize },
-    Remainder { index: usize },
+    Story {
+        story: usize,
+        step: usize,
+        diff: Diff,
+    },
+    Remainder {
+        index: usize,
+    },
+}
+
+/// Whether `D` has laid the Range's diff over the Site. Part of the position
+/// rather than a field of its own on `State`, so it cannot be shown with no
+/// Story being walked, survives `n`/`p`, and is gone with the walk it belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Diff {
+    Hidden,
+    Shown,
 }
 
 /// The narration band's fixed height in Story view (ADR "the narration
@@ -1386,7 +1401,7 @@ pub struct StepMenuRow {
 /// Mirrors [`mark`]'s precedent: one pure query, the widget draws what it is
 /// told.
 pub fn step_menu(state: &State) -> Vec<StepMenuRow> {
-    let Some(Walking::Story { story, step }) = state.walking else {
+    let Some(Walking::Story { story, step, .. }) = state.walking else {
         return Vec::new();
     };
     let Set::Loaded(artifact) = &state.story_set else {
@@ -1439,7 +1454,7 @@ pub fn detail_sections(state: &State, step: &Step) -> Vec<&'static str> {
 /// walked, or the Remainder being walked instead — the Remainder is never a
 /// Story, so it never has a Step to answer with.
 pub fn current_step(state: &State) -> Option<&Step> {
-    let Walking::Story { story, step } = state.walking? else {
+    let Walking::Story { story, step, .. } = state.walking? else {
         return None;
     };
     match &state.story_set {
@@ -2038,6 +2053,14 @@ pub fn mark(state: &State) -> SiteMark {
     }
 }
 
+/// Whether the code surface draws the old-side notice instead of code: an
+/// old-side Site, unless `D` is showing the Range's diff over it — the one way
+/// its old text is shown truthfully, as the rows the change removed. Asked by
+/// the renderer, the caret and both scroll clamps, which must agree on it.
+pub fn refused(state: &State) -> bool {
+    matches!(mark(state), SiteMark::Refused) && site_diff(state).is_none()
+}
+
 /// The file on screen, relative to the repository under review — the spelling
 /// a Site is authored with, and so the one the mark and the comment lookup must
 /// use. The buffer's path is absolute; comparing that finds nothing and shows no
@@ -2068,6 +2091,10 @@ pub fn shown_file(state: &State) -> String {
 pub enum Row<'a> {
     Code(u32),
     Comment(&'a crate::review::Comment),
+    /// A line the Range removed, drawn where it was while [`Diff::Shown`]. It
+    /// has no line in the buffer, so it answers the line it sits under, the
+    /// way a comment row does.
+    Removed(String),
 }
 
 /// Story view's rows for a code surface of `lines` lines: every line in order,
@@ -2089,15 +2116,159 @@ pub fn rows(state: &State, lines: usize) -> Vec<Row<'_>> {
         Some(_) => shown_file(state),
         None => return shown.map(Row::Code).collect(),
     };
-    shown
-        .flat_map(|number| {
-            std::iter::once(Row::Code(number)).chain(
-                crate::review::comments_at(state, &file, number)
-                    .into_iter()
-                    .map(Row::Comment),
-            )
-        })
+    // Under the comments: a comment is about the line above it, and a removed
+    // line is about the gap before the next one.
+    let removed = site_diff(state).map_or_else(Vec::new, |diff| diff.removed);
+    let removed_under = |line: u32| {
+        removed
+            .iter()
+            .filter(move |(under, _)| *under == line)
+            .map(|(_, text)| Row::Removed(text.clone()))
+    };
+    removed_under(0)
+        .chain(shown.flat_map(|number| {
+            std::iter::once(Row::Code(number))
+                .chain(
+                    crate::review::comments_at(state, &file, number)
+                        .into_iter()
+                        .map(Row::Comment),
+                )
+                .chain(removed_under(number))
+        }))
         .collect()
+}
+
+/// What the Range changed inside a Site: the new-side lines it added, and the
+/// lines it removed, each with the new-side line it sits under (0 above the
+/// first).
+#[derive(Debug, PartialEq, Eq)]
+pub struct SiteDiff {
+    pub added: Vec<u32>,
+    pub removed: Vec<(u32, String)>,
+}
+
+/// The Range's diff over the current Step's Site, or `None` wherever `D` draws
+/// nothing: the diff hidden, the Remainder, a context Site — which the change
+/// did not touch by definition — or a file on screen other than the Site's,
+/// which `g` leaves the walk on.
+///
+/// The Range's two sides, `old_text` against `head_text`, never the buffer: the
+/// question is what the change did, and the buffer is what the reviewer has
+/// done since.
+pub fn site_diff(state: &State) -> Option<SiteDiff> {
+    let Some(Walking::Story {
+        diff: Diff::Shown, ..
+    }) = state.walking
+    else {
+        return None;
+    };
+    let site = &current_step(state)?.site;
+    if site.kind == Kind::Context || shown_file(state) != site.file {
+        return None;
+    }
+    let file = state
+        .file_hunks
+        .iter()
+        .find(|file| file.file == site.file)?;
+    Some(changes(
+        &file.old_text,
+        &file.head_text,
+        site.side,
+        site.from,
+        site.to,
+    ))
+}
+
+/// One run of `-` and `+` lines between two context lines, which is the unit a
+/// Site either reaches or does not: an edited line is a removal and an
+/// addition, and showing one without the other shows half the edit.
+#[derive(Default)]
+struct Block {
+    removed: Vec<(u32, u32, String)>,
+    added: Vec<u32>,
+}
+
+/// [`site_diff`] over two texts. A new-side Site takes the blocks with an
+/// addition inside it, or a bare deletion between two of its lines, and marks
+/// only the additions inside it — code outside a Site is drawn as it always
+/// is. An old-side Site names removed lines, so it takes the blocks that
+/// removed one of them, whole. `git2` finds the lines, for the reason [`hunks`]
+/// asks it for the boundaries.
+fn changes(old: &str, new: &str, side: Side, from: u32, to: u32) -> SiteDiff {
+    let mut diff = SiteDiff {
+        added: Vec::new(),
+        removed: Vec::new(),
+    };
+    let Ok(patch) = git2::Patch::from_buffers(old.as_bytes(), None, new.as_bytes(), None, None)
+    else {
+        return diff;
+    };
+    let mut keep = |block: Block| {
+        let reached = match side {
+            Side::New if block.added.is_empty() => block
+                .removed
+                .first()
+                .is_some_and(|(_, under, _)| (from..to).contains(under)),
+            Side::New => block.added.iter().any(|line| (from..=to).contains(line)),
+            Side::Old => block
+                .removed
+                .iter()
+                .any(|(line, _, _)| (from..=to).contains(line)),
+        };
+        if !reached {
+            return;
+        }
+        diff.added.extend(
+            block
+                .added
+                .into_iter()
+                .filter(|line| side == Side::Old || (from..=to).contains(line)),
+        );
+        diff.removed.extend(
+            block
+                .removed
+                .into_iter()
+                .map(|(_, under, text)| (under, text)),
+        );
+    };
+    for hunk in 0..patch.num_hunks() {
+        let Ok((header, count)) = patch.hunk(hunk) else {
+            continue;
+        };
+        // git names the line *before* a deletion as the start of an empty new
+        // side, and the first line of a non-empty one.
+        let mut under = match header.new_lines() {
+            0 => header.new_start(),
+            _ => header.new_start().saturating_sub(1),
+        };
+        let mut block = Block::default();
+        for index in 0..count {
+            let Ok(line) = patch.line_in_hunk(hunk, index) else {
+                continue;
+            };
+            match (line.origin(), line.old_lineno(), line.new_lineno()) {
+                ('-', Some(old_line), _) => block.removed.push((
+                    old_line,
+                    under,
+                    String::from_utf8_lossy(line.content())
+                        .trim_end_matches(['\n', '\r'])
+                        .to_string(),
+                )),
+                ('+', _, Some(new_line)) => {
+                    under = new_line;
+                    block.added.push(new_line);
+                }
+                (' ', _, Some(new_line)) => {
+                    keep(std::mem::take(&mut block));
+                    under = new_line;
+                }
+                // The "no newline at end of file" markers, which are no line.
+                _ => {}
+            }
+        }
+        keep(block);
+    }
+    diff
 }
 
 /// The screen row a line is drawn on, 1-based, counting the comment rows above
@@ -3780,7 +3951,11 @@ from b
             "Story",
             vec![step("s1", site("keys.rs", Side::New, Kind::Changed, 2, 4))],
         )]);
-        state.walking = Some(Walking::Story { story: 0, step: 0 });
+        state.walking = Some(Walking::Story {
+            story: 0,
+            step: 0,
+            diff: Diff::Hidden,
+        });
         assert_eq!(
             mark(&state),
             SiteMark::Site {
@@ -3801,7 +3976,11 @@ from b
             "Story",
             vec![step("s1", site("keys.rs", Side::New, Kind::Context, 2, 2))],
         )]);
-        state.walking = Some(Walking::Story { story: 0, step: 0 });
+        state.walking = Some(Walking::Story {
+            story: 0,
+            step: 0,
+            diff: Diff::Hidden,
+        });
         assert!(matches!(
             mark(&state),
             SiteMark::Site {
@@ -3879,7 +4058,11 @@ from b
                 ),
             ],
         )]);
-        state.walking = Some(Walking::Story { story: 0, step: 0 });
+        state.walking = Some(Walking::Story {
+            story: 0,
+            step: 0,
+            diff: Diff::Hidden,
+        });
         assert_eq!(
             step_menu(&state),
             vec![
@@ -3921,7 +4104,11 @@ from b
                 ),
             ],
         )]);
-        state.walking = Some(Walking::Story { story: 0, step: 1 });
+        state.walking = Some(Walking::Story {
+            story: 0,
+            step: 1,
+            diff: Diff::Hidden,
+        });
         let current: Vec<String> = step_menu(&state)
             .into_iter()
             .filter(|row| row.current)
@@ -3952,7 +4139,11 @@ from b
                 ),
             ],
         )]);
-        state.walking = Some(Walking::Story { story: 0, step: 2 });
+        state.walking = Some(Walking::Story {
+            story: 0,
+            step: 2,
+            diff: Diff::Hidden,
+        });
         let current: Vec<String> = step_menu(&state)
             .into_iter()
             .filter(|row| row.current)
@@ -3975,7 +4166,11 @@ from b
             )],
         )]);
         state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\n", "a\nX\nc\n")];
-        state.walking = Some(Walking::Story { story: 0, step: 0 });
+        state.walking = Some(Walking::Story {
+            story: 0,
+            step: 0,
+            diff: Diff::Hidden,
+        });
         assert!(matches!(mark(&state), SiteMark::Site { to: 900, .. }));
     }
 
@@ -3988,7 +4183,11 @@ from b
             "Story",
             vec![step("s1", site("keys.rs", Side::Old, Kind::Changed, 2, 2))],
         )]);
-        state.walking = Some(Walking::Story { story: 0, step: 0 });
+        state.walking = Some(Walking::Story {
+            story: 0,
+            step: 0,
+            diff: Diff::Hidden,
+        });
         assert_eq!(mark(&state), SiteMark::Refused);
     }
 
@@ -4042,7 +4241,11 @@ from b
             root: std::path::PathBuf::from("/work"),
             current_buffer: Some(std::path::PathBuf::from("/work").join(file)),
             comments,
-            walking: Some(Walking::Story { story: 0, step: 0 }),
+            walking: Some(Walking::Story {
+                story: 0,
+                step: 0,
+                diff: Diff::Hidden,
+            }),
             ..State::default()
         }
     }
@@ -4071,7 +4274,7 @@ from b
                 .into_iter()
                 .filter_map(|row| match row {
                     Row::Code(number) => Some(number),
-                    Row::Comment(_) => None,
+                    Row::Comment(_) | Row::Removed(_) => None,
                 })
                 .collect::<Vec<_>>(),
             vec![1, 2, 3]
@@ -4167,6 +4370,145 @@ from b
         for line in 1..=6u32 {
             assert_eq!(line_at_row(&state, row_of(&state, line)), line as usize);
         }
+    }
+
+    const BASE: &str = "a\nb\nc\nd\ne\nf\n";
+
+    /// Walking a Site of `src/keys.rs` with `D` showing the diff from [`BASE`]
+    /// to `head`, and the buffer open on `head`.
+    fn diff_shown(head: &str, side: Side, from: u32, to: u32) -> State {
+        let path = std::path::PathBuf::from("/work/src/keys.rs");
+        let mut state = State {
+            root: std::path::PathBuf::from("/work"),
+            current_buffer: Some(path.clone()),
+            file_hunks: vec![file_hunks("src/keys.rs", BASE, head)],
+            ..loaded(vec![(
+                "Story",
+                vec![step(
+                    "s1",
+                    site("src/keys.rs", side, Kind::Changed, from, to),
+                )],
+            )])
+        };
+        state
+            .buffers
+            .insert(path, crate::editor::Buffer::open(head, false, 4));
+        state.walking = Some(Walking::Story {
+            story: 0,
+            step: 0,
+            diff: Diff::Shown,
+        });
+        state
+    }
+
+    /// An edit that straddles the Site's edge: the addition inside it is marked
+    /// and the one outside is not, because code outside a Site is drawn as it
+    /// always is — while the removal is the whole edit's, since half an edit
+    /// shows a line replaced by nothing.
+    #[test]
+    fn a_new_side_site_marks_only_the_additions_inside_it() {
+        assert_eq!(
+            changes(BASE, "a\nB\nC\nd\ne\nf\n", Side::New, 3, 5),
+            SiteDiff {
+                added: vec![3],
+                removed: vec![(1, "b".to_string()), (1, "c".to_string())],
+            }
+        );
+    }
+
+    #[test]
+    fn a_deletion_between_a_sites_lines_is_shown_and_one_beside_it_is_not() {
+        let head = "a\nb\nd\ne\nf\n";
+        assert_eq!(
+            changes(BASE, head, Side::New, 1, 3).removed,
+            vec![(2, "c".to_string())]
+        );
+        assert_eq!(changes(BASE, head, Side::New, 3, 5).removed, vec![]);
+    }
+
+    /// Removed at the top of the file: there is no line above to sit under.
+    #[test]
+    fn a_deletion_of_the_first_line_sits_above_the_first_row() {
+        assert_eq!(
+            changes(BASE, "b\nc\nd\ne\nf\n", Side::Old, 1, 1).removed,
+            vec![(0, "a".to_string())]
+        );
+    }
+
+    /// An old-side Site names removed lines, so it takes what replaced them as
+    /// well — and nothing from an edit that removed none of its lines.
+    #[test]
+    fn an_old_side_site_takes_the_edit_that_removed_its_lines_whole() {
+        assert_eq!(
+            changes(BASE, "X\nb\nc\nd\nY\nf\n", Side::Old, 5, 5),
+            SiteDiff {
+                added: vec![5],
+                removed: vec![(4, "e".to_string())],
+            }
+        );
+    }
+
+    #[test]
+    fn a_hidden_diff_and_a_context_site_draw_nothing() {
+        let mut hidden = diff_shown("a\nB\nc\nd\ne\nf\n", Side::New, 1, 3);
+        hidden.walking = Some(Walking::Story {
+            story: 0,
+            step: 0,
+            diff: Diff::Hidden,
+        });
+        assert_eq!(site_diff(&hidden), None);
+        let Set::Loaded(artifact) = &mut hidden.story_set else {
+            unreachable!("the helper loads one")
+        };
+        artifact.stories[0].steps[0].site.kind = Kind::Context;
+        hidden.walking = Some(Walking::Story {
+            story: 0,
+            step: 0,
+            diff: Diff::Shown,
+        });
+        assert_eq!(site_diff(&hidden), None);
+    }
+
+    #[test]
+    fn a_removed_row_sits_under_the_line_before_it_and_pushes_the_rest_down() {
+        let state = diff_shown("a\nB\nc\nd\ne\nf\n", Side::New, 1, 3);
+        assert_eq!(
+            rows(&state, 3),
+            vec![
+                Row::Code(1),
+                Row::Removed("b".to_string()),
+                Row::Code(2),
+                Row::Code(3),
+            ]
+        );
+        assert_eq!(row_of(&state, 2), 3);
+        assert_eq!(row_of(&state, 3), 4);
+    }
+
+    /// A click on a removed row has no buffer line of its own to land on, so it
+    /// lands where a click on a comment does: on the line the row sits under.
+    /// The rows below it still name the lines drawn on them.
+    #[test]
+    fn a_click_on_a_removed_row_lands_on_the_line_it_sits_under() {
+        let state = diff_shown("a\nB\nc\nd\ne\nf\n", Side::New, 1, 3);
+        assert_eq!(line_at_row(&state, 2), 1);
+        assert_eq!(line_at_row(&state, 3), 2);
+        assert_eq!(line_at_row(&state, 7), 6);
+        for line in 1..=6u32 {
+            assert_eq!(line_at_row(&state, row_of(&state, line)), line as usize);
+        }
+    }
+
+    /// The scroll clamp bounds rows, so the last line is reachable with removed
+    /// rows above it — and an old-side Site under `D` is code to scroll rather
+    /// than a notice with nothing to scroll.
+    #[test]
+    fn the_scroll_clamp_counts_removed_rows() {
+        let state = diff_shown("a\nB\nC\nd\ne\nf", Side::New, 1, 3);
+        assert_eq!(crate::editor_focus(&state, &[]).1, 8);
+        let old = diff_shown("a\nB\nC\nd\ne\nf", Side::Old, 2, 3);
+        assert!(!refused(&old));
+        assert_eq!(crate::editor_focus(&old, &[]).1, 8);
     }
 
     #[test]
