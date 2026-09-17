@@ -1206,7 +1206,8 @@ narrates, still opens, still takes a comment — a stale step is often exactly w
 base moves under it.
 **R24.10** A comment **records its story and step** alongside file, line, type and revision, so a
 submitted review says which *claim* the reviewer rejected.
-**R24.11** A Walkthrough is **discarded when its Story is re-authored** (Q62).
+**R24.11** A Walkthrough is **not remembered**: entering a Story starts at its first Step every time,
+and nothing survives a restart (Q62).
 
 - ✅ Entering a story puts the cursor on the first step's site
 - ✅ Stepping forward moves the cursor and the claim together
@@ -1231,9 +1232,6 @@ submitted review says which *claim* the reviewer rejected.
 - ✅ Committing an uncommitted range moves the base under an old-side site
 - ✅ A comment records the story and step it was made against
 - ✅ Walking the remainder steps through bare locations
-- ✅ Re-entering a story returns to where it was left
-- ✅ A walkthrough survives a restart
-- ✅ Re-authoring discards the walkthrough rather than reusing its position
 - ✅ Entering a story shows the whole of its first site
 - ✅ The frame leaves a little context above the site
 - ✅ A site taller than the pane is framed from its top
@@ -1250,11 +1248,11 @@ read around it cannot review it. Rejected: `j` steps and `Ctrl+d` scrolls — a 
 per view is precisely the difference the cheatsheet sweep exists to close, and F22 has just given the
 cheatsheet a view dimension.
 
-**Q62 — What happens to a Walkthrough when its Story is re-authored? Resolved: discard it, with a
-notice.** Rejected: keeping the position when story name and step index still resolve, which lands the
-reviewer on a *different claim* while telling them it is where they left off — CodeTour's silent
-degradation, in the one place this map promised not to reproduce it. `CONTEXT.md` already calls a
-Walkthrough disposable.
+**Q62 — Is a Walkthrough remembered when a Story is left, or across a restart? Resolved: no.** A
+Walkthrough is disposable (`CONTEXT.md`), and stepping a Story again from the top costs a few keys.
+Rejected: remembering the position per Story, persisted, and discarded with a notice when the Story is
+re-authored — specified and never missed in daily use, so it would be storage and a staleness rule
+paying no rent (issue #7, `.out-of-scope/walkthrough-memory.md`).
 
 ## F25 — Predictions — **DEFINED**
 
@@ -1386,7 +1384,7 @@ refusal's key set and so never showed it; `gp` was, and inherited an answer abou
 A `g` that outlives the key after it fires as `gg` at the next one, which teleports a reader to the
 first row for a key they pressed once, and takes `gt` with it.
 **R26.9** A Preview is **read-only**. `a o O I x r dd D p P u V` do nothing and say so in the
-footer. Motions, `/` `n` `N`, yanking a selection, and every `:` command including `:w` still work — but a
+footer. Motions, `/` `n` `N`, yanking a selection, and every `:` command still work — but a
 `:` command that *authors* text crosses to Source first (R32.12), because a Preview it edited is a
 Preview whose `u` is refused two keys later.
 The refusal is spoken rather than silent: a key that vanishes without a word is the failure

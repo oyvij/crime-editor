@@ -403,29 +403,6 @@ Feature: Walking a story step by step
     When I enter the remainder
     Then the step menu is empty
 
-  Scenario: Re-entering a story returns to where it was left
-    Given I am walking "Keys reach the child"
-    And I pressed "n"
-    And I pressed "Escape"
-    When I enter the story "Keys reach the child"
-    Then the cursor is on line 4 of "src/keys.rs"
-
-  Scenario: A walkthrough survives a restart
-    Given I am walking "Keys reach the child"
-    And I pressed "n"
-    When CRIME is restarted in the same folder
-    And I enter the story "Keys reach the child"
-    Then the cursor is on line 4 of "src/keys.rs"
-
-  Scenario: Re-authoring discards the walkthrough rather than reusing its position
-    Given I am walking "Keys reach the child"
-    And I pressed "n"
-    And I pressed "Escape"
-    When the story set is re-authored
-    And I enter the story "Keys reach the child"
-    Then the cursor is on line 2 of "src/keys.rs"
-    And the story view state is "walkthrough-discarded"
-
   Scenario: The code surface slides sideways on the same gesture a diff answers
     Given the screen is 24 rows by 100 columns
     And I am walking "Keys reach the child"

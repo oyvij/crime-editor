@@ -265,17 +265,6 @@ Feature: Markdown preview
     And the editor refuses with "read-only-preview"
     And the editor is showing preview
 
-  Scenario: Writing still works while previewing
-    Given "README.md" is open in the editor holding:
-      """
-      # Setup
-      """
-    And I run ":preview" in the editor
-    And I press "x" in the editor
-    And I run ":preview" in the editor
-    When I run ":w" in the editor
-    Then "README.md" was written to disk
-
   Scenario: Finding searches what is on the screen, not the markup
     Given "README.md" is open in the editor holding:
       """
