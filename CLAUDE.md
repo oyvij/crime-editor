@@ -4,7 +4,7 @@
 
 ### Issue tracker
 
-Issues live as GitHub issues on `oyvij/crime-editor`, driven with the `gh` CLI; `.scratch/` is a read-only archive of the old local tracker. See `docs/agents/issue-tracker.md`.
+Issues live as GitHub issues on `oyvij/crime-editor`, driven with the `gh` CLI; the old `.scratch/` tracker survives only in git history. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

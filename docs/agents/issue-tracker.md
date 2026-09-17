@@ -38,12 +38,12 @@ up. It never records feature status. Do not mirror scenario or feature completio
 `cargo test` instead. `docs/example-map.md` tracks the spec; the suite tracks the work; this tracker
 tracks the queue.
 
-## The `.scratch/` archive
+## The old `.scratch/` tracker
 
-Until this switch, issues lived as markdown files under `.scratch/<feature-slug>/`, and
-`docs/example-map.md` still points into them for the reasoning behind shipped features. They are
-kept as a read-only archive: read them when a link leads there, never add a file or rewrite a
-`Status:` line. New work goes to GitHub.
+Until this switch, issues lived as markdown files under `.scratch/<feature-slug>/`, deleted once
+their feature shipped. `docs/example-map.md` still names those paths for the reasoning behind
+shipped features; they exist only in git history — `git log --all -- <path>` finds the commit to
+`git show`. Never recreate `.scratch/`: new work goes to GitHub.
 
 ## Closing a ticket
 
