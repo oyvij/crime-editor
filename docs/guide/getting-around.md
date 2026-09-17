@@ -130,8 +130,7 @@ because every editor teaches it — the arrows, `hjkl`, `Home`/`End`, `Alt+←/�
 
 A terminal cell holds one character, so the box hides the code under it. `:help` or palette `h`
 takes it down and puts it back, and the choice is remembered per project. On a 26-row terminal only
-the first sixteen rows fit; the rows that survive are the ones nothing else in CRIME teaches. The
-Update marker (below) takes the last row when there is one, and stays even when the keys are down.
+the first sixteen rows fit; the rows that survive are the ones nothing else in CRIME teaches.
 
 ## The file tree
 
@@ -322,8 +321,9 @@ CRIME is a symlink on your PATH pointing at the release binary inside its own ch
 ordinary release build *is* the install. The cost is drift: the checkout moves ahead and the binary
 keeps being the old one. So at launch CRIME compares the Running version it was compiled from with
 the Version its checkout's manifest claims, and when the checkout is strictly ahead there is an
-Update. Nothing is announced on the status line; the Cheatsheet gains one row,
-`Update available: palette u`, which stays even when the keys are hidden. A checkout behind the
+Update. Nothing is announced as a notice; the version tag at the right end of the bottom row, which
+always shows the Running version, turns blue and reads `v0.2.0 → v0.3.0  C-space u to update`. A
+checkout behind the
 binary is not an Update, so checking out an old branch never nags you to downgrade. The check is one
 file read — no network, no git.
 

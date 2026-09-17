@@ -135,9 +135,7 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 42] = [
     // `:format` is in no palette, has no completion on the `:` line and is
     // spelled in no notice, so a reader who cannot see it here cannot find it
     // at all. They are above the rows below for exactly that: what a short
-    // window costs should be what something else already teaches. The palette
-    // is first of the two because the Update marker, when there is one, takes
-    // the sixteenth row — and the marker itself names the palette.
+    // window costs should be what something else already teaches.
     (
         "C-space Esc Esc",
         "palette",

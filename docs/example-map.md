@@ -391,9 +391,11 @@ belongs here and not only on the `:` line because a box already down would hide 
 back — and the palette, not the box, is now where a command that means the same thing in every view
 is advertised: `:update`, `:tall` and `:help` left the box, which sits over the code being read. The
 choice is remembered per project, like the last view and the tree divider (F9), so a dismissed
-reminder does not return on the next launch. The Update marker stays either way — one line, and the
-only place CRIME says a newer build exists, so it **names the gesture** (`palette u`) now that no row
-below it does.
+reminder does not return on the next launch. An Update is not the box's to announce: the **version
+tag** at the right end of the bottom row names it in every view and focus — `v<running>` in green, or
+`v<running> → v<newer>  C-space u to update` in blue — so it **names the gesture** without costing
+the box a row. A notice shares that row and is cut short before the tag; a row too narrow for both
+drops the tag's hint, then the tag, since a tag may take at most half the row.
 **R6.8a** **The key box's row order is what a short window gets, and it is not a preference.** The box
 truncates from the bottom and has no footer to say so, so a row placed below the fold does not exist
 for whoever has not resized their window: Edit view has twenty-five rows and a 26-row terminal — the
@@ -405,11 +407,7 @@ excused off the bottom must be said again where the reader is already looking �
 letters, or a notice that names the key in the sentence reporting what it answers (`unsaved-changes`
 names `:w` and `:q!`, `buffer-diverged` names `D`). Held by a unit test at 26 rows by 120 columns,
 which is where the box does draw; 100 columns is too narrow for it and an assertion there could not
-fail. **The Update marker costs the bottom row**, by construction: it is inserted above the keys, so
-it displaces the sixteenth row rather than being the row nobody sees. The palette gesture is
-fifteenth and `:format` sixteenth in that order, because the marker's own text names the palette and
-so partly stands in for what it displaced. The test pins that the marker costs exactly one row and
-which one.
+fail.
 **R6.9** **The palette fits the screen it is drawn on.** The box is sized from its row count and is
 drawn with no scroll offset, so a list longer than the box can draw loses its tail without a word —
 and the mouse hit-tests the same rows, so those entries are unclickable too. Two entries in the
@@ -3059,10 +3057,10 @@ checkout install and keeps F-self-update exactly — manifest comparison, no net
 is a binary install and asks for this repository's latest Release **once**, never on a timer.
 **R39.2** **The edge fetches, the core decides.** The body comes back unread; the core parses it,
 compares its Version by the same `semver` ordering as the manifest, and picks the Asset named
-`crime-<os>-<arch>`. Only a strictly newer Version with an Asset and a checksum list raises the
-Update marker and is remembered.
+`crime-<os>-<arch>`. Only a strictly newer Version with an Asset and a checksum list names the
+Update in the version tag and is remembered.
 **R39.3** A failed request, a body that does not parse, a Version that is not newer and a Release
-with no Asset for this platform are all **silent**: no marker, no notice. The edge logs a failed
+with no Asset for this platform are all **silent**: no Update in the tag, no notice. The edge logs a failed
 request.
 **R39.4** `:update` and palette `u` on a binary install download the Asset, verify it against the
 checksum list, replace the binary at its resolved path and **Relaunch** — refused with

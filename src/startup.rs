@@ -875,9 +875,9 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
         return Err(StartupError::Path(reason));
     }
     let config = Config(merged_config(input)?);
-    let (checkout, update_available) = checkout(input);
+    let (checkout, update) = checkout(input);
     let binary_install = checkout.is_none();
-    let mut state = initial_state(input, &config, checkout, update_available);
+    let mut state = initial_state(input, &config, checkout, update);
 
     let mut effects = vec![
         Effect::EnsureDir(crate::crime_dir(&input.root, input.sidecar.as_deref())),
@@ -1043,7 +1043,7 @@ fn initial_state(
     input: &Startup,
     config: &Config,
     checkout: Option<PathBuf>,
-    update_available: bool,
+    update: Option<String>,
 ) -> State {
     State {
         root: input.root.clone(),
@@ -1139,7 +1139,7 @@ fn initial_state(
         arch: input.arch.clone(),
         running_version: input.running_version.clone(),
         checkout,
-        update_available,
+        update,
         head: input.head.clone(),
         repo: input.repo.clone(),
         ..State::default()
@@ -1233,9 +1233,9 @@ fn cached(input: &Startup) -> Option<risk::Figures> {
 /// contrast with the config files above: one that does not parse stops CRIME
 /// from starting, because the user handed it over and needs to fix it, while the
 /// checkout manifest was never handed to CRIME at all.
-fn checkout(input: &Startup) -> (Option<PathBuf>, bool) {
+fn checkout(input: &Startup) -> (Option<PathBuf>, Option<String>) {
     let Some(root) = input.checkout.as_ref() else {
-        return (None, false);
+        return (None, None);
     };
     let Some(package) = input
         .checkout_manifest
@@ -1243,16 +1243,16 @@ fn checkout(input: &Startup) -> (Option<PathBuf>, bool) {
         .and_then(|source| source.parse::<Table>().ok())
         .and_then(|manifest| manifest.get("package")?.as_table().cloned())
     else {
-        return (None, false);
+        return (None, None);
     };
     if package.get("name").and_then(toml::Value::as_str) != Some("crime") {
-        return (None, false);
+        return (None, None);
     }
-    let version = package.get("version").and_then(toml::Value::as_str);
-    (
-        Some(root.clone()),
-        version.is_some_and(|version| is_update(version, &input.running_version)),
-    )
+    let version = package
+        .get("version")
+        .and_then(toml::Value::as_str)
+        .filter(|version| is_update(version, &input.running_version));
+    (Some(root.clone()), version.map(str::to_string))
 }
 
 /// An Update is a Version *strictly newer* than the Running version: a checkout
