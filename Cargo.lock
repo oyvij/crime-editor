@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "crime"
-version = "0.143.1"
+version = "0.143.2"
 dependencies = [
  "anyhow",
  "arboard",
