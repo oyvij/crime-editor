@@ -19,7 +19,9 @@ use crime::risk::{self, Figures, Metrics, Space};
 use crime::startup::{self, Fact, FactValue, PathStatus, Startup, StartupError};
 use crime::story;
 use crime::tree::Entry;
-use crime::{crime_dir, tmp_dir, tree, update, Direction, Effect, Event, Modal, Pane, State};
+use crime::{
+    crime_dir, tmp_dir, tree, update, Direction, Effect, Event, Modal, Pane, ReplaceFailed, State,
+};
 use crossterm::cursor::SetCursorStyle;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -46,10 +48,21 @@ struct Args {
     /// Folder to open as the workspace. Omitted, the current folder is opened
     /// as a Bare workspace: nothing of CRIME's is written into it.
     folder: Option<PathBuf>,
+    /// Print the programs CRIME can be configured to run and what installs
+    /// each on this OS, one tab-separated line each, and exit.
+    #[arg(long, conflicts_with = "folder")]
+    deps: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.deps {
+        for dep in crime::startup::deps(std::env::consts::OS) {
+            let install = dep.install.unwrap_or_default();
+            println!("{}\t{}\t{}\t{install}", dep.kind, dep.name, dep.command);
+        }
+        return Ok(());
+    }
     // Optional rather than defaulted to ".", because `crime` and `crime .`
     // name the same folder and must not mean the same thing: which it was is
     // the library's decision, and a default here would have thrown the fact
@@ -66,9 +79,11 @@ fn main() -> Result<()> {
     // a symlink into its checkout, so the executable is
     // <checkout>/target/release/crime — canonicalize explicitly, because macOS
     // does not promise `current_exe` resolves the link it was invoked through.
-    let checkout = std::env::current_exe()
-        .and_then(std::fs::canonicalize)
-        .ok()
+    // Resolved once, here: it is also the file `:update` replaces and relaunches,
+    // and on Linux asking again after the replacement names a deleted inode.
+    let exe = std::env::current_exe().and_then(std::fs::canonicalize).ok();
+    let checkout = exe
+        .as_ref()
         .and_then(|exe| exe.ancestors().nth(3).map(Path::to_path_buf));
 
     let crime_home = home().join(crime::CRIME_DIR);
@@ -93,6 +108,7 @@ fn main() -> Result<()> {
         // Which install command a server list row offers. Read here rather than
         // in the library, exactly as the version above is (R31.22).
         os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
     };
 
     let (state, _config, startup_effects) = match startup::start(&input) {
@@ -103,7 +119,7 @@ fn main() -> Result<()> {
         }
     };
 
-    run(state, root, startup_effects)
+    run(state, root, exe, startup_effects)
 }
 
 /// Where a Bare workspace keeps what a project keeps in `.crime`. Keyed by the
@@ -588,6 +604,16 @@ struct Edge {
     /// a TUI that froze. The Buffer it was asked about rides along so the core
     /// can measure the answer against what is on screen now.
     formatted: Sender<(String, PathBuf, u64, format::Answer)>,
+    /// Where the latest-Release request puts its body, off the main loop so a
+    /// slow network never holds the first frame.
+    released: Sender<Option<String>>,
+    /// Where replacing the binary with a Release puts how it ended, off the
+    /// main loop because an Asset is megabytes over whatever network there is.
+    replaced: Sender<Result<(), ReplaceFailed>>,
+    /// This binary, resolved at startup: what `:update` replaces and relaunches.
+    exe: Option<PathBuf>,
+    /// Leaving is a relaunch, which happens once the terminal is restored.
+    relaunch: bool,
     /// One language server per language, held for as long as it is alive. This
     /// map *is* `State::lsp_running`: the core reads what the edge holds and
     /// never remembers that a process exists — the failure `ai_running` was, in
@@ -693,7 +719,12 @@ impl Drop for Voice {
 /// the loop calls can take it without spelling the backend out each time.
 type Screen = ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>;
 
-fn run(mut state: State, root: PathBuf, startup_effects: Vec<Effect>) -> Result<()> {
+fn run(
+    mut state: State,
+    root: PathBuf,
+    exe: Option<PathBuf>,
+    startup_effects: Vec<Effect>,
+) -> Result<()> {
     let title = root.file_name().map_or_else(
         || root.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
@@ -707,6 +738,8 @@ fn run(mut state: State, root: PathBuf, startup_effects: Vec<Effect>) -> Result<
     let (analysed_tx, analysed_rx) = channel();
     let (tested_tx, tested_rx) = channel();
     let (formatted_tx, formatted_rx) = channel();
+    let (released_tx, released_rx) = channel();
+    let (replaced_tx, replaced_rx) = channel();
     let mut edge = Edge {
         shells: vec![pty::Pane::spawn(None, &root, size.height / 3, size.width)?],
         ai: None,
@@ -743,6 +776,10 @@ fn run(mut state: State, root: PathBuf, startup_effects: Vec<Effect>) -> Result<
         analysed: analysed_tx,
         tested: tested_tx,
         formatted: formatted_tx,
+        released: released_tx,
+        replaced: replaced_tx,
+        exe,
+        relaunch: false,
     };
 
     let (watch_tx, watch_rx) = channel();
@@ -797,7 +834,14 @@ fn run(mut state: State, root: PathBuf, startup_effects: Vec<Effect>) -> Result<
         sync_watches(&state, &mut watcher, &mut watched);
         let before = queue.len();
         collect_watch_events(&watch_rx, &state, &mut queue);
-        collect_job_events(&analysed_rx, &tested_rx, &formatted_rx, &mut queue);
+        collect_job_events(
+            &analysed_rx,
+            &tested_rx,
+            &formatted_rx,
+            &released_rx,
+            &replaced_rx,
+            &mut queue,
+        );
         dirty |= queue.len() != before;
         dirty |= resize_panes(&mut terminal, &state, &mut edge, &mut queue);
 
@@ -835,7 +879,22 @@ fn run(mut state: State, root: PathBuf, startup_effects: Vec<Effect>) -> Result<
         perform(effect, state.split(), &mut edge, &mut queue);
     }
     leave_terminal(enhanced);
-    result
+    if !edge.relaunch {
+        return result;
+    }
+    let Some(exe) = edge.exe.clone() else {
+        return Err(anyhow::anyhow!(
+            "relaunching: the running binary could not be located"
+        ));
+    };
+    // Dropped first, so the panes' children end here as they do on a quit
+    // rather than outliving an `exec` that runs no destructors.
+    drop(edge);
+    use std::os::unix::process::CommandExt;
+    let error = std::process::Command::new(&exe)
+        .args(std::env::args_os().skip(1))
+        .exec();
+    Err(anyhow::anyhow!("relaunching {}: {error}", exe.display()))
 }
 
 /// The one deliberate exception to draw-only-when-something-changed, and it is
@@ -983,8 +1042,16 @@ fn collect_job_events(
     analysed: &Receiver<(u64, Figures, Option<Figures>)>,
     tested: &Receiver<(bool, String)>,
     formatted: &Receiver<(String, PathBuf, u64, format::Answer)>,
+    released: &Receiver<Option<String>>,
+    replaced: &Receiver<Result<(), ReplaceFailed>>,
     queue: &mut VecDeque<Event>,
 ) {
+    while let Ok(body) = released.try_recv() {
+        queue.push_back(Event::ReleaseAnswered(body));
+    }
+    while let Ok(outcome) = replaced.try_recv() {
+        queue.push_back(Event::BinaryReplaced(outcome));
+    }
     while let Ok((generation, figures, before)) = analysed.try_recv() {
         queue.push_back(Event::RiskFigures {
             generation,
@@ -2392,6 +2459,13 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                 tone: ui::Tone::Notice,
             }
         }
+        Effect::Relaunch => {
+            edge.relaunch = true;
+            edge.status = Status {
+                text: "quit".to_string(),
+                tone: ui::Tone::Notice,
+            }
+        }
         other => return Some(other),
     }
     None
@@ -2625,6 +2699,26 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
         Effect::RestoreSnapshot { iteration } => {
             restore(&edge.root, edge.sidecar.as_deref(), iteration)
         }
+        Effect::CheckRelease { url } => {
+            let answer = edge.released.clone();
+            std::thread::spawn(move || {
+                let _ = answer.send(latest_release(&url));
+            });
+        }
+        Effect::ReplaceBinary { asset, checksums } => {
+            let answer = edge.replaced.clone();
+            let exe = edge.exe.clone();
+            std::thread::spawn(move || {
+                let outcome = match exe {
+                    Some(exe) => replace_binary(&exe, &asset, &checksums),
+                    None => {
+                        eprintln!("crime: update failed: the running binary could not be located");
+                        Err(ReplaceFailed::Replace)
+                    }
+                };
+                let _ = answer.send(outcome);
+            });
+        }
         Effect::RunTests { command } => {
             // Off the main loop and out of the shell pane: the TUI answers keys
             // while a suite runs, and the shell stays the user's.
@@ -2659,6 +2753,88 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             });
         }
         other => debug_assert!(false, "no group executes {other:?}"),
+    }
+}
+
+/// The body of the latest-Release request, or `None` with the reason printed
+/// alongside the rest of what the edge cannot show on screen: a failed check is
+/// never a notice (ADR 0017).
+fn latest_release(url: &str) -> Option<String> {
+    let outcome = std::process::Command::new("curl")
+        .args([
+            "-fsSL",
+            "--max-time",
+            "20",
+            "-H",
+            "Accept: application/vnd.github+json",
+            url,
+        ])
+        .output();
+    match outcome {
+        Ok(finished) if finished.status.success() => {
+            Some(String::from_utf8_lossy(&finished.stdout).into_owned())
+        }
+        Ok(finished) => {
+            eprintln!(
+                "crime: release check failed: {}",
+                String::from_utf8_lossy(&finished.stderr).trim()
+            );
+            None
+        }
+        Err(error) => {
+            eprintln!("crime: release check failed: curl: {error}");
+            None
+        }
+    }
+}
+
+/// The Asset verified and renamed over `exe`. Written beside it first, so the
+/// rename is on one filesystem and atomic: a crash part-way leaves the old
+/// binary where it was, and the running process keeps its open inode.
+fn replace_binary(exe: &Path, asset: &str, checksums: &str) -> Result<(), ReplaceFailed> {
+    let list = download(checksums).ok_or(ReplaceFailed::Download)?;
+    let binary = download(asset).ok_or(ReplaceFailed::Download)?;
+    startup::verify(&String::from_utf8_lossy(&list), asset, &binary).inspect_err(|failed| {
+        eprintln!("crime: update failed: {failed:?} for {asset}");
+    })?;
+    // Named per thread, so a second `:update` while the first still downloads
+    // writes its own file rather than into the one being renamed.
+    let temp = exe.with_file_name(format!(
+        ".crime-update-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let written = std::fs::write(&temp, &binary)
+        .and_then(|()| {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))
+        })
+        .and_then(|()| std::fs::rename(&temp, exe));
+    written.map_err(|error| {
+        eprintln!("crime: update failed: replacing {}: {error}", exe.display());
+        let _ = std::fs::remove_file(&temp);
+        ReplaceFailed::Replace
+    })
+}
+
+/// A whole file over HTTP, or `None` with the reason logged.
+fn download(url: &str) -> Option<Vec<u8>> {
+    let outcome = std::process::Command::new("curl")
+        .args(["-fsSL", "--max-time", "300", url])
+        .output();
+    match outcome {
+        Ok(finished) if finished.status.success() => Some(finished.stdout),
+        Ok(finished) => {
+            eprintln!(
+                "crime: update failed: {url}: {}",
+                String::from_utf8_lossy(&finished.stderr).trim()
+            );
+            None
+        }
+        Err(error) => {
+            eprintln!("crime: update failed: curl: {error}");
+            None
+        }
     }
 }
 
@@ -3631,8 +3807,30 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
     // joins the two with a colon.
     ("no-such-motion", "No such motion", ui::Tone::Warning),
     (
-        "no-checkout",
-        "No known checkout of CRIME to rebuild",
+        "nothing-to-update",
+        "Nothing to update from — no checkout of CRIME, and no newer Release found",
+        ui::Tone::Warning,
+    ),
+    // One per step of replacing the binary, so a network error, a Release with
+    // nothing for this machine and a bad download read differently.
+    (
+        "update-download",
+        "Update failed — the Release could not be downloaded",
+        ui::Tone::Warning,
+    ),
+    (
+        "update-no-asset",
+        "Update failed — the Release's checksum list has nothing for this platform",
+        ui::Tone::Warning,
+    ),
+    (
+        "update-checksum",
+        "Update refused — the download does not match its published checksum",
+        ui::Tone::Warning,
+    ),
+    (
+        "update-replace",
+        "Update failed — the running binary could not be replaced",
         ui::Tone::Warning,
     ),
     // F35's five. Three of them are the only thing standing between a missing
@@ -4271,6 +4469,41 @@ mod tests {
             Some(&Some("fn main() {}\n".to_string()))
         );
         assert_eq!(found.get(&buffers[1]), Some(&None));
+    }
+
+    /// The swap `:update` makes on a binary install, through the same `curl`
+    /// it uses on a Release, pointed at `file://` stand-ins: a verified Asset
+    /// lands executable at the binary's path, and a bad one leaves the old
+    /// binary and no stray temporary file.
+    #[test]
+    fn a_verified_asset_replaces_the_binary_and_a_bad_one_does_not() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("a temp directory");
+        let exe = dir.path().join("crime");
+        fs::write(&exe, "old").expect("the running binary");
+        let asset = dir.path().join("crime-linux-x86_64");
+        fs::write(&asset, "foo").expect("the Asset");
+        let sums = dir.path().join("SHA256SUMS");
+        let url = |path: &Path| format!("file://{}", path.display());
+
+        fs::write(&sums, "0000000000000000000000000000000000000000000000000000000000000000  crime-linux-x86_64\n")
+            .expect("a wrong list");
+        assert_eq!(
+            super::replace_binary(&exe, &url(&asset), &url(&sums)),
+            Err(super::ReplaceFailed::Checksum)
+        );
+        assert_eq!(fs::read_to_string(&exe).expect("the binary"), "old");
+
+        fs::write(&sums, "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae  crime-linux-x86_64\n")
+            .expect("the list");
+        assert_eq!(
+            super::replace_binary(&exe, &url(&asset), &url(&sums)),
+            Ok(())
+        );
+        assert_eq!(fs::read_to_string(&exe).expect("the binary"), "foo");
+        let mode = fs::metadata(&exe).expect("the binary").permissions().mode();
+        assert_eq!(mode & 0o111, 0o111);
+        assert_eq!(fs::read_dir(dir.path()).expect("the directory").count(), 3);
     }
 
     /// The two edge reads the branch picker is made of, against a repository

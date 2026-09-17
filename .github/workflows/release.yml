@@ -8,7 +8,7 @@
 # No setup: the workflow's own token tags and releases (.scratch/binary-releases/issues/01-*.md).
 #
 # Asset names are `crime-<os>-<arch>`, and the four spellings below are the ones a unit test in
-# src/ pins (issue 02). Change them in both places or every binary install reports no asset.
+# src/startup.rs pins (`asset_names_match_the_release_workflow`). Change them in both places or every binary install reports no asset.
 
 name: release
 
@@ -30,16 +30,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - id: read
+        env:
+          # The push's starting point, not HEAD~1: a push of several commits may carry the bump in
+          # any of them. It is unreadable after a force-push and all zeros on a branch's first push;
+          # those compare against HEAD~1 instead, so a patch bump still never releases.
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
-          now=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          before=$(git show HEAD~1:Cargo.toml 2>/dev/null | grep -m1 '^version' | cut -d'"' -f2 || true)
+          version_at() { git show "$1:Cargo.toml" 2>/dev/null | grep -m1 '^version' | cut -d'"' -f2; }
+          now=$(version_at HEAD)
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            if [ "$GITHUB_REF" != refs/heads/main ]; then
+              echo "dispatched from $GITHUB_REF; releases are cut from main only" >&2
+              exit 1
+            fi
+            echo "version=$now" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "dispatch: releasing $now"
+            exit 0
+          fi
+          before=$(version_at "$BEFORE_SHA")
+          if [ -z "$before" ]; then
+            echo "::warning::cannot read Cargo.toml at $BEFORE_SHA; comparing against HEAD~1"
+            before=$(version_at HEAD~1)
+          fi
+          if [ -z "$before" ]; then
+            echo "::warning::no previous Cargo.toml to compare; not releasing (dispatch to force)"
+            before=$now
+          fi
           IFS=. read -r now_major now_minor _ <<<"$now"
-          IFS=. read -r before_major before_minor _ <<<"${before:-0.0.0}"
+          IFS=. read -r before_major before_minor _ <<<"$before"
           release=false
           [ "$now_major.$now_minor" != "$before_major.$before_minor" ] && release=true
-          [ "${{ github.event_name }}" = workflow_dispatch ] && release=true
           echo "version=$now" >> "$GITHUB_OUTPUT"
           echo "release=$release" >> "$GITHUB_OUTPUT"
           echo "$before -> $now: release=$release"
@@ -55,8 +78,9 @@ jobs:
           - { runner: macos-15-intel,   asset: crime-macos-x86_64,  optional: false }
           # The oldest Ubuntu runner, so the glibc the binary asks for is a few years old.
           - { runner: ubuntu-22.04,     asset: crime-linux-x86_64,  optional: false }
-          # arm64 Linux runners are not offered to every repository; a leg that cannot
-          # start must not stop the other three.
+          # A leg that starts and fails does not stop the other three. A runner label this
+          # repository is not offered does not fail: it queues for a day and is cancelled, which
+          # continue-on-error does not cover. If that happens, drop this leg (issue 01).
           - { runner: ubuntu-22.04-arm, asset: crime-linux-aarch64, optional: true }
     runs-on: ${{ matrix.runner }}
     continue-on-error: ${{ matrix.optional }}
@@ -98,9 +122,7 @@ jobs:
         run: |
           last=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || true)
           { echo "## v$VERSION"; echo; git log --no-merges --format='- %s' "${last:+$last..}HEAD" | head -200; } > notes.md
-      - name: Tag this repository
-        run: |
-          git tag "v$VERSION"
-          git push origin "v$VERSION"
-      - name: Create the Release
-        run: gh release create "v$VERSION" assets/* --title "CRIME $VERSION" --notes-file notes.md
+      # gh creates the tag with the Release, so a failed upload cannot leave a tag behind that the
+      # refusal above would then hold against every re-run.
+      - name: Tag and create the Release
+        run: gh release create "v$VERSION" assets/* --target "$GITHUB_SHA" --title "CRIME $VERSION" --notes-file notes.md

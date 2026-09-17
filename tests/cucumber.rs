@@ -13,7 +13,7 @@ use crime::tree::{self, Entry};
 use crime::tree_actions::{Action, Target};
 use crime::{
     layout, mouse, reading, update, DiffLine, Direction, Effect, Event, Modal, Pane, Place,
-    Selection, State, Tap, View, PALETTE,
+    ReplaceFailed, Selection, State, Tap, View, PALETTE,
 };
 use cucumber::{gherkin::Step, given, then, when, World};
 use serde_json::{json, Value};
@@ -116,6 +116,10 @@ pub struct CrimeWorld {
         Vec<Vec<crime::highlight::Token>>,
     ),
     exited: bool,
+    relaunched: bool,
+    /// Every `ReplaceBinary` asked for, which only the step that says the
+    /// replacement finished answers.
+    replacing: Vec<Effect>,
     terminal_clipboard: Option<String>,
     ai_stopped: bool,
     project: Vec<(String, String)>,
@@ -788,6 +792,7 @@ impl CrimeWorld {
             Effect::OpenUrl(url) => self.browser.push(url),
             Effect::SendKeys { pane, bytes } => self.keys_sent.push((pane, bytes)),
             Effect::Exit => self.exited = true,
+            Effect::Relaunch => self.relaunched = true,
             Effect::StopAi => {
                 self.ai_stopped = true;
                 self.ai_is_gone();
@@ -937,6 +942,10 @@ impl CrimeWorld {
             // the asking, so a world that answered it here would make an
             // install that worked and one that did not the same scenario.
             Effect::ProbePath => {}
+            // Answered by the step that says what the Release is, for the
+            // reason the probe above is: the answer arrives after the asking.
+            Effect::CheckRelease { .. } => {}
+            fetch @ Effect::ReplaceBinary { .. } => self.replacing.push(fetch),
             // The world plays the edge: the core says which files the arriving
             // artifact names, and this diffs and reads each one — the old side
             // out of what the range's base holds, the new side off the working
@@ -1209,6 +1218,137 @@ fn update_offered(world: &mut CrimeWorld) {
     assert!(world.state.update_available, "no Update was offered");
 }
 
+#[given(expr = "CRIME was built for {string} on {string}")]
+fn built_for_platform(world: &mut CrimeWorld, os: String, arch: String) {
+    world.startup.os = os;
+    world.startup.arch = arch;
+}
+
+#[then(expr = "CRIME asks for the latest Release")]
+fn asks_for_release(world: &mut CrimeWorld) {
+    assert!(
+        world.startup_effects.contains(&Effect::CheckRelease {
+            url: startup::RELEASE_URL.to_string()
+        }),
+        "starting asked for: {:?}",
+        world.startup_effects
+    );
+}
+
+#[then(expr = "CRIME does not ask for a Release")]
+fn asks_for_no_release(world: &mut CrimeWorld) {
+    assert!(
+        !world
+            .startup_effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CheckRelease { .. })),
+        "starting asked for: {:?}",
+        world.startup_effects
+    );
+}
+
+#[when("the latest Release answers:")]
+fn release_answers(world: &mut CrimeWorld, step: &Step) {
+    let body = step.docstring().expect("docstring").to_string();
+    world.send(Event::ReleaseAnswered(Some(body)));
+}
+
+/// Through the event the edge sends, so what is remembered is what the core
+/// made of an answer rather than a Release the scenario wrote into the state.
+#[given(expr = "a newer Release for this platform has been found")]
+fn newer_release_found(world: &mut CrimeWorld) {
+    let asset = format!("crime-{}-{}", world.startup.os, world.startup.arch);
+    world.send(Event::ReleaseAnswered(Some(format!(
+        r#"{{"tag_name": "v9.0.0", "assets": [
+            {{"name": "{asset}", "browser_download_url": "https://example.test/{asset}"}},
+            {{"name": "SHA256SUMS", "browser_download_url": "https://example.test/SHA256SUMS"}}
+        ]}}"#
+    ))));
+    assert!(
+        world.state.release.is_some(),
+        "the Release was not remembered"
+    );
+}
+
+#[then(expr = "CRIME fetches the remembered Release")]
+fn fetches_release(world: &mut CrimeWorld) {
+    let release = world.state.release.clone().expect("a remembered Release");
+    assert_eq!(
+        world.replacing,
+        vec![Effect::ReplaceBinary {
+            asset: release.asset,
+            checksums: release.checksums,
+        }]
+    );
+}
+
+#[then(expr = "CRIME does not fetch a Release")]
+fn fetches_no_release(world: &mut CrimeWorld) {
+    assert!(world.replacing.is_empty(), "fetched: {:?}", world.replacing);
+}
+
+#[given(expr = "the binary has been replaced")]
+#[when(expr = "the binary has been replaced")]
+fn binary_replaced(world: &mut CrimeWorld) {
+    world.send(Event::BinaryReplaced(Ok(())));
+}
+
+#[when(expr = "replacing the binary fails at the {word} step")]
+fn replacing_fails(world: &mut CrimeWorld, at: String) {
+    let failed = match at.as_str() {
+        "download" => ReplaceFailed::Download,
+        "no-asset" => ReplaceFailed::NoAsset,
+        "checksum" => ReplaceFailed::Checksum,
+        "replace" => ReplaceFailed::Replace,
+        other => panic!("unknown step {other}"),
+    };
+    world.send(Event::BinaryReplaced(Err(failed)));
+}
+
+#[then(expr = "the binary is known to be replaced")]
+fn known_replaced(world: &mut CrimeWorld) {
+    assert!(world.state.replaced);
+}
+
+#[then(expr = "the binary is not known to be replaced")]
+fn not_known_replaced(world: &mut CrimeWorld) {
+    assert!(!world.state.replaced);
+}
+
+#[then(expr = "CRIME relaunches")]
+fn relaunches(world: &mut CrimeWorld) {
+    assert!(world.relaunched);
+}
+
+#[then(expr = "CRIME does not relaunch")]
+fn does_not_relaunch(world: &mut CrimeWorld) {
+    assert!(!world.relaunched);
+}
+
+#[when(expr = "the request for the latest Release fails")]
+fn release_request_fails(world: &mut CrimeWorld) {
+    world.send(Event::ReleaseAnswered(None));
+}
+
+#[then(
+    expr = "the remembered Release is {string} with the Asset {string} and the checksums {string}"
+)]
+fn release_remembered(world: &mut CrimeWorld, version: String, asset: String, checksums: String) {
+    assert_eq!(
+        world.state.release,
+        Some(startup::Release {
+            version,
+            asset,
+            checksums
+        })
+    );
+}
+
+#[then(expr = "no Release is remembered")]
+fn no_release_remembered(world: &mut CrimeWorld) {
+    assert_eq!(world.state.release, None);
+}
+
 #[then(expr = "no Update is available")]
 fn no_update_offered(world: &mut CrimeWorld) {
     assert!(!world.state.update_available, "an Update was offered");
@@ -1327,9 +1467,9 @@ fn field_remembered(world: &mut CrimeWorld, state: String) {
     );
 }
 
-#[then(expr = "the user is told there is no known checkout")]
-fn told_no_checkout(world: &mut CrimeWorld) {
-    assert_eq!(world.notices, vec!["no-checkout".to_string()]);
+#[then(expr = "the user is told there is nothing to update from")]
+fn told_nothing_to_update(world: &mut CrimeWorld) {
+    assert_eq!(world.notices, vec!["nothing-to-update".to_string()]);
 }
 
 /// The write ledger, not the disk model, and minus the one write no gesture
@@ -1462,7 +1602,10 @@ fn no_language_server_started(world: &mut CrimeWorld) {
         .startup_effects
         .iter()
         .filter(|effect| {
-            !matches!(effect, Effect::EnsureDir(_) | Effect::AnalyseRisk { .. })
+            !matches!(
+                effect,
+                Effect::EnsureDir(_) | Effect::AnalyseRisk { .. } | Effect::CheckRelease { .. }
+            )
                 && !matches!(effect, Effect::DeleteDir(path) if is_scratch(world, path))
                 && !matches!(effect, Effect::WriteFile { contents, .. } if contents == startup::SEEDED_CONFIG)
         })

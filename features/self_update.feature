@@ -9,9 +9,13 @@ Feature: Staying up to date
   strictly ahead. Strictly: a checkout behind the binary is not an Update, because checking
   out an old branch must not nag anyone to downgrade.
 
-  The check is one file read and a comparison. No network, no git, no watcher and no timer:
-  the Running version cannot change while CRIME is running, and the checkout's Version only
-  changes by something the user did themselves.
+  For a checkout install the check is one file read and a comparison. No network, no git, no
+  watcher and no timer: the Running version cannot change while CRIME is running, and the
+  checkout's Version only changes by something the user did themselves.
+
+  A binary install has no checkout to read, so it asks this repository once at startup for its
+  latest Release and compares that Release's Version instead — one request, never a timer
+  (docs/adr/0017-a-binary-install-updates-itself-from-a-release.md).
 
   A checkout counts as CRIME's own only when its manifest parses and names the crime
   package. A copied binary with nothing above it, another crate's manifest, and a manifest
@@ -154,12 +158,13 @@ Feature: Staying up to date
     When I ask CRIME to update from the command line
     Then the terminal has executed "cd '/home/me/my src/crime' && cargo build --release"
 
-  Scenario: With no known checkout the command notifies and runs nothing
+  Scenario: With neither a checkout nor a Release the command notifies and runs nothing
     Given there is no checkout manifest
     And CRIME started in the project
     When I ask CRIME to update from the command line
-    Then the user is told there is no known checkout
+    Then the user is told there is nothing to update from
     And no command has been executed
+    And CRIME does not fetch a Release
 
   Scenario: The command is reachable when there is no Update to install
     Given the checkout manifest is:
@@ -185,3 +190,171 @@ Feature: Staying up to date
     Then no new AI session was started
     And no file was opened in the editor
     And no file was written
+
+  # A binary install learns of an Update from a Release rather than a manifest. The edge fetches
+  # and hands the body back unread; which Version it names, whether that is newer, and which Asset
+  # is this platform's are the core's to decide. Every way the answer can be useless — offline,
+  # garbage, not newer, nothing built for this machine — is silent: a nag about the network is
+  # worse than a marker a day late.
+
+  Scenario: A binary install asks for the latest Release when it starts
+    Given there is no checkout manifest
+    When CRIME starts in the project
+    Then CRIME asks for the latest Release
+
+  Scenario: A checkout install never asks for a Release
+    Given the checkout manifest is:
+      """
+      [package]
+      name = "crime"
+      version = "0.1.0"
+      """
+    When CRIME starts in the project
+    Then CRIME does not ask for a Release
+
+  Scenario: A newer Release offers an Update and is remembered for this platform
+    Given there is no checkout manifest
+    And CRIME was built for "linux" on "x86_64"
+    And CRIME started in the project
+    When the latest Release answers:
+      """
+      {"tag_name": "v0.2.0", "assets": [
+        {"name": "crime-macos-aarch64", "browser_download_url": "https://example.test/crime-macos-aarch64"},
+        {"name": "crime-linux-x86_64", "browser_download_url": "https://example.test/crime-linux-x86_64"},
+        {"name": "SHA256SUMS", "browser_download_url": "https://example.test/SHA256SUMS"}
+      ]}
+      """
+    Then an Update is available
+    And the remembered Release is "0.2.0" with the Asset "https://example.test/crime-linux-x86_64" and the checksums "https://example.test/SHA256SUMS"
+    And no notice was raised
+
+  Scenario Outline: A Release that is not newer offers no Update
+    Given there is no checkout manifest
+    And CRIME was built for "linux" on "x86_64"
+    And CRIME started in the project
+    When the latest Release answers:
+      """
+      {"tag_name": "<tag>", "assets": [
+        {"name": "crime-linux-x86_64", "browser_download_url": "https://example.test/crime-linux-x86_64"},
+        {"name": "SHA256SUMS", "browser_download_url": "https://example.test/SHA256SUMS"}
+      ]}
+      """
+    Then no Update is available
+    And no Release is remembered
+    And no notice was raised
+
+    Examples:
+      | tag    |
+      | v0.1.0 |
+      | v0.0.9 |
+
+  Scenario: An answer that does not parse offers no Update
+    Given there is no checkout manifest
+    And CRIME started in the project
+    When the latest Release answers:
+      """
+      <html>rate limited</html>
+      """
+    Then no Update is available
+    And no Release is remembered
+    And no notice was raised
+
+  Scenario: A request that failed offers no Update
+    Given there is no checkout manifest
+    And CRIME started in the project
+    When the request for the latest Release fails
+    Then no Update is available
+    And no Release is remembered
+    And no notice was raised
+
+  Scenario: A Release with nothing built for this platform offers no Update
+    Given there is no checkout manifest
+    And CRIME was built for "linux" on "aarch64"
+    And CRIME started in the project
+    When the latest Release answers:
+      """
+      {"tag_name": "v0.2.0", "assets": [
+        {"name": "crime-linux-x86_64", "browser_download_url": "https://example.test/crime-linux-x86_64"},
+        {"name": "SHA256SUMS", "browser_download_url": "https://example.test/SHA256SUMS"}
+      ]}
+      """
+    Then no Update is available
+    And no Release is remembered
+    And no notice was raised
+
+  # A binary install has no build to run, so `:update` puts the Release's Asset where the running
+  # binary is and relaunches onto it. Fetching, verifying and replacing are the edge's; what each
+  # outcome means is the core's. Relaunching is leaving, so it is refused exactly as quitting is —
+  # and the binary on disk stays replaced across that refusal, so saving and asking again costs a
+  # save and not a second download.
+
+  Scenario: A binary install fetches the Release rather than building
+    Given there is no checkout manifest
+    And CRIME was built for "linux" on "x86_64"
+    And CRIME started in the project
+    And a newer Release for this platform has been found
+    When I ask CRIME to update from the command line
+    Then CRIME fetches the remembered Release
+    And no command has been executed
+
+  Scenario: The palette's Update fetches the Release on a binary install
+    Given there is no checkout manifest
+    And CRIME was built for "linux" on "x86_64"
+    And CRIME started in the project
+    And a newer Release for this platform has been found
+    And the view palette is shown
+    When I press "u"
+    Then CRIME fetches the remembered Release
+    And no command has been executed
+
+  Scenario Outline: A replacement that failed says which step and keeps the old binary
+    Given there is no checkout manifest
+    And CRIME started in the project
+    When replacing the binary fails at the <step> step
+    Then the notice is "<notice>"
+    And the binary is not known to be replaced
+    And CRIME does not relaunch
+
+    Examples:
+      | step     | notice          |
+      | download | update-download |
+      | no-asset | update-no-asset |
+      | checksum | update-checksum |
+      | replace  | update-replace  |
+
+  Scenario: A replaced binary relaunches
+    Given there is no checkout manifest
+    And CRIME started in the project
+    When the binary has been replaced
+    Then CRIME relaunches
+    And the project state was saved
+
+  Scenario: A replaced binary with unsaved edits does not relaunch
+    Given there is no checkout manifest
+    And CRIME started in the project
+    And "notes.md" is open in the editor with unsaved edits
+    When the binary has been replaced
+    Then the reviewer is told there are unsaved changes
+    And CRIME does not relaunch
+    And the binary is known to be replaced
+
+  Scenario: Updating again after that refusal relaunches without fetching
+    Given there is no checkout manifest
+    And CRIME started in the project
+    And a newer Release for this platform has been found
+    And "notes.md" is open in the editor with unsaved edits
+    And the binary has been replaced
+    And I write the buffer
+    When I ask CRIME to update from the command line
+    Then CRIME relaunches
+    And CRIME does not fetch a Release
+
+  Scenario: Updating a binary install touches nothing but the binary
+    Given there is no checkout manifest
+    And CRIME started in the project
+    And a newer Release for this platform has been found
+    When I ask CRIME to update from the command line
+    Then no new AI session was started
+    And no file was opened in the editor
+    And no file was written
+    And no command has been executed

@@ -393,6 +393,17 @@ pub enum Resolution {
     Merge,
 }
 
+/// Which step of putting a Release in place of the running binary failed. One
+/// notice each, because "the update failed" sends nobody anywhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplaceFailed {
+    Download,
+    /// The checksum list names no file for this platform.
+    NoAsset,
+    Checksum,
+    Replace,
+}
+
 // No `Eq`: a speed is a multiplier, and a float has no total order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -691,9 +702,16 @@ pub enum Event {
     Quit,
     /// The same, abandoning unsaved work.
     QuitForce,
-    /// `:update` — a release build of CRIME's own checkout. Nothing waits on it:
-    /// the terminal pane the user is looking at is the whole report.
+    /// `:update` — a release build of CRIME's own checkout, or on a binary
+    /// install the remembered Release put in place of the running binary.
     Rebuild,
+    /// How putting the Release in place of the running binary ended. Success
+    /// carries nothing: all it means is that a relaunch would land on it.
+    BinaryReplaced(Result<(), ReplaceFailed>),
+    /// What the latest-Release request came back with, unread: the body, or
+    /// `None` when the request failed — which the edge has already logged, and
+    /// which is shown nowhere (ADR 0017).
+    ReleaseAnswered(Option<String>),
     /// Characters the edge read off a pty's grid — the one selection it has to
     /// finish itself, because there is no buffer behind a pty to anchor to.
     /// A drag over a pty pane: the span it covered and the text the edge read
@@ -1126,6 +1144,12 @@ pub enum Effect {
     /// field only the edge writes (R31.23) — the core reads what it is told and
     /// learns only that what it is reading is fresh.
     ProbePath,
+    /// Ask this repository for its latest Release, answered with
+    /// `Event::ReleaseAnswered`. Only a binary install asks: a checkout install
+    /// reads its manifest and never touches the network (ADR 0017).
+    CheckRelease {
+        url: String,
+    },
     /// One JSON-RPC message for that language's server. The library built it,
     /// for the reason `mouse::report` builds a mouse report: bytes decided in
     /// `main.rs` are bytes no test watches.
@@ -1153,6 +1177,15 @@ pub enum Effect {
     /// core's.
     DwellHover(u64),
     Exit,
+    /// Leaving, onto the binary now on disk with the same arguments, in place
+    /// of `Exit` (ADR 0017).
+    Relaunch,
+    /// Put this Release's Asset in place of the running binary, verified
+    /// against the checksum list, answered with `Event::BinaryReplaced`.
+    ReplaceBinary {
+        asset: String,
+        checksums: String,
+    },
     StopAi,
     ReadDiff(PathBuf),
     RunSearch(String),
@@ -1663,6 +1696,17 @@ pub struct State {
     /// Set once at startup and never again: neither number can change while
     /// CRIME is running, so there is nothing to watch and nothing to dismiss.
     pub update_available: bool,
+    /// The Release a binary install found newer than itself, which is what
+    /// `:update` will fetch. `None` on a checkout install, and whenever the
+    /// answer offered no Update.
+    pub release: Option<startup::Release>,
+    /// `Startup::running_version`, kept because a Release is answered after
+    /// startup has returned.
+    pub running_version: String,
+    /// The binary on disk is already the Release, so `:update` relaunches
+    /// rather than fetching again. Dies with the process, which is right: the
+    /// next process is that binary.
+    pub replaced: bool,
     /// The story artifact for the current change, or the reason there is
     /// none to walk.
     pub story_set: story::Set,
@@ -1859,6 +1903,9 @@ pub struct State {
     /// is here rather than read from the environment for the reason R31.22
     /// gives: a row's offer is then a value a scenario can set.
     pub os: String,
+    /// And the CPU, as `std::env::consts::ARCH` spells it — with `os`, the name
+    /// of this platform's Asset.
+    pub arch: String,
     /// What each server says about each file, keyed by path rather than held on
     /// the Buffer: a file's marks have to survive switching away from it and
     /// back, and Review view is told about changed files that were never opened
@@ -2044,6 +2091,9 @@ impl Default for State {
             last_tap: None,
             checkout: None,
             update_available: false,
+            release: None,
+            running_version: String::new(),
+            replaced: false,
             story_set: story::Set::None,
             left_branch: None,
             guest: None,
@@ -2079,6 +2129,7 @@ impl Default for State {
             workspace_facts: BTreeMap::new(),
             recheck: None,
             os: String::new(),
+            arch: String::new(),
             diagnostics: BTreeMap::new(),
             hover: None,
             hovered_action: None,
@@ -5954,7 +6005,7 @@ fn take_the_corner(state: &State, next: &mut State, asked: layout::Corner) -> Ve
 }
 
 /// AskDefinition, ClickText, DoubleClickText, DragText, HoverLink, HoverAction, HoverMinimap,
-/// Rebuild, SelectIn
+/// Rebuild, ReleaseAnswered, SelectIn
 fn on_rebuild(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         // Ahead of the scroll clamp and returning before it, for the reason the
@@ -5963,13 +6014,37 @@ fn on_rebuild(state: &State, mut next: State, event: Event, wheeled: bool) -> An
         // unscrollable for as long as the pointer sits over it. Nothing here is
         // decided — what is under the pointer is `lsp::pointed`'s question,
         // asked of the place rather than answered into a field.
-        Event::Rebuild => match state.checkout.as_ref() {
-            Some(checkout) => vec![Effect::RunInTerminal(format!(
+        Event::Rebuild => match (&state.checkout, &state.release) {
+            _ if state.replaced => return Ok(relaunching(next)),
+            (Some(checkout), _) => vec![Effect::RunInTerminal(format!(
                 "{} && cargo build --release",
                 tree_actions::command("cd", checkout)
             ))],
-            None => vec![Effect::Notify("no-checkout")],
+            (None, Some(release)) => vec![Effect::ReplaceBinary {
+                asset: release.asset.clone(),
+                checksums: release.checksums.clone(),
+            }],
+            (None, None) => vec![Effect::Notify("nothing-to-update")],
         },
+        // Replaced stays true across a refusal, so saving and asking again is
+        // the whole cost of an unsaved buffer.
+        Event::BinaryReplaced(Ok(())) => {
+            next.replaced = true;
+            return Ok(relaunching(next));
+        }
+        Event::BinaryReplaced(Err(failed)) => vec![Effect::Notify(match failed {
+            ReplaceFailed::Download => "update-download",
+            ReplaceFailed::NoAsset => "update-no-asset",
+            ReplaceFailed::Checksum => "update-checksum",
+            ReplaceFailed::Replace => "update-replace",
+        })],
+        Event::ReleaseAnswered(body) => {
+            next.release = body.and_then(|body| {
+                startup::release(&body, &state.os, &state.arch, &state.running_version)
+            });
+            next.update_available |= next.release.is_some();
+            vec![]
+        }
 
         Event::SelectIn {
             pane,
@@ -7420,6 +7495,20 @@ fn leaving(state: &State) -> Vec<Effect> {
         Some(sidecar) => vec![stop, Effect::DeleteDir(sidecar.clone()), Effect::Exit],
         None => vec![stop, Effect::SaveState(state_json(state)), Effect::Exit],
     }
+}
+
+/// Restarting, with `Relaunch` where it would `Exit`: a relaunch discards what a
+/// quit discards, so it is refused by the same refusal rather than a second one.
+fn relaunching(next: State) -> (State, Vec<Effect>) {
+    let (next, effects) = update(&next, Event::Restart);
+    let effects = effects
+        .into_iter()
+        .map(|effect| match effect {
+            Effect::Exit => Effect::Relaunch,
+            other => other,
+        })
+        .collect();
+    (next, effects)
 }
 
 /// What CRIME remembers about a project between sessions.

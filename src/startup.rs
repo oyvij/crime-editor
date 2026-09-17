@@ -4,7 +4,8 @@
 //! module decides what they mean and what should exist.
 
 use crate::risk::{self, Scope};
-use crate::{Effect, State, View};
+use crate::{Effect, ReplaceFailed, State, View};
+use sha2::Digest;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use toml::Table;
@@ -495,6 +496,85 @@ pub struct Startup {
     /// can set, and "the Linux row offers the Linux command" is otherwise
     /// unspecifiable on a Mac (R31.22).
     pub os: String,
+    /// And the CPU, as `std::env::consts::ARCH` spells it, for the same reason.
+    pub arch: String,
+}
+
+/// This repository's latest Release — the one place the release host is named
+/// (ADR 0017). Unauthenticated: one request per launch is far inside the
+/// anonymous limit.
+pub const RELEASE_URL: &str = "https://api.github.com/repos/oyvij/crime-editor/releases/latest";
+
+/// A published Version newer than the Running version, and the two URLs
+/// `:update` fetches: this platform's Asset and the checksum list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Release {
+    pub version: String,
+    pub asset: String,
+    pub checksums: String,
+}
+
+#[derive(serde::Deserialize)]
+struct Published {
+    tag_name: String,
+    assets: Vec<Attached>,
+}
+
+#[derive(serde::Deserialize)]
+struct Attached {
+    name: String,
+    browser_download_url: String,
+}
+
+/// The file in a Release built for this platform. The release workflow's matrix
+/// spells the same names (`.github/workflows/release.yml`).
+fn asset_name(os: &str, arch: &str) -> String {
+    format!("crime-{os}-{arch}")
+}
+
+/// The Release a latest-release body describes, if it is an Update this
+/// platform can install. Anything short of that — a body that is not the JSON,
+/// a tag that is not a newer Version, no Asset or no checksum list to verify it
+/// against — is no Release, and silently so.
+pub fn release(body: &str, os: &str, arch: &str, running: &str) -> Option<Release> {
+    let published: Published = serde_json::from_str(body).ok()?;
+    let version = published.tag_name.strip_prefix('v')?;
+    if !is_update(version, running) {
+        return None;
+    }
+    let url = |name: &str| {
+        published
+            .assets
+            .iter()
+            .find(|asset| asset.name == name)
+            .map(|asset| asset.browser_download_url.clone())
+    };
+    Some(Release {
+        version: version.to_string(),
+        asset: url(&asset_name(os, arch))?,
+        checksums: url("SHA256SUMS")?,
+    })
+}
+
+/// Whether a downloaded Asset is the file the checksum list names. The Asset's
+/// name is the last segment of its download URL, and its line is the one
+/// `sha256sum` wrote for exactly that name.
+pub fn verify(list: &str, asset_url: &str, downloaded: &[u8]) -> Result<(), ReplaceFailed> {
+    let name = asset_url.rsplit('/').next().unwrap_or(asset_url);
+    let expected = list
+        .lines()
+        .filter_map(|line| line.split_once(char::is_whitespace))
+        .find(|(_, file)| file.trim_start().trim_start_matches('*') == name)
+        .map(|(sum, _)| sum)
+        .ok_or(ReplaceFailed::NoAsset)?;
+    let actual: String = sha2::Sha256::digest(downloaded)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    match actual.eq_ignore_ascii_case(expected) {
+        true => Ok(()),
+        false => Err(ReplaceFailed::Checksum),
+    }
 }
 
 /// What runs a language's server, as configuration named it. Nothing here is a
@@ -792,6 +872,7 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
     }
     let config = Config(merged_config(input)?);
     let (checkout, update_available) = checkout(input);
+    let binary_install = checkout.is_none();
     let mut state = initial_state(input, &config, checkout, update_available);
 
     let mut effects = vec![
@@ -803,6 +884,11 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
         Effect::DeleteDir(crate::tmp_dir(&input.crime_home)),
         Effect::EnsureDir(crate::tmp_dir(&input.crime_home)),
     ];
+    if binary_install {
+        effects.push(Effect::CheckRelease {
+            url: RELEASE_URL.to_string(),
+        });
+    }
     // A reader's own settings survive every start, and the core is already
     // holding the fact that decides it: `project_config` is what the edge read
     // off `.crime/config.toml`, and it is `None` on exactly the folders that
@@ -1035,6 +1121,8 @@ fn initial_state(
         facts: config.facts(),
         speech: speech(config, &input.os),
         os: input.os.clone(),
+        arch: input.arch.clone(),
+        running_version: input.running_version.clone(),
         checkout,
         update_available,
         head: input.head.clone(),
@@ -1068,6 +1156,48 @@ fn speech(config: &Config, os: &str) -> crate::reading::Speech {
         player: named(&format!("speech.player.{os}")),
         install: named(&format!("speech.install.{os}")),
     }
+}
+
+/// A program CRIME can be configured to run, and what installs it on one OS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dep {
+    pub kind: &'static str,
+    pub name: String,
+    pub command: String,
+    pub install: Option<String>,
+}
+
+/// The `[lsp.*]`, `[formatter.*]` and `[speech]` rows of [`DEFAULTS`], read by
+/// the same parse startup does, so a machine with no source can ask the binary
+/// what it needs rather than keeping a second table that drifts. The speech
+/// row's player is a row of its own, kind `player`, with no install: the table
+/// names none, since it ships with macOS and comes with alsa-utils on Linux.
+pub fn deps(os: &str) -> Vec<Dep> {
+    let (table, _) = parse(DEFAULTS, "defaults").expect("the shipped defaults parse");
+    let config = Config(table);
+    let row = |kind, name: &str, command: &str, install: Option<&String>| Dep {
+        kind,
+        name: name.to_string(),
+        command: command.to_string(),
+        install: install.cloned(),
+    };
+    let speech = speech(&config, os);
+    let install = (!speech.install.is_empty()).then_some(&speech.install);
+    config
+        .servers()
+        .iter()
+        .map(|(name, s)| row("lsp", name, &s.command, s.install.get(os)))
+        .chain(
+            config
+                .formatters()
+                .iter()
+                .map(|(name, f)| row("formatter", name, &f.command, f.install.get(os))),
+        )
+        .chain([
+            row("speech", "speech", &speech.command, install),
+            row("player", "speech", &speech.player, None),
+        ])
+        .collect()
 }
 
 /// The figure on disk, if it describes the commit that is checked out. A folder
@@ -1244,8 +1374,9 @@ fn last_view(state_json: Option<&str>) -> Option<View> {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_update, parse, start, Config, ConfigError, ConfigFault, Effect, FactValue, Startup,
-        StartupError, DEFAULTS, PROJECT_LABEL, SEEDED_CONFIG,
+        asset_name, deps, is_update, parse, release, start, verify, Config, ConfigError,
+        ConfigFault, Dep, Effect, FactValue, ReplaceFailed, Startup, StartupError, DEFAULTS,
+        PROJECT_LABEL, SEEDED_CONFIG,
     };
 
     /// The bottom layer on its own, as several tests below read it.
@@ -1293,6 +1424,162 @@ mod tests {
             matches!(problem.fault, ConfigFault::WrongType(_)),
             "{problem}"
         );
+    }
+
+    #[test]
+    fn the_dependency_table_is_every_shipped_row_with_its_install_for_the_os() {
+        let rustup = |c: &str| Some(format!("rustup component add {c}"));
+        let npm = |p: &str| Some(format!("npm install -g {p}"));
+        let brew = |p: &str| Some(format!("brew install {p}"));
+        let apt = Some("sudo apt install clangd".to_string());
+        let gopls = Some("go install golang.org/x/tools/gopls@latest".to_string());
+        let ts = "typescript typescript-language-server";
+        let pinned = [
+            ("lsp", "c", "clangd", None, apt.clone()),
+            ("lsp", "cpp", "clangd", None, apt),
+            ("lsp", "go", "gopls", gopls.clone(), gopls),
+            ("lsp", "java", "jdtls", brew("jdtls"), None),
+            (
+                "lsp",
+                "javascript",
+                "typescript-language-server",
+                npm(ts),
+                npm(ts),
+            ),
+            (
+                "lsp",
+                "python",
+                "pyright-langserver",
+                npm("pyright"),
+                npm("pyright"),
+            ),
+            (
+                "lsp",
+                "rust",
+                "rust-analyzer",
+                rustup("rust-analyzer"),
+                rustup("rust-analyzer"),
+            ),
+            (
+                "lsp",
+                "typescript",
+                "typescript-language-server",
+                npm(ts),
+                npm(ts),
+            ),
+            (
+                "lsp",
+                "vue",
+                "vue-language-server",
+                npm("@vue/language-server"),
+                npm("@vue/language-server"),
+            ),
+            ("lsp", "zig", "zls", brew("zls"), None),
+            (
+                "formatter",
+                "css",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+            ("formatter", "go", "gofmt", None, None),
+            (
+                "formatter",
+                "html",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+            (
+                "formatter",
+                "javascript",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+            (
+                "formatter",
+                "json",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+            (
+                "formatter",
+                "markdown",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+            (
+                "formatter",
+                "python",
+                "black",
+                Some("pipx install black".into()),
+                Some("pipx install black".into()),
+            ),
+            (
+                "formatter",
+                "rust",
+                "rustfmt",
+                rustup("rustfmt"),
+                rustup("rustfmt"),
+            ),
+            (
+                "formatter",
+                "typescript",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+            (
+                "formatter",
+                "vue",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+            (
+                "formatter",
+                "yaml",
+                "prettier",
+                npm("prettier"),
+                npm("prettier"),
+            ),
+        ];
+        for (os, player) in [("macos", "afplay"), ("linux", "aplay")] {
+            let rows = deps(os);
+            let (table, speech) = rows.split_last_chunk::<2>().expect("the speech rows");
+            let expected: Vec<Dep> = pinned
+                .iter()
+                .map(|(kind, name, command, macos, linux)| Dep {
+                    kind,
+                    name: name.to_string(),
+                    command: command.to_string(),
+                    install: if os == "macos" { macos } else { linux }.clone(),
+                })
+                .collect();
+            assert_eq!(table, expected, "{os}");
+            let [synth, play] = speech;
+            assert_eq!(
+                (synth.kind, synth.name.as_str(), synth.command.as_str()),
+                ("speech", "speech", "piper")
+            );
+            assert!(synth
+                .install
+                .as_deref()
+                .is_some_and(|line| line.starts_with("uv tool install piper-tts")
+                    && line.contains(r#"speech.voice = ""#)));
+            assert_eq!(
+                play,
+                &Dep {
+                    kind: "player",
+                    name: "speech".into(),
+                    command: player.into(),
+                    install: None
+                }
+            );
+        }
     }
 
     /// A shipped default nothing can reach is a language served by nobody: the
@@ -1675,6 +1962,49 @@ mod tests {
     fn a_double_digit_component_is_compared_as_a_number() {
         assert!(is_update("0.10.0", "0.9.0"));
         assert!(!is_update("0.9.0", "0.10.0"));
+    }
+
+    /// Held equal by hand to the matrix in `.github/workflows/release.yml`,
+    /// which points back here: YAML and Rust share no compiler, so a renamed
+    /// Asset on either side would leave every binary install finding nothing
+    /// built for it.
+    #[test]
+    fn asset_names_match_the_release_workflow() {
+        assert_eq!(asset_name("macos", "aarch64"), "crime-macos-aarch64");
+        assert_eq!(asset_name("macos", "x86_64"), "crime-macos-x86_64");
+        assert_eq!(asset_name("linux", "x86_64"), "crime-linux-x86_64");
+        assert_eq!(asset_name("linux", "aarch64"), "crime-linux-aarch64");
+    }
+
+    /// `sha256sum`'s own line shape, which is what the release workflow writes.
+    #[test]
+    fn a_download_matching_its_line_is_verified() {
+        let list = "\
+2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae  crime-linux-x86_64
+0000000000000000000000000000000000000000000000000000000000000000  crime-linux-aarch64
+";
+        let url = "https://example.test/download/v0.2.0/crime-linux-x86_64";
+        assert_eq!(verify(list, url, b"foo"), Ok(()));
+        assert_eq!(verify(list, url, b"bar"), Err(ReplaceFailed::Checksum));
+    }
+
+    /// A name that only ends in the Asset's is another file's line.
+    #[test]
+    fn a_list_without_the_assets_line_names_no_asset() {
+        let list = "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae  old-crime-linux-x86_64\n";
+        assert_eq!(
+            verify(list, "https://example.test/crime-linux-x86_64", b"foo"),
+            Err(ReplaceFailed::NoAsset)
+        );
+    }
+
+    /// An Asset nobody can verify is not one `:update` may install.
+    #[test]
+    fn a_release_without_a_checksum_list_is_no_release() {
+        let body = r#"{"tag_name": "v0.2.0", "assets": [
+            {"name": "crime-linux-x86_64", "browser_download_url": "https://example.test/a"}
+        ]}"#;
+        assert_eq!(release(body, "linux", "x86_64", "0.1.0"), None);
     }
 
     #[test]

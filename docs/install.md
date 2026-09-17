@@ -1,42 +1,62 @@
 # Installing CRIME
 
-CRIME is installed by pointing a symlink on your PATH at the release binary inside your checkout.
-Nothing is added to your shell configuration, and there is no second step to remember afterwards:
-once the symlink exists, the ordinary release build *is* the install.
+CRIME installs two ways. The **binary** is the default: a prebuilt `crime` for this platform,
+downloaded from the latest GitHub Release, verified and put at `~/.local/bin/crime`. It needs no
+toolchain and updates itself from inside the editor (`:update`, ADR 0017). **From source** is a
+checkout, a release build and a symlink on your PATH pointing at it — for anyone working on CRIME,
+where the ordinary release build *is* the install. Nothing is added to your shell configuration
+either way.
 
 ## The scripted way
 
-`install.sh` at the repo root does the one-time step below and everything around it, interactively:
+`install.sh` at the repo root does either, and everything around it, interactively:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/oyvij/CRIME/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/oyvij/crime-editor/main/install.sh | bash
 ```
 
 It reads its prompts from `/dev/tty`, which is what lets it ask questions while piped from `curl`.
-The order is: a feature menu (AI pane, language servers, formatters, reading aloud — all on by
-default, toggle by number), then the required toolchain (git, a C compiler, `cargo` via rustup —
-declining any of these aborts), then clone or `git pull --ff-only`, `cargo build --release` and the
-symlink, then one `y/N` per missing optional program. A program whose install command needs a
-package manager that is not there (`npm`, `go`, `pipx`, `uv`, `brew`) gets a second prompt for that
-first. Nothing is installed without printing the command it is about to run.
+With no `crime` on PATH it asks **binary or source**, binary by default. The order is then: a
+feature menu (AI pane, language servers, formatters, reading aloud — all on by default, toggle by
+number), then CRIME itself, then one `y/N` per missing optional program. A program whose install
+command needs a package manager that is not there (`npm`, `go`, `pipx`, `uv`, `brew`) gets a second
+prompt for that first. Nothing is installed without printing the command it is about to run.
 
-If `crime` is already on PATH and resolves into a checkout's `target/release`, that checkout is the
-one updated. Otherwise the script asks where the checkout should live: run from inside a clone
-(`./install.sh` after `git clone`), it defaults to that clone and never clones again; run from
-`curl`, it defaults to `~/.crime/src`. A clone the server refuses is offered again over SSH, for a
-fork that is private. `CRIME_REPO` overrides the clone URL for a fork.
+**The binary.** The script fetches `SHA256SUMS` and `crime-<os>-<arch>` from the latest Release,
+checks the asset's SHA-256 against its line, and only then writes it — as a real file, not a
+symlink — to `~/.local/bin/crime`. A missing asset, a failed download or a checksum mismatch aborts
+with a message and installs nothing. Only `curl` is required.
 
-The language servers, formatters and the voice are not listed in the script. They are read out of
-`DEFAULTS` in `src/startup.rs` — the same `[lsp.*]`, `[formatter.*]` and `[speech]` rows CRIME
-offers from inside the editor — so a row added there with an `install.<os>` key is installable
-here with no change to the script (ADR 0012). Only what the edge runs *without* configuration is
-spelled out in `install.sh` itself: the build toolchain, git, the default AI CLI (`claude`), the
-speech player and the URL opener. **When a feature adds a program CRIME shells out to, it goes in
-one of those two places, and `./install.sh --list` shows whether it is picked up.**
+**From source.** The script requires git, a C compiler and `cargo` via rustup (declining any of
+these aborts), then clones or `git pull --ff-only`, runs `cargo build --release` and links the
+symlink. Run from inside a clone (`./install.sh` after `git clone`), it never asks binary or source:
+it builds that clone and never clones again. Answered "source" from `curl`, it asks where the
+checkout should live, defaulting to `~/.crime/src`. A clone the server refuses is offered again over
+SSH, for a fork that is private.
+
+**Re-run**, it updates whichever kind it finds behind `crime`: a symlink into a checkout's
+`target/release` is pulled and rebuilt; anything else is a binary install and is replaced in place
+with the latest Release. `CRIME_REPO` overrides the repository for a fork — the clone URL and the
+Release the binary comes from are both derived from it.
+
+The language servers, formatters and the voice are not listed in the script. It asks the `crime` it
+just installed, on either path, with `crime --deps` — the same `[lsp.*]`, `[formatter.*]` and
+`[speech]` rows of `DEFAULTS` in `src/startup.rs` that CRIME offers from inside the editor — so a
+row added there with an `install.<os>` key is installable here with no change to the script (ADR
+0012). Only what the edge runs *without* configuration is spelled out in `install.sh` itself: the
+build toolchain, git, the default AI CLI (`claude`), the speech player's package and the URL opener.
+**When a feature adds a program CRIME shells out to, it goes in one of those two places, and
+`./install.sh --list` shows whether it is picked up.** `--list` asks whichever `crime` is installed,
+so it needs no source.
+
+`crime --deps` prints one line per row, tab-separated as `kind`, `name`, `command`, `install`, the
+install command being this OS's `install.<os>` or blank. The kinds are `lsp`, `formatter`, `speech`,
+and `player` for the speech row's `player.<os>`. It needs no folder and no terminal, and exits
+before touching either — which is what lets a machine with no checkout learn what to offer.
 
 Windows is not covered: `DEFAULTS` carries `install.windows` rows for a hand install.
 
-## The one-time step, by hand
+## From source, by hand
 
 From your checkout, build once and link the result into a directory that is already on your PATH:
 
@@ -57,7 +77,7 @@ crime .            # open the current folder as the workspace
 crime ~/some/repo  # open a folder somewhere else
 ```
 
-## Thereafter, the build is the install
+## On a source install, the build is the install
 
 `cargo build --release` writes to the same file the symlink already names, so a build updates the
 installed command. There is no copy step, no reinstall, and nothing that can be forgotten:
@@ -70,7 +90,7 @@ A build that fails to compile writes no binary. The previous one stays exactly w
 broken checkout never leaves you without a working editor — you keep the last version that
 compiled until the next one does.
 
-## What this arrangement costs
+## What the symlink costs
 
 Two consequences follow from the symlink, and both are deliberate:
 
