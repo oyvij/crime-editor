@@ -2173,6 +2173,13 @@ fn deleted_on_disk(world: &mut CrimeWorld, path: String) {
 /// `main.rs` never applies.
 fn open_buffer(world: &mut CrimeWorld, path: &str, contents: &str) -> PathBuf {
     let absolute = abs(world, path);
+    // What was opened is what is on disk: a jump reads the file again and the
+    // buffer follows it, so a disk the scenario never described would read as
+    // an empty file and blank the buffer the scenario set up.
+    world
+        .files
+        .entry(absolute.clone())
+        .or_insert_with(|| contents.to_string());
     world.send(Event::BufferOpened {
         path: absolute.clone(),
         contents: contents.to_string(),
@@ -2211,6 +2218,32 @@ fn open_dirty(world: &mut CrimeWorld, path: String) {
         .get_mut(&absolute)
         .expect("the buffer")
         .draft = Some("my edits".to_string());
+}
+
+/// Unsaved edits over whatever the project holds on disk: a clean buffer
+/// holding text the disk does not is a stale one, and follows the disk the
+/// moment anything reads the file again.
+#[given(expr = "{string} is open in the editor with unsaved edits holding:")]
+fn open_dirty_holding(world: &mut CrimeWorld, path: String, step: &Step) {
+    let draft = step
+        .docstring()
+        .expect("docstring")
+        .trim_matches('\n')
+        .to_string();
+    let absolute = abs(world, &path);
+    let disk = world
+        .project
+        .iter()
+        .find(|(name, _)| world.state.root.join(name) == absolute)
+        .map(|(_, contents)| contents.clone())
+        .unwrap_or_default();
+    open_buffer(world, &path, &disk);
+    world
+        .state
+        .buffers
+        .get_mut(&absolute)
+        .expect("the buffer")
+        .draft = Some(draft);
 }
 
 #[given(expr = "{string} is changed on disk")]
