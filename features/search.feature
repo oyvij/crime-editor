@@ -185,7 +185,7 @@ Feature: Searching file contents
     Then the selection holds "Update"
 
   Scenario: A hit in an unsaved buffer opens on the word too
-    Given "src/lib.rs" is open in the editor holding:
+    Given "src/lib.rs" is open in the editor with unsaved edits holding:
       """
       fn renamed(s)
       """
@@ -205,7 +205,7 @@ Feature: Searching file contents
       | src/main.rs |
 
   Scenario: Unsaved edits are searched, not the saved file
-    Given "src/lib.rs" is open in the editor holding:
+    Given "src/lib.rs" is open in the editor with unsaved edits holding:
       """
       fn renamed(s)
       """

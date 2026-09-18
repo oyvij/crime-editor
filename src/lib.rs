@@ -3874,12 +3874,23 @@ fn on_buffer_opened(_state: &State, mut next: State, event: Event, wheeled: bool
             // being opened a second time: the default follows the file only
             // when there is no buffer to have chosen anything yet.
             let tab_width = next.tab_width;
-            next.buffers
+            let buffer = next
+                .buffers
                 .entry(path.clone())
                 .or_insert_with(|| Buffer::open(&contents, preview::is_markdown(&path), tab_width));
+            // The edge read the file just now; the watcher is not the only
+            // way a buffer hears the disk moved, and one change it missed
+            // left a jump marking the text as it was before.
+            let diverged = buffer.disk != contents && {
+                buffer.follow(contents);
+                buffer.changed_on_disk
+            };
             next.current_buffer = Some(path.clone());
             next.restoring = next.restoring.saturating_sub(1);
-            let effects = reveal_in_tree(&mut next, &path);
+            let mut effects = reveal_in_tree(&mut next, &path);
+            if diverged {
+                effects.push(Effect::Notify("buffer-diverged"));
+            }
             // The rest of the landing, when the opening had a place to land on:
             // the same two lines `Event::JumpTo` is, run here rather than in a
             // second event for the reason [`Event::BufferOpened`] carries the
@@ -9526,6 +9537,61 @@ mod tests {
         let after = update(&inserting, Event::EditorKey('t')).0;
         assert_eq!(after.story_listing, state.story_listing);
         assert!(after.buffers[&path].shown().starts_with('t'));
+    }
+
+    /// A jump reads the file afresh, so what it read is what the jump lands
+    /// on. The watcher is the only other way a buffer learns the disk moved,
+    /// and a change it never reported left a walked Site marking the file as
+    /// it was before the change — HEAD's text, for an uncommitted range.
+    #[test]
+    fn a_jump_into_an_open_buffer_lands_on_the_file_it_read() {
+        let path = PathBuf::from("/w/one.rs");
+        let opened = |state: &State, contents: &str, at| {
+            update(
+                state,
+                Event::BufferOpened {
+                    path: path.clone(),
+                    contents: contents.to_string(),
+                    preview: false,
+                    at,
+                },
+            )
+            .0
+        };
+        let before = opened(&State::default(), "old\n", None);
+        let after = opened(&before, "new\nold\n", Some(Place { line: 0, column: 0 }));
+        assert_eq!(after.buffers[&path].shown(), "new\nold\n");
+    }
+
+    /// Following the file a jump read obeys the watcher's rule: a draft is
+    /// never overwritten, and the divergence is announced — while reopening a
+    /// drafted buffer over an unchanged file flags nothing at all.
+    #[test]
+    fn a_jump_into_a_drafted_buffer_flags_the_file_it_read() {
+        let path = PathBuf::from("/w/one.rs");
+        let opened = |state: &State, contents: &str| {
+            update(
+                state,
+                Event::BufferOpened {
+                    path: path.clone(),
+                    contents: contents.to_string(),
+                    preview: false,
+                    at: Some(Place { line: 0, column: 0 }),
+                },
+            )
+        };
+        let drafted = update(
+            &update(&opened(&State::default(), "old\n").0, Event::EditorKey('i')).0,
+            Event::EditorKey('x'),
+        )
+        .0;
+        let (same, quiet) = opened(&drafted, "old\n");
+        assert!(!same.buffers[&path].changed_on_disk);
+        assert!(!quiet.contains(&Effect::Notify("buffer-diverged")));
+        let (moved, effects) = opened(&drafted, "new\n");
+        assert_eq!(moved.buffers[&path].shown(), "xold\n");
+        assert!(moved.buffers[&path].changed_on_disk);
+        assert!(effects.contains(&Effect::Notify("buffer-diverged")));
     }
 
     /// A read-only surface refuses the word delete, the way it refuses the
