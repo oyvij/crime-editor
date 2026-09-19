@@ -990,6 +990,25 @@ impl CrimeWorld {
                 };
                 self.send_now(Event::Branches(branching));
             }
+            // The world plays the edge reading its modelled disk: the file as
+            // a step last left it, or as CRIME was started on.
+            Effect::ReadGlobalConfig { path, kind, name } => {
+                let text = self
+                    .files
+                    .get(&path)
+                    .cloned()
+                    .or_else(|| self.startup.global_config.clone())
+                    .unwrap_or_default();
+                self.send_now(Event::GlobalConfigRead {
+                    kind,
+                    name,
+                    text: Some(text),
+                });
+            }
+            Effect::ReadInstallStatus(sentinel) => {
+                let status = self.files.get(&sentinel).cloned();
+                self.send_now(Event::InstallEnded(status));
+            }
             // The world plays the edge (ADR 0015): the exit status is what the
             // sentinel holds, and a clone that worked is read like any other
             // repository — the refs the scenario declared.
@@ -1704,6 +1723,7 @@ fn fault_is(world: &mut CrimeWorld, expected: String) {
         startup::ConfigFault::WrongType(_) => "wrong-type",
         startup::ConfigFault::Incomplete { .. } => "incomplete",
         startup::ConfigFault::ClaimedTwice { .. } => "extension-claimed-twice",
+        startup::ConfigFault::Unreadable => "unreadable",
     };
     assert_eq!(actual, expected);
 }
@@ -7743,7 +7763,11 @@ fn showing_a_story_step(world: &mut CrimeWorld) {
 #[then(expr = "the editor refuses with {string}")]
 fn editor_refuses_with(world: &mut CrimeWorld, reason: String) {
     assert_eq!(
-        world.state.refusal.map(crime::preview::Refusal::as_str),
+        world
+            .state
+            .refusal
+            .as_ref()
+            .map(crime::preview::Refusal::as_str),
         Some(reason.as_str())
     );
 }
@@ -11548,45 +11572,107 @@ fn built_for(world: &mut CrimeWorld, os: String) {
 #[when(expr = "I install the row for {string}")]
 #[given(expr = "I asked to install the row for {string}")]
 fn install_the_row(world: &mut CrimeWorld, language: String) {
-    walk_to_row(world, &language);
+    walk_to_row(world, tools::Kind::Server, &language);
     press_in_palette(world, "i".to_string());
 }
 
-/// The list open with the selection on that language's row, walked to with the
-/// arrows rather than reached into: what the list answers to is the router's
-/// answer, and walking is what holds the selection to being reachable with no
-/// modifier. Reopened when it is not up, because `i` closes it — the command
-/// goes to the terminal's input line and the focus follows it — so a re-check
-/// after an install has no list to walk. `r` leaves it standing.
-fn walk_to_row(world: &mut CrimeWorld, language: &str) {
-    if !matches!(world.state.modal, Modal::Tools { .. }) {
-        open_tools(world);
-    }
-    let index = tools::rows(&world.state)
-        .iter()
-        .position(|row| row.kind == tools::Kind::Server && row.name == language)
-        .unwrap_or_else(|| panic!("no row for {language}"));
-    for _ in 0..index {
-        press_in_palette(world, "Down".to_string());
-    }
+#[when(expr = "I take the {word} row for {string}")]
+#[given(expr = "I took the {word} row for {string}")]
+fn take_the_row(world: &mut CrimeWorld, group: String, name: String) {
+    walk_to_row(world, kind(&group), &name);
+    press_in_palette(world, "i".to_string());
 }
 
-#[then(expr = "the terminal is offered {string}")]
-fn terminal_is_offered(world: &mut CrimeWorld, expected: String) {
-    assert_eq!(world.terminal_input, expected);
+fn global_config_path(world: &CrimeWorld) -> PathBuf {
+    world.startup.crime_home.join(startup::CONFIG_FILE)
+}
+
+/// Edited in another editor after CRIME started, so what CRIME started on
+/// and what is on disk now are two different texts.
+#[given("the global config has since been edited to:")]
+fn global_config_edited(world: &mut CrimeWorld, step: &Step) {
+    started(world);
+    let path = global_config_path(world);
+    let text = step.docstring().expect("docstring").trim().to_string();
+    world.files.insert(path, text);
+}
+
+#[then("the global config still holds everything it held")]
+fn global_config_kept(world: &mut CrimeWorld) {
+    let held = world
+        .startup
+        .global_config
+        .clone()
+        .expect("a global config");
+    let now = &world.files[&global_config_path(world)];
+    assert!(now.starts_with(&held), "the file now reads:\n{now}");
+}
+
+#[then(expr = "the global config names the row {string}")]
+fn global_config_names(world: &mut CrimeWorld, dotted: String) {
+    let now = &world.files[&global_config_path(world)];
+    let table: toml::Table = now.parse().expect("the written file parses");
+    let (section, name) = dotted.split_once('.').expect("section.name");
+    assert!(
+        table
+            .get(section)
+            .and_then(toml::Value::as_table)
+            .is_some_and(|rows| rows.contains_key(name)),
+        "no [{dotted}] in:\n{now}"
+    );
+}
+
+fn install_sentinel(world: &CrimeWorld) -> PathBuf {
+    crime::crime_dir(&world.startup.root, world.startup.sidecar.as_deref()).join(tools::SENTINEL)
+}
+
+#[then(expr = "the shell pane runs {string} reporting its exit status")]
+fn shell_pane_runs_install(world: &mut CrimeWorld, install: String) {
+    assert_eq!(
+        world.executed,
+        vec![tools::reported(&install, &install_sentinel(world))]
+    );
 }
 
 /// The shipped default, asserted on the server it names rather than on the
 /// package manager that installs it: which manager is right for a machine is
 /// data `PROGRAMS` carries and a config file may replace, so a scenario pinning
 /// the whole string would be a scenario about the data.
-#[then(expr = "the terminal is offered a command mentioning {string}")]
-fn terminal_offer_mentions(world: &mut CrimeWorld, fragment: String) {
+#[then(expr = "the shell pane runs a command mentioning {string}")]
+fn shell_pane_runs_mentioning(world: &mut CrimeWorld, fragment: String) {
     assert!(
-        world.terminal_input.contains(&fragment),
-        "offered {:?}, which does not mention {fragment:?}",
-        world.terminal_input
+        matches!(world.executed.as_slice(), [run] if run.contains(&fragment)),
+        "executed {:?}, which does not mention {fragment:?}",
+        world.executed
     );
+}
+
+/// The sentinel written and seen by the watcher, as the shell's `echo $?`
+/// and the rename after it leave it.
+#[when(expr = "the install reports the exit status {string}")]
+fn install_reports(world: &mut CrimeWorld, status: String) {
+    let sentinel = install_sentinel(world);
+    world.files.insert(sentinel.clone(), format!("{status}\n"));
+    world.send(Event::FilesAppeared(vec![(sentinel, tree::Kind::File)]));
+}
+
+/// The list open with the selection on that row, walked to with the
+/// arrows rather than reached into: what the list answers to is the router's
+/// answer, and walking is what holds the selection to being reachable with no
+/// modifier. Reopened when it is not up, because `i` closes it — the install
+/// runs in the shell pane and the focus follows it — so a re-check
+/// after an install has no list to walk. `r` leaves it standing.
+fn walk_to_row(world: &mut CrimeWorld, group: tools::Kind, name: &str) {
+    if !matches!(world.state.modal, Modal::Tools { .. }) {
+        open_tools(world);
+    }
+    let index = tools::rows(&world.state)
+        .iter()
+        .position(|row| row.kind == group && row.name == name)
+        .unwrap_or_else(|| panic!("no {} row for {name}", group.as_str()));
+    for _ in 0..index {
+        press_in_palette(world, "Down".to_string());
+    }
 }
 
 #[then(expr = "the focus is the terminal")]
@@ -11636,7 +11722,7 @@ fn no_language_server_is_started(world: &mut CrimeWorld) {
 #[when(expr = "I re-check the row for {string}")]
 #[given(expr = "I re-check the row for {string}")]
 fn recheck_the_row(world: &mut CrimeWorld, language: String) {
-    walk_to_row(world, &language);
+    walk_to_row(world, tools::Kind::Server, &language);
     press_in_palette(world, "r".to_string());
 }
 
@@ -11659,7 +11745,6 @@ fn is_not_asking_whether_to_restart(world: &mut CrimeWorld) {
 /// which row asked it is not something a Scenario can observe.
 #[given(expr = "CRIME is asking whether to restart")]
 fn is_asking_whether_to_restart(world: &mut CrimeWorld) {
-    install_the_row(world, "zig".to_string());
     recheck_the_row(world, "zig".to_string());
     command_is_not_on_path(world, "zls".to_string());
     assert_eq!(world.state.modal, Modal::Restart);

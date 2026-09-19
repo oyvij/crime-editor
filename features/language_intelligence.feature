@@ -1819,12 +1819,13 @@ Feature: Language intelligence
     `docs/adr/0012-an-install-command-is-configuration.md` argues why it is one more key in the
     `[lsp.<language>]` table, shipped as TOML data exactly as the server names are: a match on
     language and OS inside the library is ADR 0011's forbidden arm with a package manager's name in
-    it as well as a server's. So the assertion throughout is on the command CRIME *offered*, and the
-    absence asserted beside it is that nothing was executed.
+    it as well as a server's. So the assertion throughout is on the command CRIME *ran*, which is
+    the string configuration carried and nothing CRIME composed.
 
-    The command is typed into the terminal and never run, the way the tree's actions already work. An
-    install is a command with consequences on a machine CRIME does not own, and a default that is
-    wrong for this machine is then one word away from being right.
+    The command runs in the shell pane, visibly, where a `sudo` prompt can be answered and a default
+    that is wrong for this machine fails on screen with its exit status recorded
+    (`docs/adr/0018-the-global-config-is-the-list-of-programs.md` reverses ADR 0012's "typed, never
+    run").
 
     Whether a command resolves on PATH is a fact only the edge can observe, so scenarios state it as
     one — the same way they state that a server is running. Which OS the binary was built for is
@@ -1864,7 +1865,7 @@ Feature: Language intelligence
       When I open Tools
       Then the row for "rust" names the command "/opt/ra/rust-analyzer"
 
-    Scenario: Installing a row offers its configured command for this OS, and runs nothing
+    Scenario: Installing a row runs its configured command for this OS in the shell pane
       Given CRIME was built for "macos"
       And the command "zls" is not on PATH
       And the project config is:
@@ -1876,11 +1877,10 @@ Feature: Language intelligence
         """
       When I open Tools
       And I install the row for "zig"
-      Then the terminal is offered "brew install zls"
-      And no command has been executed
+      Then the shell pane runs "brew install zls" reporting its exit status
       And the focus is the terminal
 
-    Scenario: The same row on another OS offers that OS's command
+    Scenario: The same row on another OS runs that OS's command
       Given CRIME was built for "linux"
       And the command "zls" is not on PATH
       And the project config is:
@@ -1892,8 +1892,7 @@ Feature: Language intelligence
         """
       When I open Tools
       And I install the row for "zig"
-      Then the terminal is offered "zig build -Doptimize=ReleaseSafe"
-      And no command has been executed
+      Then the shell pane runs "zig build -Doptimize=ReleaseSafe" reporting its exit status
 
     Scenario: A template install command needs no row written by hand
       Given CRIME was built for "macos"
@@ -1902,8 +1901,7 @@ Feature: Language intelligence
       And the command "gopls" is not on PATH
       When I open Tools
       And I install the row for "go"
-      Then the terminal is offered a command mentioning "gopls"
-      And no command has been executed
+      Then the shell pane runs a command mentioning "gopls"
 
     Scenario: A global config overrides a shipped install command
       Given CRIME was built for "macos"
@@ -1916,7 +1914,7 @@ Feature: Language intelligence
         """
       When I open Tools
       And I install the row for "go"
-      Then the terminal is offered "my-own-installer gopls"
+      Then the shell pane runs "my-own-installer gopls" reporting its exit status
 
     Scenario: A language with no install command for this OS says so and offers nothing
       Given CRIME was built for "linux"
@@ -1955,7 +1953,7 @@ Feature: Language intelligence
       Then the terminal is offered nothing
       And the editor refuses with "tool-already-installed"
 
-    Scenario: A row that reads stopped offers its install command rather than refusing
+    Scenario: A row that reads stopped runs its install command rather than refusing
       Given CRIME was built for "macos"
       And the project config is:
         """
@@ -1968,8 +1966,7 @@ Feature: Language intelligence
       And the command "rust-analyzer" is on PATH
       And the language server for "rust" exits
       When I install the row for "rust"
-      Then the terminal is offered "install-the-rust-server"
-      And no command has been executed
+      Then the shell pane runs "install-the-rust-server" reporting its exit status
 
     Scenario: A stopped row with no install command for this OS offers nothing
       Given CRIME was built for "linux"

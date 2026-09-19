@@ -1899,7 +1899,11 @@ not own. The command is one more key in the `[lsp.<language>]` table, shipped as
 `DEFAULTS` exactly as the server names are, so it is overridable by a file, inspectable as a string
 and extensible without a release. `docs/adr/0012-an-install-command-is-configuration.md` argues why
 that is R31.1's rule rather than an exception to it, and records asking the AI session as the
-rejected alternative and the natural fallback for the unpackaged long tail.
+rejected alternative and the natural fallback for the unpackaged long tail. *Amended by
+`docs/adr/0018-the-global-config-is-the-list-of-programs.md`: the key **takes** the row — a row the
+global config lacks is appended from the template with any `[facts.*]` row it names, and the install
+**runs** in the shell pane as `<install>; echo $? > <sentinel>`, visibly, where a `sudo` prompt is
+answered. A global config that does not parse refuses the key and nothing is written or run.*
 
 **R31.22** **The command is per-OS, and a language with no command for this OS is a normal row.** The
 key is a small table — `install.macos`, `install.linux`, `install.windows` — selected by the OS the
@@ -1914,7 +1918,9 @@ A claim about the filesystem and this process's environment, so written by `tell
 rather than cached at startup, because the premise of the list is that what it describes is about to
 change. **An install is observed, never believed:** nothing reads the terminal's output, which
 ADR-0004 forbids anyway, and what changes CRIME's behaviour is the probe finding the command on a
-later pass.
+later pass. *Amended by ADR 0018: an install taken from Tools reports its exit status through a
+sentinel the watcher sees, a non-zero status reads `install-failed` on its row, and a zero is a
+re-check of that row.*
 
 **R31.24** **A command that appears is a reason to forget that it was missing, which is why there is
 no restart.** A failed spawn writes a `Gone` conversation and `sync` skips any language that has one,

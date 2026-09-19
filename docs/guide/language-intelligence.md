@@ -147,18 +147,21 @@ template never edits a row you already have.
 | `partly-working` | the configuration says this server cannot do something, and the row names it |
 | `no-install-command` | not installed, and nothing is configured to install it on this OS |
 | `available` | a template row no config file names, so CRIME does not run it |
+| `install-failed` | its install ran and exited with a failure — the output is in the terminal pane |
 
 | Key | Does |
 |---|---|
-| `i` | put the row's install command for this OS on the terminal's input line and move focus there — **it is never run for you** |
+| `i` | take the row: add it to `~/.crime/config.toml` if the file lacks it, and run its install command for this OS in the terminal pane |
 | `r` | re-check the row |
 | `Esc` | close the list |
 
-An install has consequences on a machine CRIME does not own, so you read the command, edit it if
-your package manager differs, and press Enter yourself. A row already `installed` refuses `i`; a
-`stopped` row offers its install command, since reinstalling is exactly what fixes a command that
-is present and does not work. Once the command appears — on a re-check, or simply on the next pass —
-the server starts on the next file you open, with no restart.
+The row is appended after the last line of your global config, with any requirement it names,
+and nothing you wrote is touched; a row the file already has is not written again. The install runs
+where you can watch it and answer a `sudo` prompt, and when it ends CRIME checks for the command
+again. If your global config does not parse, `i` names the fault and writes and runs nothing. A row
+already `installed` refuses `i`; a `stopped` row runs its install, since reinstalling is exactly
+what fixes a command that is present and does not work. Once the command appears the server
+starts, with no restart.
 
 One case needs a restart: an installer that added its directory to your shell profile, which a
 running CRIME cannot see. If a re-check after installing still finds nothing, CRIME asks whether to

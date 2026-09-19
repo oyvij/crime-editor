@@ -149,7 +149,7 @@ its state — `installed`, `missing`, `stopped`, `no-install-command`, `missing-
 | `command` | required after the merge | string | The server binary. |
 | `args` | `[]` | array of strings | Its arguments. `${fact}` names are filled. |
 | `also_served_by` | `[]` | array of language names | Other languages' servers that also serve this language's files. A `.vue` file is served by the Vue server *and* the TypeScript server. |
-| `install.macos`, `install.linux`, `install.windows` | per row | string | What installs the server on that OS. Typed onto the terminal's input line by Tools, never run. A row with no key for your OS says `no-install-command` and offers nothing. |
+| `install.macos`, `install.linux`, `install.windows` | per row | string | What installs the server on that OS. Run in the terminal pane when the row is taken in Tools. A row with no key for your OS says `no-install-command` and offers nothing. |
 | `initialization_options` | unset | table | Handed to the server untouched at start-up, as JSON. CRIME reads nothing inside it; `${fact}` values are filled, and a key whose value asked for an unfound optional fact is dropped. |
 | `partial` | unset | string | What this server, installed and running, still cannot do — in your words. Shown on its row, which then reads `partly-working`. |
 | `unanswerable.request`, `unanswerable.response` | unset | two strings, both or neither | A question this server puts to its client that CRIME will not answer, and the method to refuse it on — so the server moves on instead of waiting forever. |
@@ -225,13 +225,14 @@ What reads a Selection aloud. Explained in full in [reading-aloud.md](reading-al
 
 Nothing else is a placeholder. There is no environment-variable expansion and no template language.
 
-### `install.<os>`: typed, never run
+### `install.<os>`: run when you take the row
 
-Every `install` key — server, formatter, voice — is offered the same way: CRIME puts the command on
-the terminal pane's input line and does **not** press Enter. You read it, change it if your machine
-wants a different package manager, and run it yourself. Nothing is installed because a file was
-opened; nothing is downloaded by CRIME; nothing is written to your config file. Which key applies is
-the operating system the binary was built for. Once the command exists, the next check picks it up
+Taking a row in Tools (`i`) is the whole install: the row is appended to `~/.crime/config.toml` if
+the file lacks it, and its `install` key runs in the terminal pane, where you watch it and answer a
+`sudo` prompt. Its exit status comes back to the row, which reads `install-failed` if it failed.
+Elsewhere — `:format` finding its command missing, reading aloud — the command is still put on the
+terminal pane's input line without Enter pressed. Nothing is installed because a file was opened.
+Which key applies is the operating system the binary was built for. Once the command exists, the next check picks it up
 with no restart — unless the installer only appended to your shell profile, in which case a restart is
 offered, never taken.
 

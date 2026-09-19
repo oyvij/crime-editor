@@ -69,3 +69,85 @@ Feature: Tools — one list of everything CRIME runs
     When I open Tools
     Then the server row for "rust" differs from its template
     And the server row for "go" is the template's
+
+  Rule: Taking a row is the whole install
+
+    One key writes the row and runs what installs it. A row the global file lacks is appended from
+    the template, with any `[facts.*]` row its values name, and nothing already in the file is
+    touched. The install runs in the shell pane, visibly, where a `sudo` prompt can be answered, and
+    reports its exit status through a sentinel file the watcher already sees — the way a clone does
+    (`docs/adr/0015-a-clone-is-the-users-own-git.md`). A file CRIME cannot parse is refused before
+    anything is written or run.
+
+    Scenario: Taking an available row appends it to the global config and runs its install
+      Given the global config is:
+        """
+        # Servers I chose myself.
+        [lsp.rust]
+        command = "rust-analyzer"
+        extensions = ["rs"]
+        """
+      And the project has no config file
+      And the command "gopls" is not on PATH
+      When I take the server row for "go"
+      Then the global config still holds everything it held
+      And the global config names the row "lsp.go"
+      And the shell pane runs "go install golang.org/x/tools/gopls@latest" reporting its exit status
+
+    Scenario: Taking a row whose values name a requirement appends the requirement too
+      Given the global config is:
+        """
+        [lsp.rust]
+        command = "rust-analyzer"
+        extensions = ["rs"]
+        """
+      And the project has no config file
+      When I take the server row for "vue"
+      Then the global config names the row "lsp.vue"
+      And the global config names the row "facts.typescript_sdk"
+
+    Scenario: Taking a row the global config already has only runs its install
+      Given the global config is:
+        """
+        [lsp.go]
+        command = "gopls"
+        extensions = ["go"]
+        install.linux = "my-own-installer gopls"
+        """
+      And the project has no config file
+      And the command "gopls" is not on PATH
+      When I take the server row for "go"
+      Then the global config is unchanged
+      And the shell pane runs "my-own-installer gopls" reporting its exit status
+
+    Scenario: A global config that no longer parses is refused, and nothing is written or run
+      Given the global config is:
+        """
+        [lsp.rust]
+        command = "rust-analyzer"
+        extensions = ["rs"]
+        """
+      And the project has no config file
+      And the global config has since been edited to:
+        """
+        [lsp.rust
+        command = "rust-analyzer"
+        """
+      When I take the server row for "go"
+      Then the editor refuses with "broken-config"
+      And the global config is unchanged
+      And no command has been executed
+
+    Scenario: An install that exits with a failure says so on its row
+      Given the global config is:
+        """
+        [lsp.go]
+        command = "gopls"
+        extensions = ["go"]
+        install.linux = "go install golang.org/x/tools/gopls@latest"
+        """
+      And the project has no config file
+      And the command "gopls" is not on PATH
+      And I took the server row for "go"
+      When the install reports the exit status "1"
+      Then the server row for "go" is "install-failed"

@@ -1,6 +1,6 @@
 [package]
 name = "crime"
-version = "0.151.0"
+version = "0.152.0"
 edition = "2021"
 description = "CRIME — Command · Review · Integrated · Modal · Editor"
 license = "MIT"
@@ -40,6 +40,7 @@ unicode-segmentation = "1.13.3"
 hound = "3.5.1"
 linkify = "0.11.0"
 sha2 = "0.11.0"
+toml_edit = "0.25.15"
 
 [dev-dependencies]
 cucumber = "0.21"

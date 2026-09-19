@@ -509,6 +509,9 @@ pub enum ConfigFault {
         extension: String,
         rows: [String; 2],
     },
+    /// The file is there and the edge could not read it. Never written over:
+    /// what cannot be read cannot be kept.
+    Unreadable,
 }
 
 impl std::fmt::Display for ConfigError {
@@ -525,6 +528,7 @@ impl std::fmt::Display for ConfigError {
                 extension,
                 rows: [first, second],
             } => write!(f, "[{first}] and [{second}] both claim .{extension}"),
+            ConfigFault::Unreadable => write!(f, "config cannot be read"),
         }
     }
 }
@@ -1075,7 +1079,10 @@ fn path_refusal(status: PathStatus) -> Option<&'static str> {
 /// text can name a line — but a layer is a *patch*, so completeness is the
 /// merged table's to satisfy and is checked once, at the end. `origins` is what
 /// lets that fault still name a file and a line after the source text is gone.
-fn merged_config(global: Option<&str>, project: Option<&str>) -> Result<Table, ConfigError> {
+pub(crate) fn merged_config(
+    global: Option<&str>,
+    project: Option<&str>,
+) -> Result<Table, ConfigError> {
     let mut table = toml::Table::new();
     let mut origins = BTreeMap::new();
     let seeded = template();

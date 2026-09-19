@@ -1977,13 +1977,14 @@ fn reap_player(edge: &mut Edge, queue: &mut VecDeque<Event>) {
 }
 
 /// Whether each configured command is on this machine, asked while the list
-/// that shows it is open and at no other time: the premise of the list is that
+/// that shows it is open or a re-check waits on the answer, and at no other
+/// time: the premise of the list is that
 /// what it describes is about to change, so an answer kept from startup would
 /// describe the machine as it was. `which` rather than a walk over `PATH` — an
 /// executable bit, a `PATHEXT` on Windows and a command that is already an
 /// absolute path are the edge cases nobody meets until they hit one.
 fn probe_path(state: &State, edge: &mut Edge) {
-    if !matches!(state.modal, Modal::Tools { .. }) {
+    if !matches!(state.modal, Modal::Tools { .. }) && state.recheck.is_none() {
         edge.on_path = None;
         return;
     }
@@ -2673,6 +2674,28 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
                 }
             };
             queue.push_back(Event::Branches(branching));
+        }
+        // A file that is not there is an empty one: appending to it loses
+        // nothing. One that is there and cannot be read is `None`, which the
+        // core refuses rather than writing over.
+        Effect::ReadGlobalConfig { path, kind, name } => {
+            let text = match std::fs::read_to_string(&path) {
+                Ok(text) => Some(text),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
+                Err(error) => {
+                    eprintln!("crime: cannot read {}: {error}", path.display());
+                    None
+                }
+            };
+            queue.push_back(Event::GlobalConfigRead { kind, name, text });
+        }
+        Effect::ReadInstallStatus(sentinel) => {
+            let status = std::fs::read_to_string(&sentinel)
+                .inspect_err(|error| {
+                    eprintln!("crime: cannot read {}: {error}", sentinel.display())
+                })
+                .ok();
+            queue.push_back(Event::InstallEnded(status));
         }
         Effect::CheckoutBranch { repo, name } => queue.push_back(match checkout(&repo, &name) {
             Ok(left) => Event::CheckedOut { left },

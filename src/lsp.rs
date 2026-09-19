@@ -3561,11 +3561,10 @@ mod tests {
         open(&mut state, "src/lib.rs", "fn main() {}");
         pass(&mut state);
         gone(&mut state, "rust", Gone::Exited);
+        let row = &crate::tools::rows(&state)[0];
         assert_eq!(
-            crate::tools::rows(&state)[0].availability,
-            crate::tools::Availability::Stopped {
-                install: Some("install-it".to_string())
-            },
+            (&row.availability, row.install.as_deref()),
+            (&crate::tools::Availability::Stopped, Some("install-it")),
             "the command is here and CRIME watched it go, so the row offers the fix"
         );
         state

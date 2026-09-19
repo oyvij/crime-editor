@@ -2178,15 +2178,16 @@ fn piece_style(kind: crime::preview::RowKind, dark: bool, piece: &crime::preview
 /// turns the suite red. Nothing is ever refused in silence — that is the
 /// failure `src/keys.rs` is shaped to prevent.
 fn refusal_spans(state: &State) -> Vec<Span<'static>> {
-    let Some(refusal) = state.refusal else {
+    let Some(refusal) = &state.refusal else {
         return Vec::new();
     };
     let wording = match refusal {
-        crime::preview::Refusal::NotMarkdown => " not markdown — :preview reads .md ",
-        crime::preview::Refusal::NoFileOpen => " no file open ",
-        crime::preview::Refusal::ReadOnlyPreview => " preview — :preview to edit ",
-        crime::preview::Refusal::GuestReadOnly => " read-only — not your repository ",
-        crime::preview::Refusal::ToolAlreadyInstalled => " already installed ",
+        crime::preview::Refusal::NotMarkdown => " not markdown — :preview reads .md ".to_string(),
+        crime::preview::Refusal::NoFileOpen => " no file open ".to_string(),
+        crime::preview::Refusal::ReadOnlyPreview => " preview — :preview to edit ".to_string(),
+        crime::preview::Refusal::GuestReadOnly => " read-only — not your repository ".to_string(),
+        crime::preview::Refusal::ToolAlreadyInstalled => " already installed ".to_string(),
+        crime::preview::Refusal::BrokenConfig(error) => format!(" {error} "),
     };
     vec![Span::styled(wording, Style::default().fg(WARNING))]
 }
@@ -3747,11 +3748,12 @@ fn tool_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>>
         }
         let colour = match row.availability {
             tools::Availability::Installed | tools::Availability::Available => Color::DarkGray,
-            tools::Availability::Missing { .. }
+            tools::Availability::Missing
             | tools::Availability::Unmet { .. }
-            | tools::Availability::Stopped { .. }
+            | tools::Availability::Stopped
             | tools::Availability::Partial { .. }
-            | tools::Availability::Unpackaged => WARNING,
+            | tools::Availability::Unpackaged
+            | tools::Availability::InstallFailed => WARNING,
         };
         // The state word says there is a gap; only configuration's own words
         // say what is in it, so the row carries them. A row that differs from

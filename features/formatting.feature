@@ -22,8 +22,8 @@ Feature: Formatting a file
   Two refusals carry as much of this as the happy path does, because they are what a plausible
   implementation makes silent. A language nothing configures is told so, naming the key to write. A
   command that is configured and not installed puts its install command on the terminal's input line
-  and runs nothing at all — `SetTerminalInput`, never `RunInTerminal`, exactly as Tools'
-  `i` does and for the reason ADR 0012 gives. Typed and not run is a promise about bytes, so the
+  and runs nothing at all — `SetTerminalInput`, never `RunInTerminal`, for the reason ADR 0012
+  gives. (Tools' `i` runs its install since ADR 0018; `:format` does not take a row.) Typed and not run is a promise about bytes, so the
   string is stripped of control characters on the way: a newline in it is the Enter CRIME says it
   never presses.
 

@@ -2,12 +2,13 @@
 //! formatters, requirements and speech, as the config files name them, beside
 //! every template row they do not name.
 
-use crate::startup::{self, Config, PROGRAMS};
+use crate::startup::{self, Config, ConfigError, PROGRAMS};
 use crate::{lsp, State};
 use std::collections::BTreeMap;
+use std::path::Path;
 
 /// The groups, in the order the list draws them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     Server,
     Formatter,
@@ -22,6 +23,18 @@ impl Kind {
             Kind::Formatter => "formatters",
             Kind::Requirement => "requirements",
             Kind::Speech => "speech",
+        }
+    }
+
+    /// The table a row of this kind is under in a config file. Speech is keys
+    /// of one `[speech]` table rather than a table per row, so taking one
+    /// appends nothing.
+    fn section(self) -> Option<&'static str> {
+        match self {
+            Kind::Server => Some("lsp"),
+            Kind::Formatter => Some("formatter"),
+            Kind::Requirement => Some("facts"),
+            Kind::Speech => None,
         }
     }
 }
@@ -42,13 +55,15 @@ pub struct ToolRow {
     pub kind: Kind,
     pub name: String,
     pub command: String,
+    /// What installs it on this OS: the file's, or for an available row the
+    /// template's.
+    pub install: Option<String>,
     pub availability: Availability,
     pub origin: Origin,
 }
 
-/// What a row can offer. States of one fact rather than a flag beside an
-/// option, so `Missing` cannot be read without the command that answers it and
-/// the ones that offer nothing cannot be read as offering one.
+/// How a row stands on this machine. What installs it is the row's own
+/// `install`; whether taking the row runs it is decided by this.
 ///
 /// The two questions a reader has — is the command here, and does it work —
 /// are one enum and not two fields, because they are not independent: a
@@ -70,11 +85,11 @@ pub enum Availability {
     /// find out what a row says). It offers whatever installs it, because a
     /// command that is present and does not work is exactly the row an install
     /// would fix, and refusing it as already installed is refusing the fix.
-    /// Optional where `Missing`'s is not: `stopped` is a fact about the child
-    /// and stays true for an OS nothing is packaged for.
-    Stopped { install: Option<String> },
+    /// `stopped` is a fact about the child, so it stays true for an OS nothing
+    /// is packaged for.
+    Stopped,
     /// Not on this machine, and configuration says what installs it here.
-    Missing { install: String },
+    Missing,
     /// On this machine, and something its configuration asks the edge for is
     /// not: a `[facts.*]` table declares the name and this workspace has no
     /// answer for it, so the server would run without what it needs — which is
@@ -103,6 +118,10 @@ pub enum Availability {
     /// not run it, because a row that is not in a file does not run
     /// (`docs/adr/0018-the-global-config-is-the-list-of-programs.md`).
     Available,
+    /// Taken, and its install reported a status other than 0. Said on the row
+    /// until it is taken again, because an install that failed in a pane the
+    /// reader has since scrolled past is otherwise a failure nobody sees.
+    InstallFailed,
 }
 
 impl Availability {
@@ -110,11 +129,12 @@ impl Availability {
         match self {
             Availability::Installed => "installed",
             Availability::Partial { .. } => "partly-working",
-            Availability::Stopped { .. } => "stopped",
-            Availability::Missing { .. } => "missing",
+            Availability::Stopped => "stopped",
+            Availability::Missing => "missing",
             Availability::Unmet { .. } => "missing-requirement",
             Availability::Unpackaged => "no-install-command",
             Availability::Available => "available",
+            Availability::InstallFailed => "install-failed",
         }
     }
 }
@@ -131,6 +151,7 @@ pub fn rows(state: &State) -> Vec<ToolRow> {
         &state.servers,
         template.servers(),
         |server| server.command.clone(),
+        |server| server.install.get(&state.os).cloned(),
         |language, server| match on_path(&server.command) {
             // A command that is here still answers for what its configuration
             // asks the edge to find: a Vue server started without its SDK is a
@@ -143,9 +164,7 @@ pub fn rows(state: &State) -> Vec<ToolRow> {
                 // itself, while `stopped` is what is left when the command is
                 // here, has what it needs, and still does not work.
                 None => match (lsp::written_off(state, language), &server.partial) {
-                    (true, _) => Availability::Stopped {
-                        install: server.install.get(&state.os).cloned(),
-                    },
+                    (true, _) => Availability::Stopped,
                     // Behind `Stopped`: a server that is not running answers
                     // nothing at all, which is not "partly".
                     (false, Some(without)) => Availability::Partial {
@@ -162,6 +181,7 @@ pub fn rows(state: &State) -> Vec<ToolRow> {
         &state.formatters,
         template.formatters(),
         |formatter| formatter.command.clone(),
+        |formatter| formatter.install.get(&state.os).cloned(),
         |_, formatter| match on_path(&formatter.command) {
             true => Availability::Installed,
             false => absent(formatter.install.get(&state.os)),
@@ -175,6 +195,7 @@ pub fn rows(state: &State) -> Vec<ToolRow> {
         &state.facts,
         template.facts(),
         |fact| fact.command.clone().unwrap_or_default(),
+        |_| None,
         |name, _| match state.workspace_facts.contains_key(name) {
             true => Availability::Installed,
             false => Availability::Unmet {
@@ -187,18 +208,20 @@ pub fn rows(state: &State) -> Vec<ToolRow> {
     // install that fetches one is the fix, so it reads as missing.
     let speech = &state.speech;
     let shipped = startup::speech(&template, &state.os);
-    let install = (!speech.install.is_empty()).then_some(&speech.install);
+    let given = |install: &String| (!install.is_empty()).then(|| install.clone());
     let synthesizer = match speech.command.is_empty() {
         true => (
             shipped.command.clone(),
+            given(&shipped.install),
             Availability::Available,
             Origin::Template,
         ),
         false => (
             speech.command.clone(),
+            given(&speech.install),
             match on_path(&speech.command) && !speech.voice.is_empty() {
                 true => Availability::Installed,
-                false => absent(install),
+                false => absent(given(&speech.install).as_ref()),
             },
             match (&speech.command, &speech.args, &speech.install)
                 == (&shipped.command, &shipped.args, &shipped.install)
@@ -211,11 +234,13 @@ pub fn rows(state: &State) -> Vec<ToolRow> {
     let player = match speech.player.is_empty() {
         true => (
             shipped.player.clone(),
+            None,
             Availability::Available,
             Origin::Template,
         ),
         false => (
             speech.player.clone(),
+            None,
             match on_path(&speech.player) {
                 true => Availability::Installed,
                 false => Availability::Unpackaged,
@@ -230,26 +255,32 @@ pub fn rows(state: &State) -> Vec<ToolRow> {
         [("synthesizer", synthesizer), ("player", player)]
             .into_iter()
             // Neither file nor template names it for this OS.
-            .filter(|(_, (command, _, _))| !command.is_empty())
-            .map(|(name, (command, availability, origin))| ToolRow {
+            .filter(|(_, (command, _, _, _))| !command.is_empty())
+            .map(|(name, (command, install, availability, origin))| ToolRow {
                 kind: Kind::Speech,
                 name: name.to_string(),
                 command,
+                install,
                 availability,
                 origin,
             }),
     );
+    // Last, over whatever the row would otherwise read: the install the
+    // reader asked for is the newest thing known about it.
+    for row in &mut rows {
+        if state.install_failed.contains(&(row.kind, row.name.clone())) {
+            row.availability = Availability::InstallFailed;
+        }
+    }
     rows
 }
 
-/// Not on this machine: what configuration says installs it here, or the
-/// admission that nothing does. Which OS applies is a lookup under the string
+/// Not on this machine: whether configuration says what installs it here, or
+/// admits that nothing does. Which OS applies is a lookup under the string
 /// `Startup` handed in, never a branch on it (R31.22).
 fn absent(install: Option<&String>) -> Availability {
     match install {
-        Some(install) => Availability::Missing {
-            install: install.clone(),
-        },
+        Some(_) => Availability::Missing,
         None => Availability::Unpackaged,
     }
 }
@@ -261,6 +292,7 @@ fn group<T: PartialEq>(
     configured: &BTreeMap<String, T>,
     template: BTreeMap<String, T>,
     command: impl Fn(&T) -> String,
+    install: impl Fn(&T) -> Option<String>,
     status: impl Fn(&str, &T) -> Availability,
 ) -> Vec<ToolRow> {
     let mut rows: Vec<ToolRow> = configured
@@ -269,6 +301,7 @@ fn group<T: PartialEq>(
             kind,
             name: name.clone(),
             command: command(row),
+            install: install(row),
             availability: status(name, row),
             origin: match template.get(name) {
                 Some(shipped) if shipped == row => Origin::Template,
@@ -285,11 +318,98 @@ fn group<T: PartialEq>(
                 kind,
                 name: name.clone(),
                 command: command(row),
+                install: install(row),
                 availability: Availability::Available,
                 origin: Origin::Template,
             }),
     );
     rows
+}
+
+/// Where a taken row's install reports its exit status, inside CRIME's own
+/// directory, which the watcher always watches.
+pub const SENTINEL: &str = "install-done";
+
+/// The install, as one line for the shell pane to run, reporting its exit
+/// status in `sentinel` whatever it was. Written exactly as
+/// [`crate::story::download_command`] writes a clone's, for the reasons given
+/// there: the stale sentinel goes first, and the status is moved into place so
+/// the watcher never sees the file before its contents. The install itself is
+/// configuration's string, run as the reader wrote it.
+pub fn reported(install: &str, sentinel: &Path) -> String {
+    let quoted = |path: &Path| {
+        shlex::try_quote(&path.to_string_lossy())
+            .expect("no NUL in a path")
+            .into_owned()
+    };
+    let writing = quoted(&sentinel.with_extension("writing"));
+    let sentinel = quoted(sentinel);
+    format!("rm -f {sentinel}; {install}; echo $? > {writing}; mv {writing} {sentinel}")
+}
+
+/// What taking a row writes into the global config, given the file's text: the
+/// text with the template's row appended, and every `[facts.*]` row its values
+/// name that the file does not have, or `None` when there is nothing to add —
+/// the file already has the row, or it is not the template's to give.
+///
+/// Appended after the file's last byte, so nothing the reader wrote moves:
+/// every comment and every hand edit is still where it was. The rows are cut
+/// out of the template through `toml_edit`, which keeps the comment above each
+/// one. A file that does not parse is refused with the fault the start would
+/// report, and so is a file the append would make one CRIME refuses — two rows
+/// claiming one extension — since the next start would read it.
+pub fn take(global: &str, kind: Kind, name: &str) -> Result<Option<(String, Config)>, ConfigError> {
+    let has = startup::merged_config(Some(global), None)?;
+    let Some(section) = kind.section() else {
+        return Ok(None);
+    };
+    let template: toml_edit::DocumentMut = PROGRAMS.parse().expect("the template parses");
+    let Some(row) = template.get(section).and_then(|rows| rows.get(name)) else {
+        return Ok(None);
+    };
+    let lacks = |section: &str, name: &str| {
+        !has.get(section)
+            .and_then(toml::Value::as_table)
+            .is_some_and(|rows| rows.contains_key(name))
+    };
+    if !lacks(section, name) {
+        return Ok(None);
+    }
+    let mut appended = toml_edit::DocumentMut::new();
+    let append =
+        |to: &mut toml_edit::DocumentMut, section: &str, name: &str, row: &toml_edit::Item| {
+            let mut parent = toml_edit::Table::new();
+            parent.set_implicit(true);
+            to.entry(section)
+                .or_insert(toml_edit::Item::Table(parent))
+                .as_table_mut()
+                .expect("a section is a table")
+                .insert(name, row.clone());
+        };
+    append(&mut appended, section, name, row);
+    // Rendered rather than read off the item, whose own text leaves out its
+    // sub-tables — where `[lsp.typescript]` names both of its facts.
+    let named = appended.to_string();
+    for (fact, row) in template
+        .get("facts")
+        .and_then(toml_edit::Item::as_table)
+        .into_iter()
+        .flatten()
+    {
+        if named.contains(&format!("${{{fact}}}")) && lacks("facts", fact) {
+            append(&mut appended, "facts", fact, row);
+        }
+    }
+    let mut text = global.to_string();
+    if !text.is_empty() {
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push('\n');
+    }
+    text.push_str(appended.to_string().trim_start());
+    let config = Config(startup::merged_config(Some(&text), None)?);
+    Ok(Some((text, config)))
 }
 
 #[cfg(test)]
@@ -322,9 +442,11 @@ mod tests {
         let mut state = speaking();
         assert_eq!(
             row(&state, Kind::Speech, "synthesizer").availability,
-            Availability::Missing {
-                install: "install-piper".to_string()
-            }
+            Availability::Missing
+        );
+        assert_eq!(
+            row(&state, Kind::Speech, "synthesizer").install.as_deref(),
+            Some("install-piper")
         );
         state.speech.voice = "~/.crime/voices/bryce.onnx".to_string();
         assert_eq!(
@@ -369,6 +491,71 @@ mod tests {
             row(&state, Kind::Requirement, "typescript_sdk").availability,
             Availability::Installed
         );
+    }
+
+    /// The append is after the file's last byte, so every comment and every
+    /// table the reader wrote is kept exactly, and the row comes with the
+    /// requirement its values name.
+    #[test]
+    fn taking_a_row_keeps_the_file_byte_for_byte_and_brings_its_requirement() {
+        let global = "# mine, and hand-aligned\n[lsp.rust]\ncommand   = \"ra\"  # pinned\nextensions = [\"rs\"]";
+        let (text, config) = take(global, Kind::Server, "vue")
+            .expect("parses")
+            .expect("the file lacks vue");
+        assert!(text.starts_with(&format!("{global}\n\n")), "{text}");
+        assert!(config.servers().contains_key("vue"));
+        assert!(config.facts().contains_key("typescript_sdk"));
+        assert_eq!(config.servers()["rust"].command, "ra");
+        assert!(text.ends_with('\n'), "{text}");
+    }
+
+    /// A requirement the file already has is not written twice, and a row it
+    /// already has is not written at all.
+    #[test]
+    fn taking_writes_only_what_the_file_lacks() {
+        let (with_fact, _) = take("", Kind::Requirement, "typescript_sdk")
+            .expect("parses")
+            .expect("an empty file lacks it");
+        let (text, _) = take(&with_fact, Kind::Server, "vue")
+            .expect("parses")
+            .expect("the file lacks vue");
+        assert_eq!(text.matches("[facts.typescript_sdk]").count(), 1, "{text}");
+        assert!(take(&text, Kind::Server, "vue").expect("parses").is_none());
+    }
+
+    /// A row with sub-tables keeps them together, under its own header, and
+    /// not interleaved with the tables of the file it lands in.
+    #[test]
+    fn a_row_with_sub_tables_is_appended_whole() {
+        let global = "[lsp.rust]\ncommand = \"ra\"\nextensions = [\"rs\"]\n\n[formatter.rust]\ncommand = \"rustfmt\"\nextensions = [\"rs\"]\n";
+        let (text, config) = take(global, Kind::Server, "typescript")
+            .expect("parses")
+            .expect("the file lacks typescript");
+        assert!(text.starts_with(global), "{text}");
+        assert!(config.facts().contains_key("typescript_sdk"), "{text}");
+        assert!(
+            config.facts().contains_key("vue_typescript_plugin"),
+            "{text}"
+        );
+        let template = Config(PROGRAMS.parse().expect("the template parses"));
+        assert_eq!(
+            config.servers()["typescript"],
+            template.servers()["typescript"]
+        );
+    }
+
+    /// A row the append would make a file CRIME refuses — two rows claiming
+    /// one extension — is refused before anything is written.
+    #[test]
+    fn an_append_that_would_break_the_file_is_refused() {
+        let global = "[lsp.mine]\ncommand = \"mine\"\nextensions = [\"go\"]\n";
+        assert!(matches!(
+            take(global, Kind::Server, "go"),
+            Err(ConfigError {
+                fault: startup::ConfigFault::ClaimedTwice { .. },
+                ..
+            })
+        ));
     }
 
     /// A row the template has never heard of is the reader's own, which is
