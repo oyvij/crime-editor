@@ -1837,12 +1837,12 @@ Feature: Language intelligence
     holding leaves a written-off conversation behind — so the row reads that rather than probing, and
     nothing is spawned to find out what a row says.
 
-    Scenario: The palette offers the server list, and the list is what configuration names
+    Scenario: The palette offers Tools, and its servers are what configuration names
       Given there is no global config
       And the project has no config file
       When I open the palette
       And I press "v" in the palette
-      Then the palette is listing language servers
+      Then the palette is listing tools
       And the list offers a row for "rust"
       And the list offers a row for "typescript"
       And the list offers a row for "java"
@@ -1851,7 +1851,7 @@ Feature: Language intelligence
     Scenario: A row says whether its command is on this machine
       Given the command "rust-analyzer" is on PATH
       And the command "zls" is not on PATH
-      When I open the language server list
+      When I open Tools
       Then the row for "rust" is "installed"
       And the row for "zig" is "missing"
 
@@ -1861,7 +1861,7 @@ Feature: Language intelligence
         [lsp.rust]
         command = "/opt/ra/rust-analyzer"
         """
-      When I open the language server list
+      When I open Tools
       Then the row for "rust" names the command "/opt/ra/rust-analyzer"
 
     Scenario: Installing a row offers its configured command for this OS, and runs nothing
@@ -1874,7 +1874,7 @@ Feature: Language intelligence
         install.macos = "brew install zls"
         install.linux = "zig build -Doptimize=ReleaseSafe"
         """
-      When I open the language server list
+      When I open Tools
       And I install the row for "zig"
       Then the terminal is offered "brew install zls"
       And no command has been executed
@@ -1890,7 +1890,7 @@ Feature: Language intelligence
         install.macos = "brew install zls"
         install.linux = "zig build -Doptimize=ReleaseSafe"
         """
-      When I open the language server list
+      When I open Tools
       And I install the row for "zig"
       Then the terminal is offered "zig build -Doptimize=ReleaseSafe"
       And no command has been executed
@@ -1900,7 +1900,7 @@ Feature: Language intelligence
       And there is no global config
       And the project has no config file
       And the command "gopls" is not on PATH
-      When I open the language server list
+      When I open Tools
       And I install the row for "go"
       Then the terminal is offered a command mentioning "gopls"
       And no command has been executed
@@ -1914,7 +1914,7 @@ Feature: Language intelligence
         command = "gopls"
         install.macos = "my-own-installer gopls"
         """
-      When I open the language server list
+      When I open Tools
       And I install the row for "go"
       Then the terminal is offered "my-own-installer gopls"
 
@@ -1927,7 +1927,7 @@ Feature: Language intelligence
         command = "zls"
         install.macos = "brew install zls"
         """
-      When I open the language server list
+      When I open Tools
       Then the row for "zig" is "no-install-command"
       When I install the row for "zig"
       Then the terminal is offered nothing
@@ -1938,22 +1938,22 @@ Feature: Language intelligence
       And "src/lib.rs" is open in the editor
       And the command "rust-analyzer" is on PATH
       When the language server for "rust" exits
-      And I open the language server list
+      And I open Tools
       Then the row for "rust" is "stopped"
 
     Scenario: Opening the list spawns nothing to find out what a row says
       Given the command "rust-analyzer" is on PATH
-      When I open the language server list
+      When I open Tools
       Then the row for "rust" is "installed"
       And no language server was started
 
     Scenario: A row already installed and answering is not installed again
       Given the command "rust-analyzer" is on PATH
-      When I open the language server list
+      When I open Tools
       Then the row for "rust" is "installed"
       When I install the row for "rust"
       Then the terminal is offered nothing
-      And the editor refuses with "server-already-installed"
+      And the editor refuses with "tool-already-installed"
 
     Scenario: A row that reads stopped offers its install command rather than refusing
       Given CRIME was built for "macos"
@@ -2022,7 +2022,7 @@ Feature: Language intelligence
 
     Scenario: The list is left without installing anything
       Given the command "zls" is not on PATH
-      When I open the language server list
+      When I open Tools
       And I press "Escape" in the palette
       Then the palette is closed
       And the terminal is offered nothing
@@ -2234,7 +2234,7 @@ Feature: Language intelligence
       And CRIME started in the project
       And the command "zls" is on PATH
       And the edge resolved no "zig_plugin"
-      When I open the language server list
+      When I open Tools
       Then the row for "zig" is "installed"
 
     Scenario: A fact that says nothing about it is still a requirement
@@ -2297,7 +2297,7 @@ Feature: Language intelligence
     Scenario: A row installed but missing what it needs is neither installed nor missing
       Given the command "vue-language-server" is on PATH
       And the edge resolved no "typescript_sdk"
-      When I open the language server list
+      When I open Tools
       Then the row for "vue" is "missing-requirement"
 
     Scenario: A language configuration says only partly works reads as neither
@@ -2308,7 +2308,7 @@ Feature: Language intelligence
         partial = "type errors"
         """
       And the command "elm-language-server" is on PATH
-      When I open the language server list
+      When I open Tools
       Then the row for "elm" is "partly-working"
 
     Scenario: What a partly-working language cannot do is named on its row
@@ -2319,7 +2319,7 @@ Feature: Language intelligence
         partial = "type errors"
         """
       And the command "elm-language-server" is on PATH
-      When I open the language server list
+      When I open Tools
       Then the row for "elm" says it cannot do "type errors"
 
     Scenario: A missing command is a missing command, whatever it would only partly do
@@ -2331,13 +2331,13 @@ Feature: Language intelligence
         install.macos = "npm install -g @elm-tooling/elm-language-server"
         """
       And CRIME was built for "macos"
-      When I open the language server list
+      When I open Tools
       Then the row for "elm" is "missing"
 
     Scenario: The same row with the SDK found reads as installed
       Given the command "vue-language-server" is on PATH
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
-      When I open the language server list
+      When I open Tools
       Then the row for "vue" is "installed"
 
   Rule: A question CRIME cannot answer is refused out loud, never met with silence

@@ -365,7 +365,7 @@ focus keys they are the alternative to.
 **R6.2** The double-tap window is **300 ms**, configurable in `~/.crime` (Q16b).
 **R6.3** The palette lists **panes, views and commands, grouped** — Panes: `(o)` Editor, `(d)`
 Files, `(t)` Terminal, `(k)` Risk, `(a)` AI, `(l)` Tall · Views: `(e)` Edit, `(r)` Review, `(s)`
-Story · Project: `(f)` Find, `(v)` Servers · Help: `(h)` Keys, `(u)` Update · `(q)`
+Story · Project: `(f)` Find, `(v)` Tools · Help: `(h)` Keys, `(u)` Update · `(q)`
 Quit (Q17). *Amended with F22: a view takes its own initial, so `s` moved from submit to Story and
 **submit was `u`**. Amended again once the flat list reached thirteen rows: it is **grouped**,
 `Editor` joined it as a pane of its own, `(u)` became Update, and **Copy, Write and Submit left**.*

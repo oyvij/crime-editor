@@ -33,6 +33,7 @@ pub mod risk;
 pub mod search;
 pub mod startup;
 pub mod story;
+pub mod tools;
 pub mod tree;
 pub mod tree_actions;
 
@@ -202,7 +203,7 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
             // closing one. `v` because every letter that reads as "servers" or
             // "language" is already spent, and it must be reachable with no
             // modifier (R31.11).
-            ('v', "Servers"),
+            ('v', "Tools"),
             ('c', "Collapse"),
         ],
     ),
@@ -318,8 +319,8 @@ pub enum Modal {
     /// no use for through to the buffer behind it — which is what keeps typing
     /// working while it is up.
     Candidates(lsp::Candidates),
-    /// The palette's second face: what configuration says could serve this
-    /// workspace, one row per language, and whether each command is on this
+    /// The palette's second face, Tools: every program configuration names
+    /// and every template row it does not, and whether each command is on this
     /// machine. One variant rather than a bool beside `Palette`, for the reason
     /// [`Modal`] exists at all — two bools can both be true, and a list that is
     /// open and closed at once has no answer for the next keystroke.
@@ -327,7 +328,7 @@ pub enum Modal {
     /// `row` is which row the install key acts on, carried here rather than
     /// beside the modal for the same reason: a selection that outlives the list
     /// is a selection in a list nobody can see.
-    Servers {
+    Tools {
         row: usize,
     },
     /// The branch picker `:story?` opens: the repository's branches, and which
@@ -338,7 +339,7 @@ pub enum Modal {
     /// narrowing are that function's, and not this modal's to redo.
     ///
     /// `row` rides here rather than beside the modal for the reason
-    /// [`Modal::Servers`]'s does: a selection that outlives the list is a
+    /// [`Modal::Tools`]'s does: a selection that outlives the list is a
     /// selection in a list nobody can see.
     Branches {
         refs: Vec<story::BranchRef>,
@@ -951,14 +952,14 @@ pub enum Event {
     AcceptCandidate,
     /// Tab, through a snippet's tab stops: the next place a value is needed.
     NextStop,
-    /// The arrows, through the server list.
-    MoveServerRow(Direction),
-    /// `i` on a row of the server list: the command that installs it, typed
+    /// The arrows, through Tools.
+    MoveToolRow(Direction),
+    /// `i` on a row of Tools: the command that installs it, typed
     /// into the terminal and never run.
-    InstallServer,
-    /// `r` on a row of the server list: ask `PATH` again about that row's
+    InstallTool,
+    /// `r` on a row of Tools: ask `PATH` again about that row's
     /// command, because the user has just installed it.
-    RecheckServer,
+    RecheckTool,
     /// A fresh `PATH` probe has landed — `State::commands_on_path` now
     /// describes the machine as it is. What it is for is the pass every event
     /// ends with: a command that has appeared is a reason to forget that it was
@@ -1138,7 +1139,7 @@ pub enum Effect {
         args: Vec<String>,
     },
     /// Ask this process's `PATH` again, and say so when the answer has landed.
-    /// The only producer is the server list's re-check: everywhere else the
+    /// The only producer is the Tools list's re-check: everywhere else the
     /// edge probes on its own, when the list opens. It answers with
     /// `Event::PathProbed` rather than with the set itself, so the set stays a
     /// field only the edge writes (R31.23) — the core reads what it is told and
@@ -1684,7 +1685,7 @@ pub struct State {
     /// where the first newline in a pasted stack trace filed a fragment of one.
     ///
     /// Beside the modal rather than inside `Modal::Comment` for the reason
-    /// `Modal::Servers` gives about its row: the renderer and `update` both read
+    /// `Modal::Tools` gives about its row: the renderer and `update` both read
     /// it, and a variant is the wrong place for something two callers need.
     pub comment: Option<Buffer>,
     last_tap: Option<(Tap, u64)>,
@@ -1859,7 +1860,7 @@ pub struct State {
     /// Which of the configured commands this process can find on its `PATH`.
     /// A claim about the filesystem and this process's environment, so the
     /// edge's to observe and never `update`'s to write (R31.23) — the same
-    /// split `lsp_running` above draws. Probed when the server list is opened
+    /// split `lsp_running` above draws. Probed when Tools is opened
     /// rather than kept from startup, because the premise of the list is that
     /// what it describes is about to change.
     pub commands_on_path: BTreeSet<String>,
@@ -1892,12 +1893,12 @@ pub struct State {
     /// core does (R31.27). A declared name with no entry here is a name no
     /// server that asks for it is started with.
     pub workspace_facts: BTreeMap<String, String>,
-    /// The language a re-check is waiting on an answer about, if any. Set by
-    /// `r` in the server list and taken by the probe landing: without it a
+    /// The Tools row a re-check is waiting on an answer about, if any. Set by
+    /// `r` in the list and taken by the probe landing: without it a
     /// probe from opening the list and a probe the user asked for would be the
     /// same event, and the restart question would be offered to somebody who
     /// only looked at the list.
-    pub recheck: Option<String>,
+    pub recheck: Option<(tools::Kind, String)>,
     /// Which operating system this binary was built for, as `Startup` handed it
     /// in — the key an install command is looked up under, and nothing else. It
     /// is here rather than read from the environment for the reason R31.22
@@ -3213,8 +3214,8 @@ fn on_key_5(state: &State, mut next: State, event: Event, _wheeled: bool) -> Ans
             // The one entry that opens a face of the palette rather than
             // closing it. Nothing is probed from here: whether each command
             // exists is the edge's answer to the list being open (R31.23).
-            if entry == "Servers" {
-                next.modal = Modal::Servers { row: 0 };
+            if entry == "Tools" {
+                next.modal = Modal::Tools { row: 0 };
                 return Ok((next, vec![]));
             }
             next.modal = Modal::None;
@@ -5522,8 +5523,8 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
 }
 
 /// LspReceived, LspGone, CandidatesDue, PointerMoved, HoverDue, FormatBuffer, FormatterAnswered,
-/// MoveCandidate, AcceptCandidate, NextStop, MoveServerRow, InstallServer,
-/// RecheckServer, PathProbed
+/// MoveCandidate, AcceptCandidate, NextStop, MoveToolRow, InstallTool,
+/// RecheckTool, PathProbed
 fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::LspReceived { language, json } => lsp::received(&mut next, &language, &json),
@@ -5667,9 +5668,9 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
             vec![]
         }
 
-        Event::MoveServerRow(direction) => {
-            let last = lsp::server_rows(&next).len().saturating_sub(1);
-            if let Modal::Servers { row } = &mut next.modal {
+        Event::MoveToolRow(direction) => {
+            let last = tools::rows(&next).len().saturating_sub(1);
+            if let Modal::Tools { row } = &mut next.modal {
                 *row = match direction {
                     Direction::Up => row.saturating_sub(1),
                     Direction::Down => (*row + 1).min(last),
@@ -5686,9 +5687,9 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         // tree's actions are, and the command CRIME never composed — it is the
         // string configuration carried — so a default that is wrong for this
         // machine is one word away from being right (R31.22).
-        Event::InstallServer => {
+        Event::InstallTool => {
             let offered = match next.modal {
-                Modal::Servers { row } => lsp::server_rows(&next).into_iter().nth(row),
+                Modal::Tools { row } => tools::rows(&next).into_iter().nth(row),
                 _ => None,
             };
             match offered.map(|row| row.availability) {
@@ -5696,8 +5697,8 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                 // install would fix, so it offers rather than refuses — which
                 // is the whole reason `installed` had to stop meaning "a path
                 // exists": refusing here was refusing the fix.
-                Some(lsp::Availability::Missing { install })
-                | Some(lsp::Availability::Stopped {
+                Some(tools::Availability::Missing { install })
+                | Some(tools::Availability::Stopped {
                     install: Some(install),
                 }) => {
                     // The list goes: the command is on the terminal's input
@@ -5709,8 +5710,8 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                 // The command is here and installing it again would not add
                 // what its row says is missing — that is a second program, or a
                 // configuration key, and neither is what this binding runs.
-                Some(lsp::Availability::Installed | lsp::Availability::Partial { .. }) => {
-                    next.refusal = Some(preview::Refusal::ServerAlreadyInstalled);
+                Some(tools::Availability::Installed | tools::Availability::Partial { .. }) => {
+                    next.refusal = Some(preview::Refusal::ToolAlreadyInstalled);
                     vec![]
                 }
                 // No refusal for `Unpackaged`: a language nobody has packaged
@@ -5721,11 +5722,14 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                 // missing is a directory in this workspace that no package
                 // manager would put there (R31.27). `None` is the key pressed
                 // at a list of nothing, which is a statement about
-                // configuration rather than about the binding.
+                // configuration rather than about the binding. Nor for
+                // `Available`: no file names the row, so it does not run
+                // whatever is installed, and an install is not what it lacks.
                 Some(
-                    lsp::Availability::Unpackaged
-                    | lsp::Availability::Unmet { .. }
-                    | lsp::Availability::Stopped { install: None },
+                    tools::Availability::Available
+                    | tools::Availability::Unpackaged
+                    | tools::Availability::Unmet { .. }
+                    | tools::Availability::Stopped { install: None },
                 )
                 | None => {
                     vec![]
@@ -5738,14 +5742,14 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         // time it lands. Nothing is decided here — an install that worked is
         // indistinguishable from one that has not finished until `PATH` is
         // asked, and asking is the edge's (R31.23).
-        Event::RecheckServer => {
+        Event::RecheckTool => {
             let row = match next.modal {
-                Modal::Servers { row } => lsp::server_rows(&next).into_iter().nth(row),
+                Modal::Tools { row } => tools::rows(&next).into_iter().nth(row),
                 _ => None,
             };
             match row {
                 Some(row) => {
-                    next.recheck = Some(row.language);
+                    next.recheck = Some((row.kind, row.name));
                     vec![Effect::ProbePath]
                 }
                 None => vec![],
@@ -5759,11 +5763,17 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         // that is the whole of what a restart answers, so it is offered here
         // and taken nowhere (R31.24).
         Event::PathProbed => {
-            if let Some(language) = next.recheck.take() {
-                let found = next
-                    .servers
-                    .get(&language)
-                    .is_some_and(|server| next.commands_on_path.contains(&server.command));
+            if let Some((kind, name)) = next.recheck.take() {
+                // What a restart can change is `PATH`, so that is all this
+                // asks. A requirement is a search of the workspace, which a
+                // restart finds no differently.
+                let found = tools::rows(&next)
+                    .into_iter()
+                    .find(|row| row.kind == kind && row.name == name)
+                    .is_some_and(|row| {
+                        row.kind == tools::Kind::Requirement
+                            || next.commands_on_path.contains(&row.command)
+                    });
                 // And only over the list that asked. A question that replaced
                 // whatever is on screen when the answer happens to land is a
                 // modal that appeared on its own, which is the one thing no
@@ -5772,7 +5782,7 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                 // the answer lands in the same drain as the asking, so there is
                 // nothing to step on; this is what keeps that true rather than
                 // incidental.
-                if !found && matches!(next.modal, Modal::Servers { .. }) {
+                if !found && matches!(next.modal, Modal::Tools { .. }) {
                     next.modal = Modal::Restart;
                 }
             }
@@ -8773,14 +8783,14 @@ mod tests {
         assert_eq!(left.shown(), "one\ntwo");
     }
 
-    /// The ends of the server list, which no Scenario reaches: they walk to a
+    /// The ends of Tools, which no Scenario reaches: they walk to a
     /// row and act on it, so an unclamped selection would show up as an offer
     /// from the wrong row rather than as a panic. Down at the bottom stays, and
     /// Up at the top stays — the same as every other list in CRIME.
     #[test]
-    fn the_server_lists_selection_stops_at_both_ends() {
+    fn the_tools_selection_stops_at_both_ends() {
         let mut state = State {
-            modal: Modal::Servers { row: 0 },
+            modal: Modal::Tools { row: 0 },
             os: "macos".to_string(),
             ..State::default()
         };
@@ -8799,12 +8809,16 @@ mod tests {
                 },
             );
         }
-        let up = update(&state, Event::MoveServerRow(Direction::Up)).0;
-        assert_eq!(up.modal, Modal::Servers { row: 0 });
-        let down = update(&state, Event::MoveServerRow(Direction::Down)).0;
-        assert_eq!(down.modal, Modal::Servers { row: 1 });
-        let bottom = update(&down, Event::MoveServerRow(Direction::Down)).0;
-        assert_eq!(bottom.modal, Modal::Servers { row: 1 });
+        let up = update(&state, Event::MoveToolRow(Direction::Up)).0;
+        assert_eq!(up.modal, Modal::Tools { row: 0 });
+        let down = update(&state, Event::MoveToolRow(Direction::Down)).0;
+        assert_eq!(down.modal, Modal::Tools { row: 1 });
+        // The template's rows follow the configured ones, so the end is
+        // wherever the list's own length puts it.
+        let last = tools::rows(&state).len() - 1;
+        state.modal = Modal::Tools { row: last };
+        let bottom = update(&state, Event::MoveToolRow(Direction::Down)).0;
+        assert_eq!(bottom.modal, Modal::Tools { row: last });
     }
 
     /// A re-check asks `PATH` again and says which row it asked about: the
@@ -8814,7 +8828,7 @@ mod tests {
     #[test]
     fn a_re_check_asks_path_again_and_names_the_row_it_asked_about() {
         let mut state = State {
-            modal: Modal::Servers { row: 0 },
+            modal: Modal::Tools { row: 0 },
             os: "macos".to_string(),
             ..State::default()
         };
@@ -8831,12 +8845,15 @@ mod tests {
                 unanswerable: None,
             },
         );
-        let (asked, effects) = update(&state, Event::RecheckServer);
+        let (asked, effects) = update(&state, Event::RecheckTool);
         assert_eq!(effects, vec![Effect::ProbePath]);
-        assert_eq!(asked.recheck.as_deref(), Some("zig"));
+        assert_eq!(
+            asked.recheck,
+            Some((tools::Kind::Server, "zig".to_string()))
+        );
         // And the answer is what decides, not the asking: nothing is offered
         // until a probe has landed (R31.24).
-        assert_eq!(asked.modal, Modal::Servers { row: 0 });
+        assert_eq!(asked.modal, Modal::Tools { row: 0 });
         let (told, _) = update(&asked, Event::PathProbed);
         assert_eq!(told.modal, Modal::Restart);
         assert_eq!(told.recheck, None, "the question was answered once");

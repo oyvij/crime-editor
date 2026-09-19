@@ -123,7 +123,7 @@ args = ["--stdio", "--tsdk=${typescript_sdk}"]
 Opening `src/App.vue` looks for `node_modules/typescript/lib/typescript.js` in `src/`, then the
 project root; failing that, resolves where `tsc` on `PATH` really lives and checks for the file
 beside it. Found, the server starts with `--tsdk=/your/project/node_modules/typescript/lib`. Not
-found, no server starts and the Servers list says `missing-requirement`; install TypeScript and the
+found, no server starts and Tools says `missing-requirement`; install TypeScript and the
 next check starts it, no restart needed.
 
 The second shipped fact, `vue_typescript_plugin`, is what lets the *TypeScript* server answer about
@@ -140,7 +140,7 @@ a string.
 
 One table per language, the language being what the file's extension maps to (`rust`, `typescript`,
 `vue`, `python`, …). Naming a server is not starting one: it is spawned when a file in that language
-is open, and only if the command is on `PATH`. The Servers list (palette, `v`) shows every row and
+is open, and only if the command is on `PATH`. Tools (palette, `v`) shows every row and
 its state — `installed`, `missing`, `stopped`, `no-install-command`, `missing-requirement`,
 `partly-working` — with `i` to offer the install and `r` to re-check.
 
@@ -149,7 +149,7 @@ its state — `installed`, `missing`, `stopped`, `no-install-command`, `missing-
 | `command` | required after the merge | string | The server binary. |
 | `args` | `[]` | array of strings | Its arguments. `${fact}` names are filled. |
 | `also_served_by` | `[]` | array of language names | Other languages' servers that also serve this language's files. A `.vue` file is served by the Vue server *and* the TypeScript server. |
-| `install.macos`, `install.linux`, `install.windows` | per row | string | What installs the server on that OS. Typed onto the terminal's input line by the Servers list, never run. A row with no key for your OS says `no-install-command` and offers nothing. |
+| `install.macos`, `install.linux`, `install.windows` | per row | string | What installs the server on that OS. Typed onto the terminal's input line by Tools, never run. A row with no key for your OS says `no-install-command` and offers nothing. |
 | `initialization_options` | unset | table | Handed to the server untouched at start-up, as JSON. CRIME reads nothing inside it; `${fact}` values are filled, and a key whose value asked for an unfound optional fact is dropped. |
 | `partial` | unset | string | What this server, installed and running, still cannot do — in your words. Shown on its row, which then reads `partly-working`. |
 | `unanswerable.request`, `unanswerable.response` | unset | two strings, both or neither | A question this server puts to its client that CRIME will not answer, and the method to refuse it on — so the server moves on instead of waiting forever. |

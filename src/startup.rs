@@ -896,7 +896,7 @@ struct SourceLayer {
 type Origins = BTreeMap<String, (String, usize)>;
 
 #[derive(Debug, Clone, Default)]
-pub struct Config(Table);
+pub struct Config(pub(crate) Table);
 
 impl Config {
     /// Which languages have a server, and what runs each one. `get` below
@@ -1297,7 +1297,7 @@ fn initial_state(
 /// never a branch on it (R31.22). A row this machine has no entry on is a
 /// blank, which is the refusal `reading::start` names out loud rather than a
 /// command that cannot work.
-fn speech(config: &Config, os: &str) -> crate::reading::Speech {
+pub(crate) fn speech(config: &Config, os: &str) -> crate::reading::Speech {
     let named = |key: &str| config.get(key).unwrap_or_default();
     crate::reading::Speech {
         command: named("speech.command"),

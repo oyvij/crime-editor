@@ -9,6 +9,7 @@ use crime::startup::{
     self, Config, Formatter, PathStatus, Server, Startup, StartupError, Unanswerable,
 };
 use crime::story;
+use crime::tools;
 use crime::tree::{self, Entry};
 use crime::tree_actions::{Action, Target};
 use crime::{
@@ -7403,7 +7404,7 @@ fn modal_is(world: &mut CrimeWorld, expected: String) {
         Modal::ConfirmStory { .. } => "confirm-story",
         Modal::ConfirmSubmit => "confirm-submit",
         Modal::Palette => "palette",
-        Modal::Servers { .. } => "servers",
+        Modal::Tools { .. } => "tools",
         Modal::Branches { .. } => "branches",
         Modal::Comment => "comment",
         Modal::NameBox { .. } => "name-box",
@@ -11405,18 +11406,18 @@ fn press_in_palette(world: &mut CrimeWorld, key: String) {
     route_key(world, &key, 0);
 }
 
-#[given(expr = "I open the language server list")]
-#[when(expr = "I open the language server list")]
-fn open_server_list(world: &mut CrimeWorld) {
+#[given(expr = "I open Tools")]
+#[when(expr = "I open Tools")]
+fn open_tools(world: &mut CrimeWorld) {
     open_the_palette(world);
-    press_in_palette(world, palette_key("Servers").to_string());
+    press_in_palette(world, palette_key("Tools").to_string());
 }
 
-#[then(expr = "the palette is listing language servers")]
-fn listing_servers(world: &mut CrimeWorld) {
+#[then(expr = "the palette is listing tools")]
+fn listing_tools(world: &mut CrimeWorld) {
     assert!(
-        matches!(world.state.modal, Modal::Servers { .. }),
-        "not listing servers: {:?}",
+        matches!(world.state.modal, Modal::Tools { .. }),
+        "not listing tools: {:?}",
         world.state.modal
     );
 }
@@ -11426,19 +11427,82 @@ fn palette_is_closed(world: &mut CrimeWorld) {
     assert_eq!(world.state.modal, Modal::None);
 }
 
-fn server_row(world: &CrimeWorld, language: &str) -> crime::lsp::ServerRow {
-    crime::lsp::server_rows(&world.state)
+/// A row by its group and name: `rust` is a language server and a formatter,
+/// so a name alone does not say which row is meant.
+fn tool_row(world: &CrimeWorld, kind: tools::Kind, name: &str) -> tools::ToolRow {
+    tools::rows(&world.state)
         .into_iter()
-        .find(|row| row.language == language)
+        .find(|row| row.kind == kind && row.name == name)
         .unwrap_or_else(|| {
             panic!(
-                "no row for {language}; rows: {:?}",
-                crime::lsp::server_rows(&world.state)
+                "no {} row for {name}; rows: {:?}",
+                kind.as_str(),
+                tools::rows(&world.state)
                     .iter()
-                    .map(|row| row.language.clone())
+                    .map(|row| (row.kind.as_str(), row.name.clone()))
                     .collect::<Vec<_>>()
             )
         })
+}
+
+/// The group a step names, spelled the way a reader says it.
+fn kind(word: &str) -> tools::Kind {
+    match word {
+        "server" => tools::Kind::Server,
+        "formatter" => tools::Kind::Formatter,
+        "requirement" => tools::Kind::Requirement,
+        "speech" => tools::Kind::Speech,
+        other => panic!("no group {other:?}"),
+    }
+}
+
+/// The language server scenarios' own spelling: a row named by language alone is
+/// the language server's.
+fn server_row(world: &CrimeWorld, language: &str) -> tools::ToolRow {
+    tool_row(world, tools::Kind::Server, language)
+}
+
+#[then(expr = "the {word} row for {string} is {string}")]
+fn kind_row_reads(world: &mut CrimeWorld, group: String, name: String, expected: String) {
+    assert_eq!(
+        tool_row(world, kind(&group), &name).availability.as_str(),
+        expected
+    );
+}
+
+#[then(expr = "the {word} row for {string} differs from its template")]
+fn row_differs(world: &mut CrimeWorld, group: String, name: String) {
+    assert_eq!(
+        tool_row(world, kind(&group), &name).origin,
+        tools::Origin::Differs
+    );
+}
+
+#[then(expr = "the {word} row for {string} is the template's")]
+fn row_is_the_templates(world: &mut CrimeWorld, group: String, name: String) {
+    assert_eq!(
+        tool_row(world, kind(&group), &name).origin,
+        tools::Origin::Template
+    );
+}
+
+/// Each group once, in the order the list draws them — which is the order
+/// the rows come in, since the renderer heads a group where its kind changes.
+#[then("the tools list is grouped as:")]
+fn tools_grouped_as(world: &mut CrimeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let mut actual: Vec<String> = tools::rows(&world.state)
+        .iter()
+        .map(|row| row.kind.as_str().to_string())
+        .collect();
+    actual.dedup();
+    assert_eq!(actual, expected);
 }
 
 #[then(expr = "the list offers a row for {string}")]
@@ -11461,7 +11525,7 @@ fn row_reads(world: &mut CrimeWorld, language: String, expected: String) {
 #[then(expr = "the row for {string} says it cannot do {string}")]
 fn row_says_it_cannot(world: &mut CrimeWorld, language: String, expected: String) {
     match server_row(world, &language).availability {
-        crime::lsp::Availability::Partial { without } => assert_eq!(without, expected),
+        tools::Availability::Partial { without } => assert_eq!(without, expected),
         other => panic!("{language} reads {}", other.as_str()),
     }
 }
@@ -11495,12 +11559,12 @@ fn install_the_row(world: &mut CrimeWorld, language: String) {
 /// goes to the terminal's input line and the focus follows it — so a re-check
 /// after an install has no list to walk. `r` leaves it standing.
 fn walk_to_row(world: &mut CrimeWorld, language: &str) {
-    if !matches!(world.state.modal, Modal::Servers { .. }) {
-        open_server_list(world);
+    if !matches!(world.state.modal, Modal::Tools { .. }) {
+        open_tools(world);
     }
-    let index = crime::lsp::server_rows(&world.state)
+    let index = tools::rows(&world.state)
         .iter()
-        .position(|row| row.language == language)
+        .position(|row| row.kind == tools::Kind::Server && row.name == language)
         .unwrap_or_else(|| panic!("no row for {language}"));
     for _ in 0..index {
         press_in_palette(world, "Down".to_string());

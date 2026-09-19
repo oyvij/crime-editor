@@ -147,7 +147,7 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
     // tab-stop modal claims Tab while an accepted Candidate has blanks left and
     // lets it through everywhere else, so indenting is what Tab is the rest of
     // the time. The row is earned by "next blank" — nothing teaches it, since
-    // the stop sequence draws nothing on screen and, unlike the server list,
+    // the stop sequence draws nothing on screen and, unlike Tools,
     // has no box footer to be discoverable in. "indent" is on it because a row
     // that names one of a key's two meanings says the other is not there.
     // Not an omission instead: [`UNLISTED`] excuses a *key*, and Tab is listed.
@@ -218,12 +218,12 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
     // where the box is drawn teaches the wrong key.
     (
         "C-space v",
-        "language servers",
+        "tools",
         &[View::Edit, View::Review, View::Story],
     ),
 ];
 
-/// The keys the server list answers and the word the box says for each — here,
+/// The keys Tools answers and the word the box says for each — here,
 /// beside the router that answers them, for the reason [`CHEATSHEET`] is here:
 /// `ui` may only draw the contract, so a test can hold the two together. They
 /// are not cheatsheet rows because they exist only while the list is up, and
@@ -231,16 +231,16 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
 /// that opens the list is what earns a row there. The arrows are deliberately
 /// absent for the reason `UNLISTED` gives for them everywhere else: every list
 /// in CRIME moves on them, and the box already cannot spell one label twice.
-pub const SERVER_LIST_KEYS: [(&str, &str); 3] =
+pub const TOOL_LIST_KEYS: [(&str, &str); 3] =
     [("i", "install"), ("r", "re-check"), ("Esc", "close")];
 
 /// The keys the branch picker answers and the word its box says for each —
 /// here, beside the router that answers them, for the reason
-/// [`SERVER_LIST_KEYS`] is here. Not cheatsheet rows for the same reason
+/// [`TOOL_LIST_KEYS`] is here. Not cheatsheet rows for the same reason
 /// either: the list exists only while it is up, and the box the cheatsheet
 /// draws sits over the code being read.
 ///
-/// The arrows are deliberately absent, as they are for the server list: every
+/// The arrows are deliberately absent, as they are for Tools: every
 /// list in CRIME moves on them, and the box cannot spell one label twice. Enter
 /// is what a picker is for, and Escape is how every box in CRIME is left — both
 /// reachable with no modifier (R31.11).
@@ -259,7 +259,7 @@ pub const BRANCH_FILTER_HINT: &str = "type to filter";
 
 /// The keys the comment box's body answers and the word its footer says for
 /// each — here, beside the router that answers them, for the reason
-/// [`SERVER_LIST_KEYS`] is here: `ui` may only draw the contract, so a test can
+/// [`TOOL_LIST_KEYS`] is here: `ui` may only draw the contract, so a test can
 /// hold the two together rather than trusting whoever remembers to edit two
 /// files.
 ///
@@ -276,7 +276,7 @@ pub const COMMENT_BOX_KEYS: [(&str, &str); 3] =
     [("C-s", "file"), ("Esc", "discard"), ("C-z", "undo")];
 
 /// The keys the results box answers and the word it says for each — here for
-/// the reason [`SERVER_LIST_KEYS`] is here: the box exists only while a search
+/// the reason [`TOOL_LIST_KEYS`] is here: the box exists only while a search
 /// is up, so the gesture that opens it is what earns a cheatsheet row, and the
 /// keys inside it are discoverable in the box itself. `ui` may only draw this,
 /// so a test can hold the two together rather than trusting whoever remembers
@@ -388,13 +388,13 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
         // which is where a key that only exists inside this list is
         // discoverable — the cheatsheet spends its row on the gesture that
         // opens it.
-        Modal::Servers { .. } => match event.code {
+        Modal::Tools { .. } => match event.code {
             KeyCode::Esc => vec![Event::Cancel],
-            KeyCode::Up => vec![Event::MoveServerRow(Direction::Up)],
-            KeyCode::Down => vec![Event::MoveServerRow(Direction::Down)],
+            KeyCode::Up => vec![Event::MoveToolRow(Direction::Up)],
+            KeyCode::Down => vec![Event::MoveToolRow(Direction::Down)],
             _ => match typed(event) {
-                Some('i') => vec![Event::InstallServer],
-                Some('r') => vec![Event::RecheckServer],
+                Some('i') => vec![Event::InstallTool],
+                Some('r') => vec![Event::RecheckTool],
                 _ => vec![],
             },
         },
@@ -490,7 +490,7 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         Modal::None
         | Modal::NameBox { .. }
         | Modal::Palette
-        | Modal::Servers { .. }
+        | Modal::Tools { .. }
         | Modal::Branches { .. }
         | Modal::Comment
         | Modal::Candidates(_)
@@ -2064,7 +2064,7 @@ mod tests {
 
     /// The same contract [`CHEATSHEET`] is held to, for the keys that exist only
     /// while a comment's body is being typed. Like the results box and unlike
-    /// the server list, this box passes typing through: every printable key is a
+    /// Tools, this box passes typing through: every printable key is a
     /// character of the comment and every arrow moves the caret, so what the
     /// footer must name is what means something *other* than writing. There are
     /// exactly two — the key that files and the key that discards — and filing
@@ -3881,17 +3881,17 @@ mod tests {
     }
 
     /// The same contract [`CHEATSHEET`] is held to, for the keys that only exist
-    /// while the server list is up: what the box names must answer, and what
+    /// while Tools is up: what the box names must answer, and what
     /// answers must be named. Without it the footer is a string in the
     /// renderer, and a key added to the list — or taken out of it — is
     /// discoverable or not by whoever remembers to edit two files.
     #[test]
-    fn the_server_list_answers_exactly_the_keys_its_box_names() {
+    fn tools_answers_exactly_the_keys_its_box_names() {
         // A row with something to offer: `i` on a list of nothing is a key
         // that does nothing, which is a statement about configuration rather
         // than about the binding.
         let mut listing = State {
-            modal: crate::Modal::Servers { row: 0 },
+            modal: crate::Modal::Tools { row: 0 },
             os: "macos".to_string(),
             ..editing()
         };
@@ -3910,7 +3910,7 @@ mod tests {
                 unanswerable: None,
             },
         );
-        for (key, word) in super::SERVER_LIST_KEYS {
+        for (key, word) in super::TOOL_LIST_KEYS {
             let event = every_key()
                 .into_iter()
                 .find(|event| label(*event) == key)
@@ -3933,7 +3933,7 @@ mod tests {
             .filter(|event| answers(&listing, &[*event]) && !answers(&closed, &[*event]))
             .map(label)
             .filter(|label| {
-                !super::SERVER_LIST_KEYS.iter().any(|(key, _)| key == label)
+                !super::TOOL_LIST_KEYS.iter().any(|(key, _)| key == label)
                     // Every list in CRIME moves on the arrows, however they are
                     // modified: the router does not inspect a modifier here, so
                     // a modified arrow names no gesture of its own.
@@ -3944,14 +3944,14 @@ mod tests {
         unnamed.dedup();
         assert!(
             unnamed.is_empty(),
-            "the server list answers keys its box does not name: {unnamed:?}"
+            "Tools answers keys its box does not name: {unnamed:?}"
         );
     }
 
     /// The same contract [`CHEATSHEET`] is held to, for the keys that exist only
     /// while the branch picker is up: what the box names must answer, and what
     /// answers must be named. Held here rather than by a cheatsheet row for the
-    /// reason the server list is: the box exists only while it is up, and the
+    /// reason Tools is: the box exists only while it is up, and the
     /// cheatsheet's own box sits over the code being read.
     #[test]
     fn the_branch_picker_answers_exactly_the_keys_its_box_names() {
@@ -4060,7 +4060,7 @@ mod tests {
     }
 
     /// The same contract [`CHEATSHEET`] is held to, for the keys that exist
-    /// only while the results box is up. Unlike the server list, this box
+    /// only while the results box is up. Unlike Tools, this box
     /// passes nothing through: every printable key is a letter of the query,
     /// so what the helper row must name is every key that means something
     /// *other* than typing — and a gesture the cheatsheet already holds

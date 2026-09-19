@@ -121,7 +121,7 @@ fn main() -> Result<()> {
             .and_then(|checkout| read(&checkout.join("Cargo.toml"))),
         checkout,
         running_version: env!("CARGO_PKG_VERSION").to_string(),
-        // Which install command a server list row offers. Read here rather than
+        // Which install command a Tools row offers. Read here rather than
         // in the library, exactly as the version above is (R31.22).
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
@@ -636,7 +636,7 @@ struct Edge {
     /// a second shape (`docs/adr/0011-a-language-server-is-a-second-hosted-child.md`).
     servers: BTreeMap<String, rpc::Server>,
     /// Which of the configured commands a probe of this process's `PATH` found,
-    /// and `None` for "not probed since the server list was last opened" —
+    /// and `None` for "not probed since Tools was last opened" —
     /// which is what makes reopening the list a fresh answer rather than a
     /// cached one (R31.23).
     on_path: Option<BTreeSet<String>>,
@@ -1567,7 +1567,7 @@ fn tell_core(state: &mut State, edge: &mut Edge) {
         .map(|(_, answers)| answers.clone())
         .unwrap_or_default();
     state.ai_running = edge.ai.is_some();
-    // Asked once and kept, unlike the server list's probe above: nobody
+    // Asked once and kept, unlike the Tools list's probe above: nobody
     // installs git mid-session, and the answer is a `PATH` walk that every
     // event would otherwise pay for.
     state.git_installed = *edge.git.get_or_insert_with(|| which::which("git").is_ok());
@@ -1983,7 +1983,7 @@ fn reap_player(edge: &mut Edge, queue: &mut VecDeque<Event>) {
 /// executable bit, a `PATHEXT` on Windows and a command that is already an
 /// absolute path are the edge cases nobody meets until they hit one.
 fn probe_path(state: &State, edge: &mut Edge) {
-    if !matches!(state.modal, Modal::Servers { .. }) {
+    if !matches!(state.modal, Modal::Tools { .. }) {
         edge.on_path = None;
         return;
     }
@@ -1991,11 +1991,10 @@ fn probe_path(state: &State, edge: &mut Edge) {
         return;
     }
     edge.on_path = Some(
-        state
-            .servers
-            .values()
-            .filter(|server| which::which(&server.command).is_ok())
-            .map(|server| server.command.clone())
+        crime::tools::rows(state)
+            .into_iter()
+            .map(|row| row.command)
+            .filter(|command| which::which(command).is_ok())
             .collect(),
     );
 }
@@ -2062,7 +2061,7 @@ fn found(fact: &Fact, root: &Path, from: &BTreeSet<PathBuf>) -> Option<String> {
 ///
 /// It is what makes a fact a question about the *workspace* rather than about
 /// whichever files are open. A monorepo installs per package, so with nothing
-/// open — the state the server list is read in — the walk above had only the
+/// open — the state Tools is read in — the walk above had only the
 /// root to search and the row said `missing-requirement` about a workspace
 /// holding the SDK all along, then said `installed` as soon as a file in the
 /// package was opened. An answer that changes with the buffer list is the
@@ -4235,7 +4234,7 @@ mod tests {
         );
     }
 
-    /// The same monorepo with nothing open, which is the state the server list
+    /// The same monorepo with nothing open, which is the state Tools
     /// is read in: the walk starts at the open files, so a workspace with no
     /// file of that language open had only the root to search and the row said
     /// `missing-requirement` about a workspace holding the SDK all along —

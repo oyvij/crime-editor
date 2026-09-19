@@ -126,12 +126,17 @@ Which language a file is, for formatting, is looked up three ways: the language 
 configuration knows it as, then the `extensions` a formatter row claims, then the file's own
 extension — or, for a file with none, its name, so `[formatter.Makefile]` is a key you can write.
 
-## The server list
+## Tools
 
-`Ctrl+Space` then `v` (the palette's **Servers** entry) opens the list of every language
-configuration names, one row each with the command that serves it and its state on this machine.
-It is probed when the list opens, so the moment after an install is the moment to look. Opening
-the list starts no server.
+`Ctrl+Space` then `v` (the palette's **Tools** entry) opens the list of everything CRIME runs,
+grouped into language servers, formatters, requirements (`[facts.*]`) and speech (the synthesizer
+with its voice, and the player). One row each, with the command it runs and its state on this
+machine. It is probed when the list opens, so the moment after an install is the moment to look.
+Opening the list starts no server.
+
+Every template row your config files do not name is listed too, as `available`: a row you deleted,
+or one a newer CRIME added. A row that differs from the template's says so, since a corrected
+template never edits a row you already have.
 
 | State | Means |
 |---|---|
@@ -141,6 +146,7 @@ the list starts no server.
 | `missing-requirement` | the command is here but something it needs is not, e.g. a TypeScript SDK in the workspace; the row says which |
 | `partly-working` | the configuration says this server cannot do something, and the row names it |
 | `no-install-command` | not installed, and nothing is configured to install it on this OS |
+| `available` | a template row no config file names, so CRIME does not run it |
 
 | Key | Does |
 |---|---|

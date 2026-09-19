@@ -142,7 +142,7 @@ pub enum Refusal {
     /// The install key on a row whose command this machine already has. Said
     /// out loud rather than passed over: the row reads `installed`, so a key
     /// that quietly did nothing would read as a key that failed.
-    ServerAlreadyInstalled,
+    ToolAlreadyInstalled,
 }
 
 impl Refusal {
@@ -152,7 +152,7 @@ impl Refusal {
             Refusal::NoFileOpen => "no-file-open",
             Refusal::ReadOnlyPreview => "read-only-preview",
             Refusal::GuestReadOnly => "guest-read-only",
-            Refusal::ServerAlreadyInstalled => "server-already-installed",
+            Refusal::ToolAlreadyInstalled => "tool-already-installed",
         }
     }
 }

@@ -8,8 +8,8 @@ use crime::lsp;
 use crime::minimap;
 use crime::tree::Row;
 use crime::{
-    filter, keys, mark, palette_rows, reading, review, story, tree, Mark, Modal, Pane, Place,
-    Selection, State, View,
+    filter, keys, mark, palette_rows, reading, review, story, tools, tree, Mark, Modal, Pane,
+    Place, Selection, State, View,
 };
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -390,7 +390,10 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
                 Line::from("  (y) author    (n) cancel"),
             ],
         ),
-        Modal::Servers { row } => overlay(frame, "SERVERS", server_lines(state, *row)),
+        Modal::Tools { row } => {
+            let height = frame.area().height;
+            overlay(frame, "TOOLS", tool_lines(state, *row, height))
+        }
         Modal::Branches { refs, filter, row } => overlay(
             frame,
             "BRANCHES",
@@ -2183,7 +2186,7 @@ fn refusal_spans(state: &State) -> Vec<Span<'static>> {
         crime::preview::Refusal::NoFileOpen => " no file open ",
         crime::preview::Refusal::ReadOnlyPreview => " preview — :preview to edit ",
         crime::preview::Refusal::GuestReadOnly => " read-only — not your repository ",
-        crime::preview::Refusal::ServerAlreadyInstalled => " already installed ",
+        crime::preview::Refusal::ToolAlreadyInstalled => " already installed ",
     };
     vec![Span::styled(wording, Style::default().fg(WARNING))]
 }
@@ -3719,55 +3722,77 @@ fn coloured(file: &str, text: &str, dark: bool, selected: bool) -> Vec<Span<'sta
         .collect()
 }
 
-/// The palette's second face. The words the scenarios assert on are the core's
-/// — [`lsp::Availability::as_str`] — and they are what is drawn, so a row reads
-/// on screen as the scenario spells it. A row with nothing behind it is the one
-/// worth the reader's eye, whether that is a command to install or a gap to
-/// fill in.
-fn server_lines(state: &State, selected: usize) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line<'static>> = crime::lsp::server_rows(state)
-        .into_iter()
-        .enumerate()
-        .map(|(index, row)| {
-            let colour = match row.availability {
-                lsp::Availability::Installed => Color::DarkGray,
-                lsp::Availability::Missing { .. }
-                | lsp::Availability::Unmet { .. }
-                | lsp::Availability::Stopped { .. }
-                | lsp::Availability::Partial { .. }
-                | lsp::Availability::Unpackaged => WARNING,
-            };
-            // The state word says there is a gap; only configuration's own
-            // words say what is in it, so the row carries them.
-            let gap = match &row.availability {
-                lsp::Availability::Partial { without } => format!("  no {without}"),
-                _ => String::new(),
-            };
-            // The row the install key acts on, marked where every list in CRIME
-            // marks it. Nothing else distinguishes it: a box this narrow spends
-            // its columns on the command.
-            let cursor = match index == selected {
-                true => '>',
-                false => ' ',
-            };
-            Line::from(vec![
-                Span::raw(format!(
-                    "{cursor} {:<12} {:<32} ",
-                    row.language, row.command
-                )),
-                Span::styled(row.availability.as_str(), Style::default().fg(colour)),
-                Span::styled(gap, Style::default().fg(Color::DarkGray)),
-            ])
-        })
-        .collect();
-    if lines.is_empty() {
-        lines.push(Line::from(
-            "  No language server is named in configuration.".to_string(),
-        ));
+/// The palette's second face, Tools. The words the scenarios assert on are the
+/// core's — [`tools::Availability::as_str`] — and they are what is drawn, so a
+/// row reads on screen as the scenario spells it. A row with nothing behind it
+/// is the one worth the reader's eye, whether that is a command to install or a
+/// gap to fill in; an available row is one the reader has not taken, so it is
+/// quiet like an installed one.
+fn tool_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut at = 0;
+    let mut group = None;
+    for (index, row) in tools::rows(state).into_iter().enumerate() {
+        if group != Some(row.kind) {
+            group = Some(row.kind);
+            lines.push(Line::from(Span::styled(
+                match row.kind {
+                    tools::Kind::Server => "Language servers",
+                    tools::Kind::Formatter => "Formatters",
+                    tools::Kind::Requirement => "Requirements",
+                    tools::Kind::Speech => "Speech",
+                },
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+        }
+        let colour = match row.availability {
+            tools::Availability::Installed | tools::Availability::Available => Color::DarkGray,
+            tools::Availability::Missing { .. }
+            | tools::Availability::Unmet { .. }
+            | tools::Availability::Stopped { .. }
+            | tools::Availability::Partial { .. }
+            | tools::Availability::Unpackaged => WARNING,
+        };
+        // The state word says there is a gap; only configuration's own words
+        // say what is in it, so the row carries them. A row that differs from
+        // the template is said too: a corrected template never reaches it, so
+        // this is where the reader learns there is a difference to read.
+        let without = match &row.availability {
+            tools::Availability::Partial { without } => format!("  no {without}"),
+            _ => String::new(),
+        };
+        let differs = match row.origin {
+            tools::Origin::Differs => "  differs from template",
+            tools::Origin::Template | tools::Origin::Own => "",
+        };
+        let gap = format!("{without}{differs}");
+        // The row the install key acts on, marked where every list in CRIME
+        // marks it. Nothing else distinguishes it: a box this narrow spends its
+        // columns on the command.
+        let cursor = match index == selected {
+            true => '>',
+            false => ' ',
+        };
+        if index == selected {
+            at = lines.len();
+        }
+        lines.push(Line::from(vec![
+            Span::raw(format!("{cursor} {:<22} {:<30} ", row.name, row.command)),
+            Span::styled(row.availability.as_str(), Style::default().fg(colour)),
+            Span::styled(gap, Style::default().fg(Color::DarkGray)),
+        ]));
     }
+    // Every template row is listed, so the list outgrows a terminal. The box
+    // is as tall as the screen at most, and what it keeps is the part the
+    // selection is in: a row the install key acts on that nobody can see is
+    // a keypress on something unread. Borders, the blank and the footer take
+    // four rows.
+    let room = (height as usize).saturating_sub(4).max(1);
+    let start = (at + 1).saturating_sub(room);
+    let mut lines: Vec<Line<'static>> = lines.into_iter().skip(start).take(room).collect();
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        keys::SERVER_LIST_KEYS
+        keys::TOOL_LIST_KEYS
             .iter()
             .map(|(key, word)| format!("   {key}  {word}"))
             .collect::<String>(),

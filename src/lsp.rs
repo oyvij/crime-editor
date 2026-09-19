@@ -429,7 +429,7 @@ pub fn ready(state: &State, language: &str) -> bool {
 /// behind. The core's own memory of what the edge observed, which is what lets
 /// the palette's row say a command is here and does not work without spawning
 /// anything to find out (R31.10).
-fn written_off(state: &State, language: &str) -> bool {
+pub(crate) fn written_off(state: &State, language: &str) -> bool {
     matches!(
         state.lsp.get(language),
         Some(Conversation {
@@ -935,134 +935,6 @@ fn closed(state: &mut State) -> Vec<Effect> {
         }
     }
     effects
-}
-
-/// One row of the palette's second face: a language configuration names, what
-/// it says runs it, and where that leaves the reader.
-#[derive(Debug)]
-pub struct ServerRow {
-    pub language: String,
-    pub command: String,
-    pub availability: Availability,
-}
-
-/// What a row can offer. States of one fact rather than a flag beside an
-/// option, so `Missing` cannot be read without the command that answers it and
-/// the ones that offer nothing cannot be read as offering one.
-///
-/// The two questions a reader has — is the command here, and does it work —
-/// are one enum and not two fields, because they are not independent: a
-/// conversation only exists for a language whose command could be spawned, so
-/// read apart they would produce combinations nothing can be in, and read
-/// together by every caller they would be the flag-beside-an-option this type
-/// exists to avoid. `Installed` was the field that could not tell a rustup shim
-/// from a server: `which` was happy, the spawn succeeded, the child died, and
-/// the row went on saying the command was here (R31.25).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Availability {
-    /// The command is on this machine, has what its configuration asks for, and
-    /// nothing has been watched to fail — which is as much as can be said about
-    /// a language no file has needed yet.
-    Installed,
-    /// The command is on this machine and CRIME watched its server go: a
-    /// written-off conversation, from [`gone`], which is the edge's own
-    /// observation rather than a probe of ours (R31.10 — nothing is spawned to
-    /// find out what a row says). It offers whatever installs it, because a
-    /// command that is present and does not work is exactly the row an install
-    /// would fix, and refusing it as already installed is refusing the fix.
-    /// Optional where `Missing`'s is not: `stopped` is a fact about the child
-    /// and stays true for an OS nothing is packaged for.
-    Stopped { install: Option<String> },
-    /// Not on this machine, and configuration says what installs it here.
-    Missing { install: String },
-    /// On this machine, and something its configuration asks the edge for is
-    /// not: a `[facts.*]` table declares the name and this workspace has no
-    /// answer for it, so the server would run without what it needs — which is
-    /// why [`sync`] starts nothing for it. Installed is the wrong word for
-    /// that, and the list is the one place the difference shows before a file
-    /// is opened (R31.27). It offers no install: the command is already here,
-    /// and what is missing is a directory no package manager puts in a
-    /// workspace.
-    Unmet { needs: String },
-    /// Not on this machine, and nothing is configured to install it for this
-    /// OS. A normal row and not an error: several servers are genuinely
-    /// packaged nowhere, and admitting the gap is what makes it fixable in one
-    /// line of TOML (`docs/adr/0012-an-install-command-is-configuration.md`).
-    Unpackaged,
-    /// On this machine, running, and configuration says it answers only part of
-    /// what a reader would expect of it. Declared rather than observed, because
-    /// nothing CRIME can watch tells a server that answers less from a file
-    /// with less wrong in it: `@vue/language-server` marks template mistakes
-    /// and reports no type error at all, and its row read `installed` while
-    /// half of what a reader opened the file for was silently absent. That is
-    /// the state between `installed` and `missing` R31.25 has no word for, and
-    /// the words are configuration's for the reason a command is — a limitation
-    /// is a fact about a server, and an arm naming one is R31.1's forbidden arm.
-    Partial { without: String },
-}
-
-impl Availability {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Availability::Installed => "installed",
-            Availability::Partial { .. } => "partly-working",
-            Availability::Stopped { .. } => "stopped",
-            Availability::Missing { .. } => "missing",
-            Availability::Unmet { .. } => "missing-requirement",
-            Availability::Unpackaged => "no-install-command",
-        }
-    }
-}
-
-/// The list itself — what configuration named, not a table of its own, which is
-/// what makes a project's own `[lsp.rust]` show its command here for free and a
-/// language added to a config file appear without a release (R31.21).
-pub fn server_rows(state: &State) -> Vec<ServerRow> {
-    state
-        .servers
-        .iter()
-        .map(|(language, server)| ServerRow {
-            language: language.clone(),
-            command: server.command.clone(),
-            // Installed first: whether the command is here is read straight off
-            // `State::commands_on_path`, which only the edge writes (R31.23),
-            // and a server that is already here has no install to offer
-            // whatever configuration says about installing it.
-            availability: match state.commands_on_path.contains(&server.command) {
-                // A command that is here still answers for what its
-                // configuration asks the edge to find: a Vue server started
-                // without its SDK is a row that reads `installed` and a server
-                // that dies on the first file.
-                true => match unmet(state, server) {
-                    Some(needs) => Availability::Unmet { needs },
-                    // Ahead of `Installed` and behind `Unmet`: a requirement
-                    // this workspace cannot meet is what the reader has to fix
-                    // and names itself, while `stopped` is what is left when
-                    // the command is here, has what it needs, and still does
-                    // not work.
-                    None => match (written_off(state, language), &server.partial) {
-                        (true, _) => Availability::Stopped {
-                            install: server.install.get(&state.os).cloned(),
-                        },
-                        // Behind `Stopped`: a server that is not running
-                        // answers nothing at all, which is not "partly".
-                        (false, Some(without)) => Availability::Partial {
-                            without: without.clone(),
-                        },
-                        (false, None) => Availability::Installed,
-                    },
-                },
-                // Which OS applies is a lookup under the string `Startup`
-                // handed in, never a branch on it (R31.22).
-                false => match server.install.get(&state.os) {
-                    Some(install) => Availability::Missing {
-                        install: install.clone(),
-                    },
-                    None => Availability::Unpackaged,
-                },
-            },
-        })
-        .collect()
 }
 
 /// Which languages the open buffers are in, and what configuration says runs
@@ -2890,7 +2762,7 @@ fn filled_value(value: &Value, facts: &BTreeMap<String, Option<String>>) -> Opti
 /// `[facts.*]` table says so, and this reads it — a server that is merely
 /// better with something is a server that starts without it, and the key naming
 /// it goes the way [`filled_options`] already sends it.
-fn unmet(state: &State, server: &Server) -> Option<String> {
+pub(crate) fn unmet(state: &State, server: &Server) -> Option<String> {
     let options = server
         .initialization_options
         .as_ref()
@@ -3690,8 +3562,8 @@ mod tests {
         pass(&mut state);
         gone(&mut state, "rust", Gone::Exited);
         assert_eq!(
-            server_rows(&state)[0].availability,
-            Availability::Stopped {
+            crate::tools::rows(&state)[0].availability,
+            crate::tools::Availability::Stopped {
                 install: Some("install-it".to_string())
             },
             "the command is here and CRIME watched it go, so the row offers the fix"
@@ -3715,8 +3587,8 @@ mod tests {
             },
         );
         assert_eq!(
-            server_rows(&state)[0].availability,
-            Availability::Unmet {
+            crate::tools::rows(&state)[0].availability,
+            crate::tools::Availability::Unmet {
                 needs: "typescript_sdk".to_string()
             },
             "and what it is missing is said in front of the fact that it died"
