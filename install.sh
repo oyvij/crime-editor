@@ -157,6 +157,21 @@ installers() {
     esac
     ensure_installer "$tool" "$tool is used to install $(listing "${named[@]}")" || continue
   done
+  if [[ " $tools " == *" npm "* ]]; then npm_prefix; fi
+}
+
+# Debian's npm, which is the one `sudo apt install npm` gives, installs globally
+# into /usr/local, so every `npm install -g` row fails with EACCES. npm's own
+# answer is a prefix the user owns, and ~/.local/bin is already on PATH for crime.
+npm_prefix() {
+  have npm || return 0
+  local prefix dir
+  prefix=$(npm config get prefix)
+  dir="$prefix/lib/node_modules"
+  while [ ! -e "$dir" ]; do dir=$(dirname "$dir"); done
+  [ -w "$dir" ] && return 0
+  ask "  npm installs globally into $prefix, which needs root, so its rows in Tools would fail. Install into ~/.local instead with: npm config set prefix ~/.local ?" || return 0
+  run "npm config set prefix ~/.local"
 }
 
 # ---- the global config ----------------------------------------------------------
