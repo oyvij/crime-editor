@@ -187,20 +187,31 @@ Feature: Reading aloud
     When a reading is started
     Then the reading is at speed 1.25
 
-  Scenario Outline: A missing piece refuses out loud and offers the install
+  Scenario Outline: A missing piece refuses out loud and offers its speech row
     Given <missing>
     And "guide.md" is open in the editor holding "Install it."
     And the selection covers the whole buffer
     When a reading is started
     Then the reading refuses with "<slug>"
-    And the install command is waiting on the terminal's input line
+    And the speech row for "<row>" is offered
+    And nothing is waiting on the terminal's input line
     And no command has been executed
 
     Examples:
-      | missing                            | slug              |
-      | no synthesizer is on the PATH      | no-synthesizer    |
-      | no voice is configured             | no-voice          |
-      | no audio player is configured      | no-player         |
+      | missing                            | slug              | row         |
+      | no synthesizer is on the PATH      | no-synthesizer    | synthesizer |
+      | no voice is configured             | no-voice          | synthesizer |
+      | the voice file is not on disk      | no-voice          | synthesizer |
+      | no audio player is configured      | no-player         | player      |
+
+  Scenario: One key takes the offered speech row, the same act as in Tools
+    Given no voice is configured
+    And the command "fetch-a-voice" is on PATH
+    And "guide.md" is open in the editor holding "Install it."
+    And the selection covers the whole buffer
+    And a reading was refused
+    When I press "i" in the palette
+    Then the shell pane runs "fetch-a-voice" reporting its exit status
 
   Scenario: Reading writes nothing into the workspace
     Given "guide.md" is open in the editor holding "Install it."

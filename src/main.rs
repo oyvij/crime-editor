@@ -1510,6 +1510,11 @@ fn drain(state: &mut State, edge: &mut Edge, queue: &mut VecDeque<Event>) -> boo
         worked = true;
         let (next, effects) = update(state, next_event);
         *state = next;
+        // The one `[speech]` value the core writes is the voice an install
+        // configured, and the synthesizer the edge starts has to load it.
+        if edge.speech != state.speech {
+            edge.speech = state.speech.clone();
+        }
         for effect in effects {
             perform(effect, state.split(), edge, queue);
         }
@@ -1578,6 +1583,10 @@ fn tell_core(state: &mut State, edge: &mut Edge) {
     state.player_installed = *edge
         .player
         .get_or_insert_with(|| which::which(&edge.speech.player).is_ok());
+    // Asked every time, unlike the player: an install that exited 0 is not
+    // proof the file is still there, and a stat is cheap.
+    state.voice_installed =
+        reading::voice_file(&state.speech.voice, &home()).is_some_and(|file| file.is_file());
     // R10.5: only forward clicks when the running program asked for them, and
     // only in the encoding it asked for.
     // The count first: `split()` is bounded by it, and the shell the two
@@ -1608,11 +1617,11 @@ fn tell_core(state: &mut State, edge: &mut Edge) {
 /// the press that wanted sound (R35.11). Nothing is spoken here: this is the
 /// ~600ms voice load, paid while the reader is still reading.
 ///
-/// Nothing to configure means nothing to start, and that is not an error — it
-/// is the state `reading::start` names out loud, with the install line beside
-/// it.
+/// No voice on disk means nothing to start, and that is not an error — it
+/// is the state `reading::start` names out loud, with the speech row offered
+/// beside it.
 fn start_voice(state: &State, edge: &mut Edge) {
-    if edge.voice.is_some() || edge.speech.voice.is_empty() {
+    if edge.voice.is_some() || !state.voice_installed {
         return;
     }
     if !state.buffers.keys().any(|path| preview::is_markdown(path)) {
@@ -1636,12 +1645,13 @@ fn start_voice(state: &State, edge: &mut Edge) {
 fn spawn_voice(edge: &mut Edge, speed: f32) -> Option<Voice> {
     let dir = tmp_dir(&edge.crime_home);
     let scale = reading::duration_scale(speed);
+    let voice = reading::voice_file(&edge.speech.voice, &home()).unwrap_or_default();
     let args: Vec<String> = edge
         .speech
         .args
         .iter()
         .map(|arg| {
-            arg.replace("${voice}", &edge.speech.voice)
+            arg.replace("${voice}", &voice.to_string_lossy())
                 .replace("${dir}", &dir.to_string_lossy())
                 .replace("${scale}", &format!("{scale:.4}"))
         })
@@ -2683,7 +2693,12 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
         // A file that is not there is an empty one: appending to it loses
         // nothing. One that is there and cannot be read is `None`, which the
         // core refuses rather than writing over.
-        Effect::ReadGlobalConfig { path, kind, name } => {
+        Effect::ReadGlobalConfig {
+            path,
+            kind,
+            name,
+            write,
+        } => {
             let text = match std::fs::read_to_string(&path) {
                 Ok(text) => Some(text),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
@@ -2692,7 +2707,12 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
                     None
                 }
             };
-            queue.push_back(Event::GlobalConfigRead { kind, name, text });
+            queue.push_back(Event::GlobalConfigRead {
+                kind,
+                name,
+                write,
+                text,
+            });
         }
         Effect::ReadInstallStatus(sentinel) => {
             let status = std::fs::read_to_string(&sentinel)
@@ -3894,12 +3914,12 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
     ),
     (
         "no-voice",
-        "No voice configured — set speech.voice in ~/.crime/config.toml; the command on the terminal's line fetches one",
+        "No voice on this machine — press i to install the speech row, which fetches one and names it in ~/.crime/config.toml",
         ui::Tone::Warning,
     ),
     (
         "no-synthesizer",
-        "No speech synthesizer — the command speech.command names is not on this machine; the install is on the terminal's line, unrun",
+        "No speech synthesizer — the command speech.command names is not running; press i to install the speech row",
         ui::Tone::Warning,
     ),
     (

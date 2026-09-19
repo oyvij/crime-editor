@@ -7,7 +7,7 @@
 //! `startup::PROGRAMS` (`docs/adr/0013-a-voice-is-an-installed-binary.md`).
 
 use crate::{preview, Effect, Selection, State};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// A Reading in flight — the Utterances the voice was handed, in order, and
@@ -136,8 +136,8 @@ pub const PARAGRAPH_GAP_MS: u32 = 1000;
 /// than branched on (R31.22).
 ///
 /// The core reads `voice` only for whether it is empty and `install` only to
-/// hand it to the terminal; `command`, `args` and `player` it never reads at
-/// all — they are the edge's copy of the same rows.
+/// run it; `command`, `args` and `player` it never reads at all — they are the
+/// edge's copy of the same rows.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Speech {
     pub command: String,
@@ -146,6 +146,19 @@ pub struct Speech {
     pub speed: f32,
     pub player: String,
     pub install: String,
+}
+
+/// The file `voice` names, with a leading `~` as the home directory: the value
+/// is written as the row spells it and expanded only here, where it is read.
+/// A blank voice names no file.
+pub fn voice_file(voice: &str, home: &Path) -> Option<PathBuf> {
+    if voice.is_empty() {
+        return None;
+    }
+    Some(match Path::new(voice).strip_prefix("~") {
+        Ok(rest) => home.join(rest),
+        Err(_) => PathBuf::from(voice),
+    })
 }
 
 /// The duration scale a synthesizer is handed for a speed.
@@ -165,6 +178,10 @@ pub fn duration_scale(speed: f32) -> f32 {
     }
 }
 
+/// Why a Reading was refused, out loud, and the Tools speech row that would
+/// fix it when the refusal is about what is installed.
+pub type Refused = (&'static str, Option<&'static str>);
+
 /// Start a Reading over the Selection, or say out loud why not.
 ///
 /// The order is the request before the machine: whether there is a passage to
@@ -172,33 +189,18 @@ pub fn duration_scale(speed: f32) -> f32 {
 /// about what is installed — so a reader with nothing selected is told that
 /// rather than being sent to install a synthesizer they would then still have
 /// no use for.
-pub fn start(state: &State) -> (Option<Reading>, Vec<Effect>) {
+pub fn start(state: &State) -> Result<(Reading, Vec<Effect>), Refused> {
     let Some(path) = state.current_buffer.as_ref() else {
-        return (None, vec![Effect::Notify("nothing-selected")]);
+        return Err(("nothing-selected", None));
     };
     if !preview::is_markdown(path) {
-        return (None, vec![Effect::Notify("not-markdown")]);
+        return Err(("not-markdown", None));
     }
     let Some(source) = state.selected_text() else {
-        return (None, vec![Effect::Notify("nothing-selected")]);
+        return Err(("nothing-selected", None));
     };
-    if let Some(slug) = missing(state) {
-        // Typed, never run: an install has consequences on a machine CRIME does
-        // not own, and a default that is wrong for this one is a word away from
-        // being right where it is sitting (ADR 0012).
-        //
-        // Nothing to offer is a row this OS has no command on, which is a
-        // normal state and not an error — but an empty one would still clear
-        // whatever the reader was typing, since `SetTerminalInput` replaces
-        // the line. The notice says which piece on its own.
-        let install = (!state.speech.install.is_empty())
-            .then(|| Effect::SetTerminalInput(state.speech.install.clone()));
-        return (
-            None,
-            std::iter::once(Effect::Notify(slug))
-                .chain(install)
-                .collect(),
-        );
+    if let Some(missing) = missing(state) {
+        return Err(missing);
     }
     // Where the passage sits in the buffer, so the mark lands on the lines the
     // Utterances were written on rather than on the passage's own numbering.
@@ -216,36 +218,38 @@ pub fn start(state: &State) -> (Option<Reading>, Vec<Effect>) {
             one.lines = (one.lines.0 + first - 1, one.lines.1 + first - 1);
         }
     }
-    (
-        Some(Reading {
+    Ok((
+        Reading {
             utterances: utterances.clone(),
             offsets: Vec::new(),
             at_ms: 0,
             paused: false,
             file: anchor.is_some().then(|| path.clone()),
-        }),
+        },
         vec![Effect::Speak {
             utterances,
             speed: state.speech.speed,
         }],
-    )
+    ))
 }
 
-/// Which piece a Reading needs this machine has not got.
+/// Which piece a Reading needs this machine has not got, and the row that
+/// installs it: the voice rides on the synthesizer's install.
 ///
 /// The voice first, because nothing else can be observed without it: a
 /// synthesizer with no model to load never starts, so asking whether one is
 /// running would report the wrong missing piece to whoever has not filled the
-/// row in yet.
-fn missing(state: &State) -> Option<&'static str> {
-    if state.speech.voice.is_empty() {
-        return Some("no-voice");
+/// row in yet. A voice named and not on disk is the same missing piece as one
+/// never named.
+fn missing(state: &State) -> Option<Refused> {
+    if !state.voice_installed {
+        return Some(("no-voice", Some("synthesizer")));
     }
     if !state.voice_running {
-        return Some("no-synthesizer");
+        return Some(("no-synthesizer", Some("synthesizer")));
     }
     if !state.player_installed {
-        return Some("no-player");
+        return Some(("no-player", Some("player")));
     }
     None
 }
@@ -455,10 +459,12 @@ pub fn wrote(line: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        duration_scale, mark, next_speed, transport, utterances, words, wrote, Reading, Seek,
-        Utterance, NEXT, PARAGRAPH_GAP_MS, PLAY_PAUSE, PREVIOUS, SENTENCE_GAP_MS, SPEED, STOP,
+        duration_scale, mark, next_speed, transport, utterances, voice_file, words, wrote, Reading,
+        Seek, Utterance, NEXT, PARAGRAPH_GAP_MS, PLAY_PAUSE, PREVIOUS, SENTENCE_GAP_MS, SPEED,
+        STOP,
     };
     use crate::State;
+    use std::path::{Path, PathBuf};
 
     /// What a Reading says, which is what R35.2's cases are about — the split
     /// into Utterances is the next block of tests down.
@@ -719,6 +725,24 @@ mod tests {
             .at(),
             0
         );
+    }
+
+    #[test]
+    fn a_voice_is_read_with_the_home_directory_for_its_tilde() {
+        let home = Path::new("/home/me");
+        assert_eq!(
+            voice_file("~/.crime/voices/v.onnx", home),
+            Some(PathBuf::from("/home/me/.crime/voices/v.onnx"))
+        );
+        assert_eq!(
+            voice_file("/voices/v.onnx", home),
+            Some(PathBuf::from("/voices/v.onnx"))
+        );
+        assert_eq!(
+            voice_file("~other/v.onnx", home),
+            Some(PathBuf::from("~other/v.onnx"))
+        );
+        assert_eq!(voice_file("", home), None);
     }
 
     #[test]

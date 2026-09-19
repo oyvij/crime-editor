@@ -320,9 +320,9 @@ install.windows = "npm install -g prettier"
 # `voice` ships blank on purpose. It is a 61MB file on somebody else's disk, so
 # an invented path would be a row that reads as configured and cannot work —
 # worse than an honest blank, for the reason `[lsp.*]` ships no toolchain paths.
-# `install` is what puts it there: typed onto the terminal's input line and
-# never run, so it is read — and edited, if this machine wants a different
-# package manager — before it touches anything (ADR 0012).
+# `install` is what puts it there, run in the shell pane when the row is taken
+# in Tools, and `configures` is what it puts there: written into `voice` once
+# the install exits 0, unless `voice` is already yours (ADR 0018).
 #
 # `--noise-w-scale` varies phoneme duration. The model defaults to 0.8 and 1.0
 # was chosen by ear from a six-way comparison on the prototype: it is the
@@ -342,8 +342,9 @@ voice = ""
 
 player.macos = "afplay"
 player.linux = "aplay"
-install.macos = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -sL --output-dir ~/.crime/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json && echo 'now set speech.voice = \"'$HOME'/.crime/voices/en_US-bryce-medium.onnx\" in ~/.crime/config.toml'"
-install.linux = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -sL --output-dir ~/.crime/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json && echo 'now set speech.voice = \"'$HOME'/.crime/voices/en_US-bryce-medium.onnx\" in ~/.crime/config.toml'"
+install.macos = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -sL --output-dir ~/.crime/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json"
+install.linux = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -sL --output-dir ~/.crime/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json"
+configures.voice = "~/.crime/voices/en_US-bryce-medium.onnx"
 "#;
 
 /// What starting lays down at `<project>/.crime/config.toml` the first time,
@@ -416,8 +417,8 @@ pub const SEEDED_CONFIG: &str = r#"# CRIME reads this file on every start. A pro
 # command = "piper"
 # args = ["--model", "${voice}", "--length-scale", "${scale}", "--noise-w-scale", "1.0", "--output_dir", "${dir}"]
 
-# The voice model on this machine. Blank until you have one: the install
-# command CRIME offers when reading is refused is what fetches it.
+# The voice model on this machine. Blank until you have one: taking the speech
+# row in Tools fetches one and fills this in.
 # voice = ""
 
 # How fast, as a multiplier — higher is faster. It applies to the next Reading,
@@ -1761,11 +1762,18 @@ mod tests {
                 (synth.kind, synth.name.as_str(), synth.command.as_str()),
                 ("speech", "speech", "piper")
             );
+            // What the row configures is the file its own install fetches.
+            let template: toml::Table = PROGRAMS.parse().expect("the template parses");
+            assert_eq!(
+                template["speech"]["configures"]["voice"].as_str(),
+                Some("~/.crime/voices/en_US-bryce-medium.onnx")
+            );
             assert!(synth
                 .install
                 .as_deref()
                 .is_some_and(|line| line.starts_with("uv tool install piper-tts")
-                    && line.contains(r#"speech.voice = ""#)));
+                    && line.contains("--output-dir ~/.crime/voices")
+                    && line.contains("/en_US-bryce-medium.onnx ")));
             assert_eq!(
                 play,
                 &Dep {

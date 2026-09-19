@@ -10,7 +10,7 @@ features the keys belong to, see [language-intelligence.md](language-intelligenc
 
 | File | Scope | Created by |
 |---|---|---|
-| `~/.crime/config.toml` | You, on this machine — every project | You (or `install.sh`, which writes `speech.voice` there once it has fetched a voice). CRIME never writes to it. |
+| `~/.crime/config.toml` | You, on this machine — every project | CRIME seeds it from the template when it is missing. Taking a row in Tools appends that row, and the speech install fills in a blank `speech.voice`; nothing already in the file is changed. |
 | `<project>/.crime/config.toml` | This project — everyone who opens it | CRIME, the first time it opens the folder and finds nothing there. |
 
 The effective configuration is a **deep merge** of three layers: the defaults built into the binary,
@@ -214,10 +214,11 @@ What reads a Selection aloud. Explained in full in [reading-aloud.md](reading-al
 |---|---|---|---|
 | `command` | `"piper"` | string | The synthesizer. |
 | `args` | `["--model", "${voice}", "--length-scale", "${scale}", "--noise-w-scale", "1.0", "--output_dir", "${dir}"]` | array of strings | `${voice}` is the row below, `${scale}` the reciprocal of `speed`, `${dir}` where the stream is written. |
-| `voice` | `""` | string | Absolute path to the voice model. Blank until you have one. |
+| `voice` | `""` | string | Path to the voice model; a leading `~` is your home directory. Blank until the install fills it in. |
 | `speed` | `1.0` | float | Multiplier, higher is faster. Applies to the next Reading. |
 | `player.macos`, `player.linux` | `"afplay"`, `"aplay"` | string | What plays the stream. No `player.windows` is shipped. |
-| `install.macos`, `install.linux` | shipped | string | Installs `piper` with `uv`, fetches the `en_US-bryce-medium` voice into `~/.crime/voices/`, and prints the `speech.voice` line to write. Typed, never run. No `install.windows`. |
+| `install.macos`, `install.linux` | shipped | string | Installs `piper` with `uv` and fetches the `en_US-bryce-medium` voice into `~/.crime/voices/`. Run in the shell pane when the row is taken in Tools. No `install.windows`. |
+| `configures.voice` | `"~/.crime/voices/en_US-bryce-medium.onnx"` | string | Written into `voice` once the install exits 0, unless `voice` is already set. |
 
 ### Substitutions, in one place
 

@@ -221,8 +221,8 @@ pub fn rows(state: &State) -> Vec<ToolRow> {
         },
     ));
     // `[speech]` is one table naming two programs, and the voice belongs to
-    // the synthesizer: a synthesizer with no voice named cannot speak, and the
-    // install that fetches one is the fix, so it reads as missing.
+    // the synthesizer: a synthesizer with no voice on disk cannot speak, and
+    // the install that fetches one is the fix, so it reads as missing.
     let speech = &state.speech;
     let shipped = startup::speech(&template, &state.os);
     let given = |install: &String| (!install.is_empty()).then(|| install.clone());
@@ -236,7 +236,7 @@ pub fn rows(state: &State) -> Vec<ToolRow> {
         false => (
             speech.command.clone(),
             given(&speech.install),
-            match on_path(&speech.command) && !speech.voice.is_empty() {
+            match on_path(&speech.command) && state.voice_installed {
                 true => Availability::Installed,
                 false => absent(given(&speech.install).as_ref()),
             },
@@ -393,6 +393,69 @@ pub fn reported(install: &str, sentinel: &Path) -> String {
     format!("rm -f {sentinel}; {install}; echo $? > {writing}; mv {writing} {sentinel}")
 }
 
+/// What the global config is read for: taking a row writes the row, and its
+/// install exiting 0 writes what the row `configures`. Carried out and back
+/// with the read, like the row it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Write {
+    Row,
+    Configures,
+}
+
+/// What the speech install exiting 0 writes into the global config, given the
+/// file's text: each key `[speech]`'s own `configures` names that the table
+/// does not already set, or `None` when it sets every one. A blank value is
+/// not set — it is what the template ships until the install that fills it
+/// in — and anything else is the reader's, which the template's never beats.
+///
+/// Read from this file and no other: a project's config is a stranger's, and
+/// what it says the install configures is not the reader's to have written
+/// into their own. Written as the row spells it: a `~` is expanded where the
+/// value is read, never here. Replaced in place, so every comment and every
+/// other key keeps its bytes, and the file is refused as [`take`] refuses one.
+pub fn configure(global: &str) -> Result<Option<(String, Config)>, ConfigError> {
+    startup::merged_config(Some(global), None)?;
+    let mut file: toml_edit::DocumentMut =
+        global.parse().expect("the file the merge just read parses");
+    let Some(rows) = file
+        .get_mut("speech")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    else {
+        return Ok(None);
+    };
+    let configures: Vec<(String, String)> = rows
+        .get("configures")
+        .and_then(toml_edit::Item::as_table_like)
+        .into_iter()
+        .flat_map(|keys| keys.iter())
+        .filter_map(|(key, value)| Some((key.to_string(), value.as_str()?.to_string())))
+        .collect();
+    let mut wrote = false;
+    for (key, value) in configures {
+        let key = key.as_str();
+        if rows.get(key).is_some_and(|set| set.as_str() != Some("")) {
+            continue;
+        }
+        match rows.get_mut(key).and_then(toml_edit::Item::as_value_mut) {
+            Some(blank) => {
+                let decor = blank.decor().clone();
+                *blank = value.as_str().into();
+                *blank.decor_mut() = decor;
+            }
+            None => {
+                rows.insert(key, toml_edit::value(value));
+            }
+        }
+        wrote = true;
+    }
+    if !wrote {
+        return Ok(None);
+    }
+    let text = file.to_string();
+    let config = Config(startup::merged_config(Some(&text), None)?);
+    Ok(Some((text, config)))
+}
+
 /// What taking a row writes into the global config, given the file's text: the
 /// text with the template's row appended, and every `[facts.*]` row its values
 /// name that the file does not have, or `None` when there is nothing to add —
@@ -494,7 +557,7 @@ mod tests {
             row(&state, Kind::Speech, "synthesizer").install.as_deref(),
             Some("install-piper")
         );
-        state.speech.voice = "~/.crime/voices/bryce.onnx".to_string();
+        state.voice_installed = true;
         assert_eq!(
             row(&state, Kind::Speech, "synthesizer").availability,
             Availability::Installed
@@ -616,6 +679,45 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// The blank the template ships is filled where it stands, `~` and all,
+    /// and nothing else in the file moves.
+    #[test]
+    fn configuring_fills_a_blank_in_place_and_keeps_the_rest() {
+        let global = "# mine\n[speech]\ncommand = \"piper\"  # pinned\nvoice = \"\"   # blank\nconfigures.voice = \"~/.crime/voices/v.onnx\"\n\n[lsp.rust]\ncommand = \"ra\"\nextensions = [\"rs\"]\n";
+        let (text, config) = configure(global)
+            .expect("parses")
+            .expect("the voice is blank");
+        assert_eq!(
+            text,
+            global.replace("voice = \"\"", "voice = \"~/.crime/voices/v.onnx\"")
+        );
+        assert_eq!(
+            config.get("speech.voice").as_deref(),
+            Some("~/.crime/voices/v.onnx")
+        );
+    }
+
+    /// A key the file does not name at all is added; one the reader set is
+    /// never overwritten, and a file that says nothing is configured writes
+    /// nothing.
+    #[test]
+    fn configuring_adds_what_is_absent_and_never_beats_the_reader() {
+        let absent = "[speech]\ncommand = \"piper\"\nconfigures.voice = \"~/v\"\n";
+        let (text, _) = configure(absent)
+            .expect("parses")
+            .expect("the voice is absent");
+        assert_eq!(text, format!("{absent}voice = \"~/v\"\n"));
+        let chosen = "[speech]\nvoice = \"/mine.onnx\"\nconfigures.voice = \"~/v\"\n";
+        assert!(configure(chosen).expect("parses").is_none());
+        let unsaid = "[speech]\nvoice = \"\"\n";
+        assert!(configure(unsaid).expect("parses").is_none());
+    }
+
+    #[test]
+    fn configuring_a_file_that_does_not_parse_is_refused() {
+        assert!(configure("[speech").is_err());
     }
 
     #[test]

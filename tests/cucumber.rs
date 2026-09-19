@@ -64,11 +64,13 @@ pub struct CrimeWorld {
     /// from the pane it holds rather than the core remembering it, so the world
     /// does too.
     ai_pane: bool,
-    /// Whether the edge holds a synthesizer child, and whether it found the
-    /// configured player. Told to the core rather than set by it, exactly as
-    /// `ai_pane` above is and for the same reason.
+    /// Whether the edge holds a synthesizer child, whether it found the
+    /// configured player, and whether the file the voice names is on disk.
+    /// Told to the core rather than set by it, exactly as `ai_pane` above is
+    /// and for the same reason.
     voice_child: bool,
     player_on_path: bool,
+    voice_on_disk: bool,
     /// What the edge is playing, and the stream it built to play it — the
     /// words `Effect::Speak` handed over, cleared by `Effect::StopSpeaking`.
     /// The stream file itself lives outside every workspace and is the edge's
@@ -554,6 +556,8 @@ impl CrimeWorld {
         self.state.workspace_facts = self.workspace_facts.clone();
         self.state.voice_running = self.voice_child;
         self.state.player_installed = self.player_on_path;
+        // A blank voice names no file, so none is on disk.
+        self.state.voice_installed = self.voice_on_disk && !self.state.speech.voice.is_empty();
     }
 
     /// What the edge does wherever it stops holding a pane: the core is told
@@ -992,7 +996,12 @@ impl CrimeWorld {
             }
             // The world plays the edge reading its modelled disk: the file as
             // a step last left it, or as CRIME was started on.
-            Effect::ReadGlobalConfig { path, kind, name } => {
+            Effect::ReadGlobalConfig {
+                path,
+                kind,
+                name,
+                write,
+            } => {
                 let text = self
                     .files
                     .get(&path)
@@ -1002,6 +1011,7 @@ impl CrimeWorld {
                 self.send_now(Event::GlobalConfigRead {
                     kind,
                     name,
+                    write,
                     text: Some(text),
                 });
             }
@@ -11642,6 +11652,18 @@ fn global_config_names(world: &mut CrimeWorld, dotted: String) {
     );
 }
 
+#[then(expr = "the global config sets {string} to {string}")]
+fn global_config_sets(world: &mut CrimeWorld, dotted: String, expected: String) {
+    let now = &world.files[&global_config_path(world)];
+    let table: toml::Table = now.parse().expect("the written file parses");
+    let (section, key) = dotted.split_once('.').expect("section.key");
+    assert_eq!(
+        table.get(section).and_then(|rows| rows.get(key)?.as_str()),
+        Some(expected.as_str()),
+        "in:\n{now}"
+    );
+}
+
 fn install_sentinel(world: &CrimeWorld) -> PathBuf {
     crime::crime_dir(&world.startup.root, world.startup.sidecar.as_deref()).join(tools::SENTINEL)
 }
@@ -12463,10 +12485,11 @@ fn voice_configured(world: &mut CrimeWorld) {
         voice: "/voices/a-voice".to_string(),
         speed: 1.00,
         player: "a-player".to_string(),
-        install: "install the voice".to_string(),
+        install: "fetch-a-voice".to_string(),
     };
     world.voice_child = true;
     world.player_on_path = true;
+    world.voice_on_disk = true;
     world.tell_core();
 }
 
@@ -12482,6 +12505,14 @@ fn no_synthesizer(world: &mut CrimeWorld) {
 #[given("no voice is configured")]
 fn no_voice(world: &mut CrimeWorld) {
     world.state.speech.voice = String::new();
+    world.tell_core();
+}
+
+/// Named, and deleted since — or never fetched to where the row says.
+#[given("the voice file is not on disk")]
+fn voice_not_on_disk(world: &mut CrimeWorld) {
+    world.voice_on_disk = false;
+    world.tell_core();
 }
 
 #[given("no audio player is configured")]
@@ -12665,10 +12696,31 @@ fn spoken_text_is(world: &mut CrimeWorld, expected: String) {
     );
 }
 
-#[then("the install command is waiting on the terminal's input line")]
-fn install_is_waiting(world: &mut CrimeWorld) {
-    assert_eq!(world.terminal_input, world.state.speech.install);
-    assert!(!world.terminal_input.is_empty());
+#[then("nothing is waiting on the terminal's input line")]
+fn nothing_is_waiting(world: &mut CrimeWorld) {
+    assert_eq!(world.terminal_input, "");
+}
+
+#[given("a reading was refused")]
+fn reading_was_refused(world: &mut CrimeWorld) {
+    world.send(Event::StartReading);
+    reading_not_in_flight(world);
+}
+
+/// Offered as Tools offers it: the list up, with the install key's row on it.
+#[then(expr = "the {word} row for {string} is offered")]
+fn row_is_offered(world: &mut CrimeWorld, group: String, name: String) {
+    let Modal::Tools { row } = world.state.modal else {
+        panic!("not listing tools: {:?}", world.state.modal);
+    };
+    let offered = tools::rows(&world.state)
+        .into_iter()
+        .nth(row)
+        .expect("the row is in the list");
+    assert_eq!(
+        (offered.kind, offered.name.as_str()),
+        (kind(&group), name.as_str())
+    );
 }
 
 /// R35.10. The stream is CRIME's own scratch and lives outside every

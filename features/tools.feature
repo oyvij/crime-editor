@@ -302,3 +302,61 @@ Feature: Tools — one list of everything CRIME runs
       When I re-check the row for "vue"
       And the command "tsc" is not on PATH
       Then CRIME asks whether to restart
+
+  Rule: An install writes what it configures
+
+    Some installs put a value on disk that the row then has to name: the speech install downloads a
+    voice, and `speech.voice` has to say where. So a row may carry `configures`, the keys its install
+    makes true, written into the global config once the install exits with status 0 — each one the
+    file does not already set, since the reader's value beats the template's. The value is written
+    as the row spells it, `~` and all (`docs/adr/0018-the-global-config-is-the-list-of-programs.md`).
+
+    Scenario: The speech install exiting 0 writes the voice it configures
+      Given the global config is:
+        """
+        # How CRIME reads aloud.
+        [speech]
+        command = "piper"
+        voice = ""
+        install.linux = "uv tool install piper-tts"
+        configures.voice = "~/.crime/voices/bryce.onnx"
+        """
+      And the project has no config file
+      And the command "piper" is not on PATH
+      And the command "uv" is on PATH
+      And I took the speech row for "synthesizer"
+      When the install reports the exit status "0"
+      Then the global config sets "speech.voice" to "~/.crime/voices/bryce.onnx"
+
+    Scenario: A voice the reader chose is never overwritten
+      Given the global config is:
+        """
+        [speech]
+        command = "piper"
+        voice = "/voices/mine.onnx"
+        install.linux = "uv tool install piper-tts"
+        configures.voice = "~/.crime/voices/bryce.onnx"
+        """
+      And the project has no config file
+      And the command "piper" is not on PATH
+      And the command "uv" is on PATH
+      And I took the speech row for "synthesizer"
+      When the install reports the exit status "0"
+      Then the global config is unchanged
+
+    Scenario: An install that fails writes nothing it configures
+      Given the global config is:
+        """
+        [speech]
+        command = "piper"
+        voice = ""
+        install.linux = "uv tool install piper-tts"
+        configures.voice = "~/.crime/voices/bryce.onnx"
+        """
+      And the project has no config file
+      And the command "piper" is not on PATH
+      And the command "uv" is on PATH
+      And I took the speech row for "synthesizer"
+      When the install reports the exit status "1"
+      Then the global config is unchanged
+      And the speech row for "synthesizer" is "install-failed"

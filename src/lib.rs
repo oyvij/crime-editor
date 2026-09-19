@@ -958,12 +958,14 @@ pub enum Event {
     /// if the file lacks it, and run what installs it in the shell pane
     /// (`docs/adr/0018-the-global-config-is-the-list-of-programs.md`).
     InstallTool,
-    /// The global config's text, read for the row being taken, or `None` for a
-    /// file that is there and could not be read. The row is carried out and
-    /// back rather than kept: the list it was taken from is gone by now.
+    /// The global config's text, read for the row being taken or for what its
+    /// install configures, or `None` for a file that is there and could not
+    /// be read. The row is carried out and back rather than kept: the list it
+    /// was taken from is gone by now.
     GlobalConfigRead {
         kind: tools::Kind,
         name: String,
+        write: tools::Write,
         text: Option<String>,
     },
     /// What a taken row's install reported in [`tools::SENTINEL`], or `None`
@@ -1259,12 +1261,14 @@ pub enum Effect {
         /// to move.
         path: PathBuf,
     },
-    /// Read the global config for a Tools row being taken. Only the edge reads
-    /// a file; what is written back is decided from the text it returns.
+    /// Read the global config for a Tools row being taken, or for what its
+    /// install configures. Only the edge reads a file; what is written back is
+    /// decided from the text it returns.
     ReadGlobalConfig {
         path: PathBuf,
         kind: tools::Kind,
         name: String,
+        write: tools::Write,
     },
     /// A taken row's install has ended: read the status its sentinel holds.
     ReadInstallStatus(PathBuf),
@@ -1896,13 +1900,16 @@ pub struct State {
     /// the install line says: which binary speaks and which one plays is the
     /// edge's copy of the same rows (ADR 0013).
     pub speech: reading::Speech,
-    /// Whether the edge holds a synthesizer child, and whether it found the
-    /// configured player on this machine. Two facts only the edge can observe,
-    /// so `tell_core` sets them and `update` never does — `ai_running`'s lesson
-    /// applied before it can bite, since a spawn that failed and a child that
-    /// died are exactly the states a remembered flag gets wrong.
+    /// Whether the edge holds a synthesizer child, whether it found the
+    /// configured player on this machine, and whether the file the voice names
+    /// is on disk. Facts only the edge can observe, so `tell_core` sets them
+    /// and `update` never does — `ai_running`'s lesson applied before it can
+    /// bite, since a spawn that failed, a child that died and a model deleted
+    /// after its install exited 0 are exactly the states a remembered flag
+    /// gets wrong.
     pub voice_running: bool,
     pub player_installed: bool,
+    pub voice_installed: bool,
     /// The Reading in flight, if there is one. The core's, unlike the two
     /// above: which passage is being read is a consequence of an event rather
     /// than an observation of a child.
@@ -2152,6 +2159,7 @@ impl Default for State {
             speech: reading::Speech::default(),
             voice_running: false,
             player_installed: false,
+            voice_installed: false,
             reading: None,
             workspace_facts: BTreeMap::new(),
             recheck: None,
@@ -5481,7 +5489,7 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
         Event::StartReading => match reading::start(state) {
             // The stop goes first, so the player holding the old stream is
             // gone before the next one is built over it.
-            (Some(reading), effects) => {
+            Ok((reading, effects)) => {
                 let stopping = next.reading.is_some().then_some(Effect::StopSpeaking);
                 next.reading = Some(reading);
                 stopping.into_iter().chain(effects).collect()
@@ -5489,7 +5497,20 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
             // A refusal takes nothing away: `:read` with nothing selected is a
             // press that did not name a passage, and silencing the one already
             // playing would make a mistyped key the way to lose your place.
-            (None, effects) => effects,
+            //
+            // A missing piece is one key from installed: Tools opens on the
+            // speech row that fixes it, and `i` takes it there exactly as it
+            // would had the reader opened Tools (ADR 0018).
+            Err((slug, offers)) => {
+                if let Some(row) = offers.and_then(|name| {
+                    tools::rows(&next)
+                        .iter()
+                        .position(|row| row.kind == tools::Kind::Speech && row.name == name)
+                }) {
+                    next.modal = Modal::Tools { row };
+                }
+                vec![Effect::Notify(slug)]
+            }
         },
 
         Event::StopReading => {
@@ -5748,8 +5769,8 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                     None,
                 ) => vec![],
                 // Speech is keys of one `[speech]` table, not a table of its
-                // own, so there is no row to append — and an install that
-                // configures nothing leaves the row offering it again forever.
+                // own, so there is no row to append — and an install run for a
+                // row no file names installs a program nothing runs.
                 (tools::Availability::Available, _) if row.kind == tools::Kind::Speech => vec![],
                 (tools::Availability::NeedsInstaller { installer }, _) => {
                     next.refusal = Some(preview::Refusal::NeedsInstaller(installer.clone()));
@@ -5776,6 +5797,42 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                         path: next.crime_home.join(startup::CONFIG_FILE),
                         kind: row.kind,
                         name: row.name,
+                        write: tools::Write::Row,
+                    }]
+                }
+            }
+        }
+
+        // What an install that exited 0 configures, decided against the file
+        // as it is now: the reader may have chosen a voice while it ran.
+        Event::GlobalConfigRead {
+            write: tools::Write::Configures,
+            text,
+            ..
+        } => {
+            let configured = match text {
+                Some(text) => tools::configure(&text),
+                None => Err(startup::ConfigError {
+                    file: startup::GLOBAL_LABEL.to_string(),
+                    line: 1,
+                    fault: startup::ConfigFault::Unreadable,
+                }),
+            };
+            match configured {
+                Err(error) => {
+                    next.refusal = Some(preview::Refusal::BrokenConfig(error));
+                    vec![]
+                }
+                Ok(None) => vec![],
+                Ok(Some((contents, config))) => {
+                    // Speaks from now on, as a start reading this file would —
+                    // unless a project's own voice beats the global one.
+                    if next.speech.voice.is_empty() {
+                        next.speech.voice = startup::speech(&config, &next.os).voice;
+                    }
+                    vec![Effect::WriteFile {
+                        path: next.crime_home.join(startup::CONFIG_FILE),
+                        contents,
                     }]
                 }
             }
@@ -5784,7 +5841,12 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         // The row written and its install run, or neither: a file CRIME would
         // refuse to start on is refused here too, before anything is written
         // or run.
-        Event::GlobalConfigRead { kind, name, text } => {
+        Event::GlobalConfigRead {
+            kind,
+            name,
+            write: tools::Write::Row,
+            text,
+        } => {
             let Some(row) = tools::rows(&next)
                 .into_iter()
                 .find(|row| row.kind == kind && row.name == name)
@@ -5841,8 +5903,19 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         // included — is said on the row.
         Event::InstallEnded(status) => match next.installing.take() {
             Some(row) if status.as_deref().map(str::trim) == Some("0") => {
+                // And what the install put on disk, named in the file: the
+                // voice it fetched is what the row needs to speak. Only
+                // `[speech]` carries `configures`.
+                let configures = (row.0 == tools::Kind::Speech).then(|| Effect::ReadGlobalConfig {
+                    path: next.crime_home.join(startup::CONFIG_FILE),
+                    kind: row.0,
+                    name: row.1.clone(),
+                    write: tools::Write::Configures,
+                });
                 next.recheck = Some(row);
-                vec![Effect::ProbePath]
+                std::iter::once(Effect::ProbePath)
+                    .chain(configures)
+                    .collect()
             }
             Some(row) => {
                 next.install_failed.insert(row);
@@ -9006,6 +9079,7 @@ mod tests {
             Event::GlobalConfigRead {
                 kind: tools::Kind::Server,
                 name: "go".to_string(),
+                write: tools::Write::Row,
                 text: None,
             },
         );
@@ -9017,6 +9091,47 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    /// What an install configures is decided against the file too, so one
+    /// that cannot be read is refused rather than written over.
+    #[test]
+    fn an_unreadable_global_config_configures_nothing() {
+        let state = State::default();
+        let (refused, effects) = update(
+            &state,
+            Event::GlobalConfigRead {
+                kind: tools::Kind::Speech,
+                name: "synthesizer".to_string(),
+                write: tools::Write::Configures,
+                text: None,
+            },
+        );
+        assert_eq!(effects, vec![]);
+        assert_eq!(refused.speech.voice, "");
+        assert!(matches!(
+            refused.refusal,
+            Some(preview::Refusal::BrokenConfig(_))
+        ));
+    }
+
+    /// The voice written speaks from now on, as a start reading the file would
+    /// — unless a voice beats the global file's, which only a project can.
+    #[test]
+    fn a_configured_voice_speaks_now_unless_one_beats_it() {
+        let mut state = State::default();
+        let read = Event::GlobalConfigRead {
+            kind: tools::Kind::Speech,
+            name: "synthesizer".to_string(),
+            write: tools::Write::Configures,
+            text: Some("[speech]\nvoice = \"\"\nconfigures.voice = \"~/v\"\n".to_string()),
+        };
+        let (configured, effects) = update(&state, read.clone());
+        assert_eq!(configured.speech.voice, "~/v");
+        assert!(matches!(effects.as_slice(), [Effect::WriteFile { .. }]));
+        state.speech.voice = "/project/voice.onnx".to_string();
+        let (beaten, _) = update(&state, read);
+        assert_eq!(beaten.speech.voice, "/project/voice.onnx");
     }
 
     /// A taken row runs from now on, as a start reading the new file would run
@@ -9035,6 +9150,7 @@ mod tests {
             Event::GlobalConfigRead {
                 kind: go.0,
                 name: go.1.clone(),
+                write: tools::Write::Row,
                 text: Some(String::new()),
             },
         );

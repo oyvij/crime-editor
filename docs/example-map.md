@@ -1922,7 +1922,10 @@ later pass. *Amended by ADR 0018: an install taken from Tools reports its exit s
 sentinel the watcher sees, a non-zero status reads `install-failed` on its row, and a zero is a
 re-check of that row. The program an install starts with, or the one after `sudo`, is probed with
 the commands: a row whose command and package manager are both missing reads `needs-installer`,
-names the package manager, and taking it writes nothing and runs nothing.*
+names the package manager, and taking it writes nothing and runs nothing. A row may carry
+`configures`, the keys its install makes true: once that install exits 0, each one
+`~/.crime/config.toml` leaves blank or absent is written as the row spells it, `~` unexpanded, and a
+key the reader set is never overwritten.*
 
 **R31.24** **A command that appears is a reason to forget that it was missing, which is why there is
 no restart.** A failed spawn writes a `Gone` conversation and `sync` skips any language that has one,
@@ -2939,10 +2942,11 @@ overflows the border and wraps the bar off it. **Play with no Reading in flight 
 Selection** — R35.1's "select, play" is the gesture, and a control that does nothing until `:read`
 has been typed is a control the reader presses twice and then stops believing; a play with nothing
 selected still refuses out loud, through the same `reading::start`.
-**R35.9** Every missing piece **refuses out loud** — no voice configured, no synthesizer on `PATH`,
-no player — naming which one, and putting the install command on the terminal's input line without
-pressing Enter, per R9 and ADR 0012. Silence is not an acceptable failure here, because silence is
-also what success sounds like before the first word.
+**R35.9** Every missing piece **refuses out loud** — no voice on disk, no synthesizer on `PATH`,
+no player — naming which one, and opening Tools on the speech row that installs it, so one key takes
+it exactly as it would in Tools (ADR 0018). Nothing is typed onto the terminal's input line. A
+`voice` naming a file that is not there is `no-voice`, the same as a blank one. Silence is not an
+acceptable failure here, because silence is also what success sounds like before the first word.
 **R35.10** **Nothing appears in the workspace when CRIME speaks.** The stream is written outside the
 workspace root, the file tree is unchanged, `git status` is unchanged, and a project search finds
 nothing new. It is deleted when the player exits and again when CRIME exits.
