@@ -20,9 +20,9 @@ and [../install.md](../install.md).
 |---|---|
 | The current buffer is a markdown file | Refused: `not-markdown`. Nothing else is read aloud, and the Transport is not drawn on other files. |
 | There is a Selection | Refused: `nothing-selected`. |
-| `speech.voice` names a model file | Refused: `no-voice`, and the install command is typed onto the terminal line. |
+| `speech.voice` names a model file that is on disk | Refused: `no-voice`, and Tools opens on the speech synthesizer row — `i` installs it, the same as taking it in Tools. |
 | The synthesizer is running | Refused: `no-synthesizer`, same offer. |
-| A player is configured and on `PATH` | Refused: `no-player`, same offer. |
+| A player is configured and on `PATH` | Refused: `no-player`, and Tools opens on the player row. Nothing installs a player. |
 
 What counts as a Selection is the same thing copying copies: a mouse drag, or a keyboard extend
 with Shift and an arrow. Two cases catch people out:
@@ -105,20 +105,23 @@ no model to load never starts.
 
 ### Installing a voice
 
-A voice is two things: the **synthesizer binary** and a **model file** it loads. The shipped install
-command installs `piper` with `uv`, fetches the `en_US-bryce-medium` model — an `.onnx` file and its
-`.onnx.json` beside it, about 61 MB, public domain — into `~/.crime/voices/`, and then prints the
-one line you still have to write yourself:
+A voice is two things: the **synthesizer binary** and a **model file** it loads. Take the speech
+synthesizer row in Tools (or press `i` when a Reading is refused for a missing piece): the shipped
+install command runs in the shell pane, installs `piper` with `uv`, and fetches the
+`en_US-bryce-medium` model — an `.onnx` file and its `.onnx.json` beside it, about 61 MB, public
+domain — into `~/.crime/voices/`. When it exits 0, CRIME writes the row's `configures.voice` into
+`~/.crime/config.toml`:
 
 ```toml
 # ~/.crime/config.toml
 [speech]
-voice = "/Users/you/.crime/voices/en_US-bryce-medium.onnx"
+voice = "~/.crime/voices/en_US-bryce-medium.onnx"
 ```
 
 `voice` ships blank on purpose. It is a path on your disk, and an invented one would be a row that
-reads as configured and cannot work. `install.sh` fills it in for you when it fetched the model and
-the key is not already set; by hand, it is the one line above.
+reads as configured and cannot work. The install fills it in, and only when it is blank: a voice you
+chose is never overwritten. A `~` at its start is your home directory. A `voice` naming a file that
+is not there reads `no-voice`, exactly as a blank one does.
 
 Any other piper voice works the same way: download its `.onnx` and `.onnx.json` and point `voice`
 at the `.onnx`. Any other synthesizer that reads text on stdin and writes its audio where `${dir}` says can be
@@ -138,12 +141,13 @@ All of these live in `~/.crime/config.toml` or the project's `.crime/config.toml
 |---|---|---|
 | `command` | `"piper"` | The synthesizer, found on `PATH`. |
 | `args` | `["--model", "${voice}", "--length-scale", "${scale}", "--noise-w-scale", "1.0", "--output_dir", "${dir}"]` | Its arguments. `${voice}` is the `voice` row, `${scale}` the reciprocal of `speed` (the synthesizer scales duration, so it runs backwards — you never write the inverted number), `${dir}` where the stream is written. `--noise-w-scale 1.0` was chosen by ear over the model's 0.8. |
-| `voice` | `""` | Absolute path to the model file. Blank until you have one. |
+| `voice` | `""` | Path to the model file; a leading `~` is your home directory. Blank until the install fills it in. |
 | `speed` | `1.0` | Multiplier, higher is faster. What `:speed` changes for the session. |
 | `player.macos` | `"afplay"` | What plays the stream on macOS. |
 | `player.linux` | `"aplay"` | What plays it on Linux (`alsa-utils`). |
 | `player.windows` | — | None shipped: nothing there plays a wav from a command line without a shell of its own. |
-| `install.macos`, `install.linux` | `uv tool install piper-tts && mkdir -p ~/.crime/voices && curl … && echo 'now set speech.voice = …'` | Typed onto the terminal line when a piece is missing; never run. |
+| `install.macos`, `install.linux` | `uv tool install piper-tts && mkdir -p ~/.crime/voices && curl …` | Run in the shell pane when the speech row is taken in Tools. |
+| `configures.voice` | `"~/.crime/voices/en_US-bryce-medium.onnx"` | Written into `voice` once the install exits 0, if `voice` is blank or absent in `~/.crime/config.toml`. |
 | `install.windows` | — | None shipped. |
 
 ## Where the audio goes

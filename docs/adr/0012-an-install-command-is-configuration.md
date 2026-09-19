@@ -1,5 +1,10 @@
 # An install command is configuration, not a branch
 
+> **Partly superseded by `docs/adr/0018-the-global-config-is-the-list-of-programs.md`:** program
+> rows now live in `~/.crime/config.toml`, which CRIME writes from a template, and taking a row from
+> the server list appends it there and runs the install in the shell pane. "Nothing is ever written
+> to the user's config file" and "The command is typed, never run" no longer hold.
+
 `docs/adr/0011-a-language-server-is-a-second-hosted-child.md` states, flatly: **CRIME never
 installs, downloads, updates or bootstraps a server. It runs what is configured.** This decision
 amends that sentence. It does not reverse the argument behind it, because the argument was never

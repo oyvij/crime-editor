@@ -30,14 +30,23 @@ Feature: Language intelligence
     Given the workspace root is "/home/me/projects/crime"
     And the project is a git repository
 
-  Rule: A server is named in configuration, and a default is always set
+  Rule: A server is a row in a config file, and nowhere else
 
+    # ADR 0018: the template is what a fresh machine's global config is seeded
+    # with, and it is the global layer of the very start that seeds it.
     Scenario: A common language has a server on a fresh install with nothing configured
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       When CRIME starts in the project
       Then a language server is configured for "rust"
       And a language server is configured for "typescript"
+
+    Scenario: A global config naming no server starts no server for any language
+      Given the global config is empty
+      And the project has no config file
+      When CRIME starts in the project
+      Then there is no language server configured for "rust"
+      And there is no language server configured for "typescript"
 
     Scenario: The configured languages can be enumerated, not only looked up by name
       Given the global config is empty
@@ -71,21 +80,26 @@ Feature: Language intelligence
       Then the configured server command for "rust" is "from-project-rust"
       And the configured server command for "python" is "from-global-python"
 
-    Scenario: A global config overrides a default, and a project config overrides the global
+    Scenario: A server row in the global config is used, and a project row overrides it key by key
       Given the global config is:
         """
         [lsp.rust]
         command = "from-global"
+        args = ["--from-global"]
+        extensions = ["rs"]
         """
       And the project config is:
         """
         [lsp.rust]
-        command = "from-project"
+        args = ["--from-project"]
         """
       When CRIME starts in the project
-      Then the configured server command for "rust" is "from-project"
+      Then the configured server command for "rust" is "from-global"
+      And the configured server arguments for "rust" are:
+        | arg            |
+        | --from-project |
 
-    Scenario: A global config wins over the built-in default when the project says nothing
+    Scenario: A server row in the global config is used when the project says nothing
       Given the global config is:
         """
         [lsp.rust]
@@ -120,6 +134,36 @@ Feature: Language intelligence
       And the configured languages do not include "sanskrit"
       And there is no language server configured for "sanskrit"
 
+    # A language is a row, not a match arm (ADR 0018): the row's `extensions`
+    # are what sends a file to it, and its table name is the language id the
+    # server is told.
+    Scenario: A row for a language CRIME never named serves the files it claims
+      Given the project config is:
+        """
+        [lsp.ruby]
+        command = "ruby-lsp"
+        extensions = ["rb"]
+        """
+      And CRIME started in the project
+      And a language server for "ruby" is ready
+      When I open "lib/app.rb"
+      Then a language server was started with "ruby-lsp"
+      And the language server for "ruby" was told "lib/app.rb" is a "ruby" document
+
+    Scenario: Two rows claiming one extension stop CRIME from starting
+      Given the project config is:
+        """
+        [lsp.rustier]
+        command = "rustier-ls"
+        extensions = ["rs"]
+        """
+      When CRIME starts in the project
+      Then CRIME refuses to start
+      And the error names the file ".crime/config.toml"
+      And the error names line 1
+      And the fault is "extension-claimed-twice"
+      And the error names the rows "lsp.rust" and "lsp.rustier"
+
     Scenario: A malformed server entry stops CRIME from starting
       Given the project config is:
         """
@@ -133,7 +177,7 @@ Feature: Language intelligence
       And the fault is "not-toml"
 
     Scenario: A layer names one key of a shipped language and keeps the command it did not name
-      Given the global config is empty
+      Given there is no global config
       And the project config is:
         """
         [lsp.rust]
@@ -192,7 +236,7 @@ Feature: Language intelligence
         """
 
     Scenario: A language with no initialization options says nothing about them
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       When I open "src/lib.rs"
@@ -203,6 +247,7 @@ Feature: Language intelligence
         """
         [lsp.rust]
         command = "rust-analyzer"
+        extensions = ["rs"]
         initialization_options = { cargo = { features = ["from-global"] } }
         """
       And the project config is:
@@ -1774,12 +1819,13 @@ Feature: Language intelligence
     `docs/adr/0012-an-install-command-is-configuration.md` argues why it is one more key in the
     `[lsp.<language>]` table, shipped as TOML data exactly as the server names are: a match on
     language and OS inside the library is ADR 0011's forbidden arm with a package manager's name in
-    it as well as a server's. So the assertion throughout is on the command CRIME *offered*, and the
-    absence asserted beside it is that nothing was executed.
+    it as well as a server's. So the assertion throughout is on the command CRIME *ran*, which is
+    the string configuration carried and nothing CRIME composed.
 
-    The command is typed into the terminal and never run, the way the tree's actions already work. An
-    install is a command with consequences on a machine CRIME does not own, and a default that is
-    wrong for this machine is then one word away from being right.
+    The command runs in the shell pane, visibly, where a `sudo` prompt can be answered and a default
+    that is wrong for this machine fails on screen with its exit status recorded
+    (`docs/adr/0018-the-global-config-is-the-list-of-programs.md` reverses ADR 0012's "typed, never
+    run").
 
     Whether a command resolves on PATH is a fact only the edge can observe, so scenarios state it as
     one — the same way they state that a server is running. Which OS the binary was built for is
@@ -1792,12 +1838,12 @@ Feature: Language intelligence
     holding leaves a written-off conversation behind — so the row reads that rather than probing, and
     nothing is spawned to find out what a row says.
 
-    Scenario: The palette offers the server list, and the list is what configuration names
-      Given the global config is empty
+    Scenario: The palette offers Tools, and its servers are what configuration names
+      Given there is no global config
       And the project has no config file
       When I open the palette
       And I press "v" in the palette
-      Then the palette is listing language servers
+      Then the palette is listing tools
       And the list offers a row for "rust"
       And the list offers a row for "typescript"
       And the list offers a row for "java"
@@ -1806,7 +1852,8 @@ Feature: Language intelligence
     Scenario: A row says whether its command is on this machine
       Given the command "rust-analyzer" is on PATH
       And the command "zls" is not on PATH
-      When I open the language server list
+      And the command "brew" is on PATH
+      When I open Tools
       Then the row for "rust" is "installed"
       And the row for "zig" is "missing"
 
@@ -1816,12 +1863,13 @@ Feature: Language intelligence
         [lsp.rust]
         command = "/opt/ra/rust-analyzer"
         """
-      When I open the language server list
+      When I open Tools
       Then the row for "rust" names the command "/opt/ra/rust-analyzer"
 
-    Scenario: Installing a row offers its configured command for this OS, and runs nothing
+    Scenario: Installing a row runs its configured command for this OS in the shell pane
       Given CRIME was built for "macos"
       And the command "zls" is not on PATH
+      And the command "brew" is on PATH
       And the project config is:
         """
         [lsp.zig]
@@ -1829,15 +1877,15 @@ Feature: Language intelligence
         install.macos = "brew install zls"
         install.linux = "zig build -Doptimize=ReleaseSafe"
         """
-      When I open the language server list
+      When I open Tools
       And I install the row for "zig"
-      Then the terminal is offered "brew install zls"
-      And no command has been executed
+      Then the shell pane runs "brew install zls" reporting its exit status
       And the focus is the terminal
 
-    Scenario: The same row on another OS offers that OS's command
+    Scenario: The same row on another OS runs that OS's command
       Given CRIME was built for "linux"
       And the command "zls" is not on PATH
+      And the command "zig" is on PATH
       And the project config is:
         """
         [lsp.zig]
@@ -1845,33 +1893,33 @@ Feature: Language intelligence
         install.macos = "brew install zls"
         install.linux = "zig build -Doptimize=ReleaseSafe"
         """
-      When I open the language server list
+      When I open Tools
       And I install the row for "zig"
-      Then the terminal is offered "zig build -Doptimize=ReleaseSafe"
-      And no command has been executed
+      Then the shell pane runs "zig build -Doptimize=ReleaseSafe" reporting its exit status
 
-    Scenario: A default install command needs no config file at all
+    Scenario: A template install command needs no row written by hand
       Given CRIME was built for "macos"
-      And the global config is empty
+      And there is no global config
       And the project has no config file
       And the command "gopls" is not on PATH
-      When I open the language server list
+      And the command "go" is on PATH
+      When I open Tools
       And I install the row for "go"
-      Then the terminal is offered a command mentioning "gopls"
-      And no command has been executed
+      Then the shell pane runs a command mentioning "gopls"
 
     Scenario: A global config overrides a shipped install command
       Given CRIME was built for "macos"
       And the command "gopls" is not on PATH
+      And the command "my-own-installer" is on PATH
       And the global config is:
         """
         [lsp.go]
         command = "gopls"
         install.macos = "my-own-installer gopls"
         """
-      When I open the language server list
+      When I open Tools
       And I install the row for "go"
-      Then the terminal is offered "my-own-installer gopls"
+      Then the shell pane runs "my-own-installer gopls" reporting its exit status
 
     Scenario: A language with no install command for this OS says so and offers nothing
       Given CRIME was built for "linux"
@@ -1882,7 +1930,7 @@ Feature: Language intelligence
         command = "zls"
         install.macos = "brew install zls"
         """
-      When I open the language server list
+      When I open Tools
       Then the row for "zig" is "no-install-command"
       When I install the row for "zig"
       Then the terminal is offered nothing
@@ -1893,24 +1941,24 @@ Feature: Language intelligence
       And "src/lib.rs" is open in the editor
       And the command "rust-analyzer" is on PATH
       When the language server for "rust" exits
-      And I open the language server list
+      And I open Tools
       Then the row for "rust" is "stopped"
 
     Scenario: Opening the list spawns nothing to find out what a row says
       Given the command "rust-analyzer" is on PATH
-      When I open the language server list
+      When I open Tools
       Then the row for "rust" is "installed"
       And no language server was started
 
     Scenario: A row already installed and answering is not installed again
       Given the command "rust-analyzer" is on PATH
-      When I open the language server list
+      When I open Tools
       Then the row for "rust" is "installed"
       When I install the row for "rust"
       Then the terminal is offered nothing
-      And the editor refuses with "server-already-installed"
+      And the editor refuses with "tool-already-installed"
 
-    Scenario: A row that reads stopped offers its install command rather than refusing
+    Scenario: A row that reads stopped runs its install command rather than refusing
       Given CRIME was built for "macos"
       And the project config is:
         """
@@ -1923,8 +1971,7 @@ Feature: Language intelligence
       And the command "rust-analyzer" is on PATH
       And the language server for "rust" exits
       When I install the row for "rust"
-      Then the terminal is offered "install-the-rust-server"
-      And no command has been executed
+      Then the shell pane runs "install-the-rust-server" reporting its exit status
 
     Scenario: A stopped row with no install command for this OS offers nothing
       Given CRIME was built for "linux"
@@ -1951,6 +1998,7 @@ Feature: Language intelligence
 
     Scenario: A re-check that still finds nothing offers a restart
       Given the command "zls" is not on PATH
+      And the command "brew" is on PATH
       And I asked to install the row for "zig"
       When I re-check the row for "zig"
       And the command "zls" is not on PATH
@@ -1969,6 +2017,7 @@ Feature: Language intelligence
 
     Scenario: A re-check that finds the command does not offer a restart
       Given the command "zls" is not on PATH
+      And the command "brew" is on PATH
       And I asked to install the row for "zig"
       When I re-check the row for "zig"
       And the command "zls" is on PATH
@@ -1977,7 +2026,7 @@ Feature: Language intelligence
 
     Scenario: The list is left without installing anything
       Given the command "zls" is not on PATH
-      When I open the language server list
+      When I open Tools
       And I press "Escape" in the palette
       Then the palette is closed
       And the terminal is offered nothing
@@ -2023,7 +2072,7 @@ Feature: Language intelligence
     missing.
 
     Scenario: A shipped default names the SDK, and the edge's answer reaches the spawn
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
@@ -2035,7 +2084,7 @@ Feature: Language intelligence
         | --tsdk=/home/me/project/node_modules/typescript/lib |
 
     Scenario: An SDK the edge could not find starts no server at all
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the command "vue-language-server" is on PATH
@@ -2045,7 +2094,7 @@ Feature: Language intelligence
       And the row for "vue" is "missing-requirement"
 
     Scenario: The SDK appearing starts the server on the next pass, with no restart
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the edge resolved no "typescript_sdk"
@@ -2189,7 +2238,7 @@ Feature: Language intelligence
       And CRIME started in the project
       And the command "zls" is on PATH
       And the edge resolved no "zig_plugin"
-      When I open the language server list
+      When I open Tools
       Then the row for "zig" is "installed"
 
     Scenario: A fact that says nothing about it is still a requirement
@@ -2210,7 +2259,7 @@ Feature: Language intelligence
       And the row for "zig" is "missing-requirement"
 
     Scenario Outline: A shipped default names the SDK the TypeScript server will not start without
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
@@ -2227,7 +2276,7 @@ Feature: Language intelligence
         | javascript | js        |
 
     Scenario: A workspace with no TypeScript of its own starts no TypeScript server
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the command "typescript-language-server" is on PATH
@@ -2252,7 +2301,7 @@ Feature: Language intelligence
     Scenario: A row installed but missing what it needs is neither installed nor missing
       Given the command "vue-language-server" is on PATH
       And the edge resolved no "typescript_sdk"
-      When I open the language server list
+      When I open Tools
       Then the row for "vue" is "missing-requirement"
 
     Scenario: A language configuration says only partly works reads as neither
@@ -2263,7 +2312,7 @@ Feature: Language intelligence
         partial = "type errors"
         """
       And the command "elm-language-server" is on PATH
-      When I open the language server list
+      When I open Tools
       Then the row for "elm" is "partly-working"
 
     Scenario: What a partly-working language cannot do is named on its row
@@ -2274,7 +2323,7 @@ Feature: Language intelligence
         partial = "type errors"
         """
       And the command "elm-language-server" is on PATH
-      When I open the language server list
+      When I open Tools
       Then the row for "elm" says it cannot do "type errors"
 
     Scenario: A missing command is a missing command, whatever it would only partly do
@@ -2286,13 +2335,14 @@ Feature: Language intelligence
         install.macos = "npm install -g @elm-tooling/elm-language-server"
         """
       And CRIME was built for "macos"
-      When I open the language server list
+      And the command "npm" is on PATH
+      When I open Tools
       Then the row for "elm" is "missing"
 
     Scenario: The same row with the SDK found reads as installed
       Given the command "vue-language-server" is on PATH
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
-      When I open the language server list
+      When I open Tools
       Then the row for "vue" is "installed"
 
   Rule: A question CRIME cannot answer is refused out loud, never met with silence
@@ -2381,7 +2431,7 @@ Feature: Language intelligence
       Then the language server for "rust" was sent no "elsewhere/response" notification
 
     Scenario: A fresh install serves a Vue file with the TypeScript server too
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
@@ -2390,7 +2440,7 @@ Feature: Language intelligence
       And a language server was started with "typescript-language-server"
 
     Scenario: A fresh install tells the TypeScript server where the Vue plugin is
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
@@ -2402,7 +2452,7 @@ Feature: Language intelligence
         """
 
     Scenario: A machine with no Vue server still starts TypeScript for a TypeScript project
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
@@ -2415,7 +2465,7 @@ Feature: Language intelligence
         """
 
     Scenario: A fresh install refuses the question the shipped Vue server asks
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And a language server for "vue" is ready

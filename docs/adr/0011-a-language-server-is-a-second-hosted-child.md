@@ -1,5 +1,9 @@
 # A language server is a second hosted child
 
+> **Amended by `docs/adr/0018-the-global-config-is-the-list-of-programs.md`:** server rows are no
+> longer a bottom layer in `startup::DEFAULTS` but a template written into `~/.crime/config.toml`, and
+> `lsp::language` is replaced by an `extensions` key on each row.
+
 CRIME hosts a shell and an AI CLI, and `docs/adr/0004-hosted-panes-are-transparent.md` forbids any
 branch anywhere that tests which CLI is running in one. A language server is the same kind of thing:
 a child process CRIME spawns, talks a documented protocol to, and must have no opinions about. It

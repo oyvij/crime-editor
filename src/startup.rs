@@ -10,29 +10,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use toml::Table;
 
-/// Built-in defaults, the bottom layer of the merge. `risk.threshold` is
-/// `risk::DEFAULT_THRESHOLD` and `editor.tab_width` is
+/// The Settings: numbers CRIME cannot work without, built in and beaten key by
+/// key by `~/.crime/config.toml` and that by the project's own
+/// (`docs/adr/0018-the-global-config-is-the-list-of-programs.md`).
+/// `risk.threshold` is `risk::DEFAULT_THRESHOLD` and `editor.tab_width` is
 /// `editor::DEFAULT_TAB_WIDTH`, spelled as TOML — a test below holds each pair
 /// level, since a default that disagrees with itself is a figure nobody can
 /// predict.
-///
-/// The `[lsp.*]` tables are the only place in the library a language server is
-/// named, and they are data rather than a branch on purpose: the global config
-/// beats them, and the project's own config beats that, key by key. A match arm
-/// spelling the same strings could only be beaten by a fork —
-/// `docs/adr/0011-a-language-server-is-a-second-hosted-child.md` argues why
-/// where the name lives is the whole of the distinction.
-///
-/// The `install` keys are the same kind of data for the same reasons, one per
-/// operating system, and this is the only place in the library a package
-/// manager is named at all
-/// (`docs/adr/0012-an-install-command-is-configuration.md`). Shipping them here
-/// is the whole of "the commands arrive with an update": they are the bottom
-/// layer of the merge, so a new binary's corrections are live on first run and
-/// nothing was written to anybody's config file. A language nobody has packaged
-/// for an OS gets **no key** — `zls` on Linux is a build from source and `jdtls`
-/// is in no distribution — because an invented command that fails looks
-/// configured, while a blank one is fixable in one line of TOML.
 pub const DEFAULTS: &str = r#"[view]
 double_tap_ms = 300
 
@@ -47,7 +31,37 @@ tab_width = 4
 # inside, and what it was left at beats this.
 minimap = true
 
-# The compiler a project pins, which is a per-package dependency in every
+[risk]
+threshold = 15
+max_iterations = 10
+
+# `speed` is a multiplier where higher is faster, which is the convention every
+# player has. The synthesizer's own parameter scales *duration* and runs
+# backwards, so `${scale}` is its reciprocal and the inversion never reaches a
+# file a human writes (R35.7).
+[speech]
+speed = 1.0
+"#;
+
+/// The Program rows the binary carries: the rows [`template`] seeds
+/// `~/.crime/config.toml` with, live. They are not a layer of the merge: a row
+/// no config file names does not run (ADR 0018).
+///
+/// The `[lsp.*]` tables are the only place in the library a language server is
+/// named, and they are data rather than a branch on purpose: once in the file
+/// they are the reader's to edit, and the project's own config beats them key
+/// by key. A match arm spelling the same strings could only be beaten by a fork —
+/// `docs/adr/0011-a-language-server-is-a-second-hosted-child.md` argues why
+/// where the name lives is the whole of the distinction.
+///
+/// The `install` keys are the same kind of data for the same reasons, one per
+/// operating system, and this is the only place in the library a package
+/// manager is named at all
+/// (`docs/adr/0012-an-install-command-is-configuration.md`). A language nobody has packaged
+/// for an OS gets **no key** — `zls` on Linux is a build from source and `jdtls`
+/// is in no distribution — because an invented command that fails looks
+/// configured, while a blank one is fixable in one line of TOML.
+pub const PROGRAMS: &str = r#"# The compiler a project pins, which is a per-package dependency in every
 # JavaScript workspace and the file `@vue/language-server` resolves out of the
 # directory `--tsdk=` names. `value = "directory"` because the server wants the
 # `lib` holding it, not the file. The global install is where `tsc` points once
@@ -59,6 +73,9 @@ marker = "node_modules/typescript/lib/typescript.js"
 value = "directory"
 command = "tsc"
 command_marker = "../lib/typescript.js"
+install.macos = "npm install -g typescript"
+install.linux = "npm install -g typescript"
+install.windows = "npm install -g typescript"
 
 # What teaches a TypeScript server to answer about a `.vue` file. It needs no
 # install of its own: `@vue/language-server` carries it in its own
@@ -76,12 +93,9 @@ optional = true
 command = "vue-language-server"
 command_marker = "../node_modules/@vue/typescript-plugin"
 
-[risk]
-threshold = 15
-max_iterations = 10
-
 [lsp.rust]
 command = "rust-analyzer"
+extensions = ["rs"]
 install.macos = "rustup component add rust-analyzer"
 install.linux = "rustup component add rust-analyzer"
 install.windows = "rustup component add rust-analyzer"
@@ -98,6 +112,7 @@ install.windows = "rustup component add rust-analyzer"
 [lsp.vue]
 command = "vue-language-server"
 args = ["--stdio", "--tsdk=${typescript_sdk}"]
+extensions = ["vue"]
 also_served_by = ["typescript"]
 unanswerable.request = "tsserver/request"
 unanswerable.response = "tsserver/response"
@@ -107,10 +122,12 @@ install.windows = "npm install -g @vue/language-server"
 
 [lsp.java]
 command = "jdtls"
+extensions = ["java"]
 install.macos = "brew install jdtls"
 
 [lsp.zig]
 command = "zls"
+extensions = ["zig"]
 install.macos = "brew install zls"
 
 # The server resolves TypeScript itself, and on a machine whose global
@@ -122,6 +139,7 @@ install.macos = "brew install zls"
 [lsp.typescript]
 command = "typescript-language-server"
 args = ["--stdio"]
+extensions = ["ts", "tsx", "mts", "cts"]
 install.macos = "npm install -g typescript typescript-language-server"
 install.linux = "npm install -g typescript typescript-language-server"
 install.windows = "npm install -g typescript typescript-language-server"
@@ -146,6 +164,7 @@ languages = ["vue"]
 [lsp.javascript]
 command = "typescript-language-server"
 args = ["--stdio"]
+extensions = ["js", "jsx", "mjs", "cjs"]
 install.macos = "npm install -g typescript typescript-language-server"
 install.linux = "npm install -g typescript typescript-language-server"
 install.windows = "npm install -g typescript typescript-language-server"
@@ -156,12 +175,14 @@ path = "${typescript_sdk}/tsserver.js"
 [lsp.python]
 command = "pyright-langserver"
 args = ["--stdio"]
+extensions = ["py", "pyi"]
 install.macos = "npm install -g pyright"
 install.linux = "npm install -g pyright"
 install.windows = "npm install -g pyright"
 
 [lsp.go]
 command = "gopls"
+extensions = ["go"]
 install.macos = "go install golang.org/x/tools/gopls@latest"
 install.linux = "go install golang.org/x/tools/gopls@latest"
 install.windows = "go install golang.org/x/tools/gopls@latest"
@@ -172,13 +193,292 @@ install.windows = "go install golang.org/x/tools/gopls@latest"
 # table refuses.
 [lsp.c]
 command = "clangd"
+extensions = ["c", "h"]
 install.linux = "sudo apt install clangd"
 install.windows = "winget install LLVM.LLVM"
 
 [lsp.cpp]
 command = "clangd"
+extensions = ["cpp", "cc", "cxx", "hpp", "hh", "hxx"]
 install.linux = "sudo apt install clangd"
 install.windows = "winget install LLVM.LLVM"
+
+# The long tail (ADR 0018): every language below has a server one command
+# installs somewhere, and an OS nothing packages it for has no key. A language
+# missing from this list is a row you write, exactly like these. PowerShell is
+# missing on purpose: its server ships only as a release bundle, and starting it
+# needs the path that bundle was unpacked to.
+
+[lsp.shellscript]
+command = "bash-language-server"
+args = ["start"]
+extensions = ["sh", "bash"]
+install.macos = "npm install -g bash-language-server"
+install.linux = "npm install -g bash-language-server"
+install.windows = "npm install -g bash-language-server"
+
+[lsp.lua]
+command = "lua-language-server"
+extensions = ["lua"]
+install.macos = "brew install lua-language-server"
+install.windows = "winget install LuaLS.lua-language-server"
+
+[lsp.ruby]
+command = "ruby-lsp"
+extensions = ["rb", "rake", "gemspec", "ru"]
+install.macos = "gem install ruby-lsp"
+install.linux = "gem install ruby-lsp"
+install.windows = "gem install ruby-lsp"
+
+[lsp.php]
+command = "intelephense"
+args = ["--stdio"]
+extensions = ["php"]
+install.macos = "npm install -g intelephense"
+install.linux = "npm install -g intelephense"
+install.windows = "npm install -g intelephense"
+
+[lsp.kotlin]
+command = "kotlin-language-server"
+extensions = ["kt", "kts"]
+install.macos = "brew install kotlin-language-server"
+
+# No install key: the server ships with the Swift toolchain, for the reason
+# `[formatter.go]` has none.
+[lsp.swift]
+command = "sourcekit-lsp"
+extensions = ["swift"]
+
+[lsp.csharp]
+command = "csharp-ls"
+extensions = ["cs"]
+install.macos = "dotnet tool install --global csharp-ls"
+install.linux = "dotnet tool install --global csharp-ls"
+install.windows = "dotnet tool install --global csharp-ls"
+
+[lsp.haskell]
+command = "haskell-language-server-wrapper"
+args = ["--lsp"]
+extensions = ["hs", "lhs"]
+install.macos = "ghcup install hls"
+install.linux = "ghcup install hls"
+
+# No install key: `opam install ocaml-lsp-server` puts the server in the
+# switch's own `bin`, which is on PATH only once the reader's shell has run
+# `opam env`, so it would leave this row reading `missing` — `[lsp.c]`'s
+# macOS reason.
+[lsp.ocaml]
+command = "ocamllsp"
+extensions = ["ml", "mli"]
+
+[lsp.elixir]
+command = "elixir-ls"
+extensions = ["ex", "exs"]
+install.macos = "brew install elixir-ls"
+
+[lsp.erlang]
+command = "elp"
+args = ["server"]
+extensions = ["erl", "hrl"]
+install.macos = "brew install erlang-language-platform"
+
+[lsp.scala]
+command = "metals"
+extensions = ["scala", "sc", "sbt"]
+install.macos = "cs install metals"
+install.linux = "cs install metals"
+install.windows = "cs install metals"
+
+[lsp.clojure]
+command = "clojure-lsp"
+extensions = ["clj", "cljs", "cljc", "edn"]
+install.macos = "brew install clojure-lsp"
+
+# The server is the SDK's own subcommand, so there is nothing to install apart
+# from the language.
+[lsp.dart]
+command = "dart"
+args = ["language-server"]
+extensions = ["dart"]
+
+# The server is a package inside the language, so the probe finds `julia`, not
+# the package: with Julia installed this row reads `installed` before its
+# install has run, and only once a `.jl` file has tried the server and it has
+# read `stopped` is the install offered. `[lsp.r]` is the same.
+[lsp.julia]
+command = "julia"
+args = ["--startup-file=no", "--history-file=no", "-e", "using LanguageServer; runserver()"]
+extensions = ["jl"]
+install.macos = "julia -e 'using Pkg; Pkg.add(\"LanguageServer\")'"
+install.linux = "julia -e 'using Pkg; Pkg.add(\"LanguageServer\")'"
+install.windows = "julia -e 'using Pkg; Pkg.add(\"LanguageServer\")'"
+
+[lsp.r]
+command = "R"
+args = ["--no-echo", "-e", "languageserver::run()"]
+extensions = ["r", "R"]
+install.macos = "R -e 'install.packages(\"languageserver\", repos = \"https://cloud.r-project.org\")'"
+install.linux = "R -e 'install.packages(\"languageserver\", repos = \"https://cloud.r-project.org\")'"
+
+[lsp.nix]
+command = "nil"
+extensions = ["nix"]
+install.macos = "nix --extra-experimental-features 'nix-command flakes' profile install nixpkgs#nil"
+install.linux = "nix --extra-experimental-features 'nix-command flakes' profile install nixpkgs#nil"
+
+[lsp.terraform]
+command = "terraform-ls"
+args = ["serve"]
+extensions = ["tf", "tfvars"]
+install.macos = "brew install hashicorp/tap/terraform-ls"
+
+# A file named `Dockerfile` has no extension to claim, so only the
+# `name.dockerfile` spelling reaches this server.
+[lsp.dockerfile]
+command = "docker-langserver"
+args = ["--stdio"]
+extensions = ["dockerfile"]
+install.macos = "npm install -g dockerfile-language-server-nodejs"
+install.linux = "npm install -g dockerfile-language-server-nodejs"
+install.windows = "npm install -g dockerfile-language-server-nodejs"
+
+[lsp.toml]
+command = "taplo"
+args = ["lsp", "stdio"]
+extensions = ["toml"]
+install.macos = "cargo install --features lsp --locked taplo-cli"
+install.linux = "cargo install --features lsp --locked taplo-cli"
+install.windows = "cargo install --features lsp --locked taplo-cli"
+
+[lsp.sql]
+command = "sqls"
+extensions = ["sql"]
+install.macos = "go install github.com/sqls-server/sqls@latest"
+install.linux = "go install github.com/sqls-server/sqls@latest"
+install.windows = "go install github.com/sqls-server/sqls@latest"
+
+[lsp.svelte]
+command = "svelteserver"
+args = ["--stdio"]
+extensions = ["svelte"]
+install.macos = "npm install -g svelte-language-server"
+install.linux = "npm install -g svelte-language-server"
+install.windows = "npm install -g svelte-language-server"
+
+# Like the Vue server, this one does not start without the TypeScript SDK
+# named, and it is the same fact that names it.
+[lsp.astro]
+command = "astro-ls"
+args = ["--stdio"]
+extensions = ["astro"]
+install.macos = "npm install -g @astrojs/language-server"
+install.linux = "npm install -g @astrojs/language-server"
+install.windows = "npm install -g @astrojs/language-server"
+
+[lsp.astro.initialization_options.typescript]
+tsdk = "${typescript_sdk}"
+
+[lsp.graphql]
+command = "graphql-lsp"
+args = ["server", "-m", "stream"]
+extensions = ["graphql", "gql"]
+install.macos = "npm install -g graphql-language-service-cli"
+install.linux = "npm install -g graphql-language-service-cli"
+install.windows = "npm install -g graphql-language-service-cli"
+
+[lsp.proto]
+command = "protols"
+extensions = ["proto"]
+install.macos = "cargo install protols"
+install.linux = "cargo install protols"
+install.windows = "cargo install protols"
+
+# `CMakeLists.txt` ends in `.txt`, which is every text file's, so only the
+# `.cmake` files reach this server.
+[lsp.cmake]
+command = "cmake-language-server"
+extensions = ["cmake"]
+install.macos = "pipx install cmake-language-server"
+install.linux = "pipx install cmake-language-server"
+install.windows = "pip install cmake-language-server"
+
+[lsp.latex]
+command = "texlab"
+extensions = ["tex"]
+install.macos = "brew install texlab"
+
+[lsp.elm]
+command = "elm-language-server"
+extensions = ["elm"]
+install.macos = "npm install -g @elm-tooling/elm-language-server"
+install.linux = "npm install -g @elm-tooling/elm-language-server"
+install.windows = "npm install -g @elm-tooling/elm-language-server"
+
+[lsp.gleam]
+command = "gleam"
+args = ["lsp"]
+extensions = ["gleam"]
+install.macos = "brew install gleam"
+install.windows = "winget install Gleam.Gleam"
+
+[lsp.nim]
+command = "nimlangserver"
+extensions = ["nim", "nims"]
+install.macos = "nimble install nimlangserver"
+install.linux = "nimble install nimlangserver"
+install.windows = "nimble install nimlangserver"
+
+[lsp.perl]
+command = "perlnavigator"
+args = ["--stdio"]
+extensions = ["pl", "pm"]
+install.macos = "npm install -g perlnavigator-server"
+install.linux = "npm install -g perlnavigator-server"
+install.windows = "npm install -g perlnavigator-server"
+
+[lsp.typst]
+command = "tinymist"
+extensions = ["typ"]
+install.macos = "brew install tinymist"
+
+[lsp.markdown]
+command = "marksman"
+args = ["server"]
+extensions = ["md", "markdown"]
+install.macos = "brew install marksman"
+install.windows = "winget install Artempyanykh.Marksman"
+
+[lsp.yaml]
+command = "yaml-language-server"
+args = ["--stdio"]
+extensions = ["yaml", "yml"]
+install.macos = "npm install -g yaml-language-server"
+install.linux = "npm install -g yaml-language-server"
+install.windows = "npm install -g yaml-language-server"
+
+[lsp.json]
+command = "vscode-json-language-server"
+args = ["--stdio"]
+extensions = ["json", "jsonc"]
+install.macos = "npm install -g vscode-langservers-extracted"
+install.linux = "npm install -g vscode-langservers-extracted"
+install.windows = "npm install -g vscode-langservers-extracted"
+
+[lsp.html]
+command = "vscode-html-language-server"
+args = ["--stdio"]
+extensions = ["html", "htm"]
+install.macos = "npm install -g vscode-langservers-extracted"
+install.linux = "npm install -g vscode-langservers-extracted"
+install.windows = "npm install -g vscode-langservers-extracted"
+
+[lsp.css]
+command = "vscode-css-language-server"
+args = ["--stdio"]
+extensions = ["css", "scss", "less"]
+install.macos = "npm install -g vscode-langservers-extracted"
+install.linux = "npm install -g vscode-langservers-extracted"
+install.windows = "npm install -g vscode-langservers-extracted"
 
 # The `[formatter.*]` tables, which are the `[lsp.*]` tables above in a second
 # shape and are data for the same three reasons: a name in the bottom layer of
@@ -194,11 +494,12 @@ install.windows = "winget install LLVM.LLVM"
 # `${file}` is how a stdin-reading command is still told what it is reading —
 # JSON and YAML are the same bytes to a command with no name for them.
 #
-# `extensions` is named only where `lsp::language` cannot answer. Repeating an
-# extension it already maps would give one file two authors that can disagree,
-# and the language a file is is looked up there first.
+# Every row names the `extensions` it lays out, and is found by them alone: a
+# file's formatter is not looked up through its server, so `rs` here and in
+# `[lsp.rust]` is two choices that happen to agree (ADR 0018).
 [formatter.rust]
 command = "rustfmt"
+extensions = ["rs"]
 install.macos = "rustup component add rustfmt"
 install.linux = "rustup component add rustfmt"
 install.windows = "rustup component add rustfmt"
@@ -208,6 +509,7 @@ install.windows = "rustup component add rustfmt"
 [formatter.python]
 command = "black"
 args = ["--quiet", "-"]
+extensions = ["py", "pyi"]
 install.macos = "pipx install black"
 install.linux = "pipx install black"
 install.windows = "pip install black"
@@ -217,6 +519,7 @@ install.windows = "pip install black"
 # make itself true.
 [formatter.go]
 command = "gofmt"
+extensions = ["go"]
 
 # One command across eight rows, and eight rows rather than one because a
 # formatter is looked up by the language a file is. `--stdin-filepath` is what
@@ -224,6 +527,7 @@ command = "gofmt"
 [formatter.javascript]
 command = "prettier"
 args = ["--stdin-filepath", "${file}"]
+extensions = ["js", "jsx", "mjs", "cjs"]
 install.macos = "npm install -g prettier"
 install.linux = "npm install -g prettier"
 install.windows = "npm install -g prettier"
@@ -231,6 +535,7 @@ install.windows = "npm install -g prettier"
 [formatter.typescript]
 command = "prettier"
 args = ["--stdin-filepath", "${file}"]
+extensions = ["ts", "tsx", "mts", "cts"]
 install.macos = "npm install -g prettier"
 install.linux = "npm install -g prettier"
 install.windows = "npm install -g prettier"
@@ -238,6 +543,7 @@ install.windows = "npm install -g prettier"
 [formatter.vue]
 command = "prettier"
 args = ["--stdin-filepath", "${file}"]
+extensions = ["vue"]
 install.macos = "npm install -g prettier"
 install.linux = "npm install -g prettier"
 install.windows = "npm install -g prettier"
@@ -291,18 +597,13 @@ install.windows = "npm install -g prettier"
 # `voice` ships blank on purpose. It is a 61MB file on somebody else's disk, so
 # an invented path would be a row that reads as configured and cannot work —
 # worse than an honest blank, for the reason `[lsp.*]` ships no toolchain paths.
-# `install` is what puts it there: typed onto the terminal's input line and
-# never run, so it is read — and edited, if this machine wants a different
-# package manager — before it touches anything (ADR 0012).
+# `install` is what puts it there, run in the shell pane when the row is taken
+# in Tools, and `configures` is what it puts there: written into `voice` once
+# the install exits 0, unless `voice` is already yours (ADR 0018).
 #
 # `--noise-w-scale` varies phoneme duration. The model defaults to 0.8 and 1.0
 # was chosen by ear from a six-way comparison on the prototype: it is the
 # difference between "static" and a voice worth listening to for a page.
-#
-# `speed` is a multiplier where higher is faster, which is the convention every
-# player has. The synthesizer's own parameter scales *duration* and runs
-# backwards, so `${scale}` is its reciprocal and the inversion never reaches a
-# file a human writes (R35.7).
 #
 # No `player.windows`: nothing ships there that plays a wav from a command line
 # without a shell of its own, and a command that cannot work is worse than a
@@ -311,15 +612,22 @@ install.windows = "npm install -g prettier"
 command = "piper"
 args = ["--model", "${voice}", "--length-scale", "${scale}", "--noise-w-scale", "1.0", "--output_dir", "${dir}"]
 voice = ""
-speed = 1.0
+
+# How fast, as a multiplier — higher is faster. It applies to the next Reading,
+# because the pace is baked in when the stream is built.
+# speed = 1.0
+
 player.macos = "afplay"
 player.linux = "aplay"
-install.macos = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -sL --output-dir ~/.crime/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json && echo 'now set speech.voice = \"'$HOME'/.crime/voices/en_US-bryce-medium.onnx\" in ~/.crime/config.toml'"
-install.linux = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -sL --output-dir ~/.crime/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json && echo 'now set speech.voice = \"'$HOME'/.crime/voices/en_US-bryce-medium.onnx\" in ~/.crime/config.toml'"
+install.macos = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -sL --output-dir ~/.crime/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json"
+install.linux = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -sL --output-dir ~/.crime/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json"
+configures.voice = "~/.crime/voices/en_US-bryce-medium.onnx"
 "#;
 
 /// What starting lays down at `<project>/.crime/config.toml` the first time,
-/// and only when nothing is there (Q38). A key nobody can find is a key nobody
+/// and only when nothing is there (Q38) — and what `install.sh` lays down at
+/// `~/.crime/config.toml` the same way, asked of `crime --default-config`, so
+/// both files hold one text and the test below holds both. A key nobody can find is a key nobody
 /// sets: `editor.tab_width` was layered, merged and read on every start for its
 /// whole life while no `.crime/config.toml` existed anywhere to name it.
 ///
@@ -342,11 +650,12 @@ install.linux = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -
 /// reader who uncomments `tab_width` alone under a commented `[editor]` sets a
 /// top-level key that nothing reads. An empty table merges nothing, so they
 /// cost the effective config exactly what the comments do.
-pub const SEEDED_CONFIG: &str = r#"# CRIME reads this file on every start, and what it names beats
-# ~/.crime/config.toml key by key. It arrives commented out on purpose: it is
-# here so the keys can be found, not so this version's answers can be pinned.
-# Uncomment a line to disagree with the default beside it; delete it again to
-# go back to whatever the version you are running thinks is right.
+pub const SEEDED_CONFIG: &str = r#"# CRIME reads this file on every start. A project's .crime/config.toml beats
+# ~/.crime/config.toml key by key, and both beat the defaults built into CRIME.
+# It arrives commented out on purpose: it is here so the keys can be found,
+# not so this version's answers can be pinned. Uncomment a line to disagree
+# with the default beside it; delete it again to go back to whatever the
+# version you are running thinks is right.
 
 [view]
 
@@ -385,14 +694,61 @@ pub const SEEDED_CONFIG: &str = r#"# CRIME reads this file on every start, and w
 # command = "piper"
 # args = ["--model", "${voice}", "--length-scale", "${scale}", "--noise-w-scale", "1.0", "--output_dir", "${dir}"]
 
-# The voice model on this machine. Blank until you have one: the install
-# command CRIME offers when reading is refused is what fetches it.
+# The voice model on this machine. Blank until you have one: taking the speech
+# row in Tools fetches one and fills this in.
 # voice = ""
 
 # How fast, as a multiplier — higher is faster. It applies to the next Reading,
 # because the pace is baked in when the stream is built.
 # speed = 1.0
 "#;
+
+/// The Settings half of [`template`], commented out for the reason
+/// [`SEEDED_CONFIG`]'s are. `speech.speed` is not here but commented out inside
+/// [`PROGRAMS`]'s `[speech]` row, since TOML allows that table only once.
+const TEMPLATE_SETTINGS: &str = r#"# CRIME reads this file on every start. A project's .crime/config.toml beats
+# it key by key, and both beat the defaults built into CRIME.
+#
+# The settings come first, commented out on purpose: they are here so the keys
+# can be found, not so this version's answers can be pinned. Uncomment a line
+# to disagree with the default beside it.
+#
+# The programs CRIME runs come after them — language servers, formatters, what
+# they need, and the voice — and those rows are live. Edit a row to change what
+# runs, or write one for a language this file does not name.
+
+[view]
+
+# How long after a key is tapped a second tap of the same key still reads as a
+# double-tap, in milliseconds.
+# double_tap_ms = 300
+
+[editor]
+
+# What Tab lays down while inserting, and what Enter reaches for when it opens
+# a block in a file that holds no indentation of its own to copy.
+# tab_width = 4
+
+# Whether the mirror of the file down the editor's right-hand edge is up when a
+# project is opened. `:minimap` is the same switch while you are in there.
+# minimap = true
+
+[risk]
+
+# The cyclomatic complexity a function may reach before Risk names it.
+# threshold = 15
+
+# How many times the Gate may hand a refactor back before it stops.
+# max_iterations = 10
+
+"#;
+
+/// What `~/.crime/config.toml` starts as, when CRIME starts and the edge read
+/// none, and what `crime --default-config` prints for `install.sh` to lay down
+/// the same way: every Setting commented out, every Program row live (ADR 0018).
+pub fn template() -> String {
+    [TEMPLATE_SETTINGS, PROGRAMS].concat()
+}
 
 pub const GLOBAL_LABEL: &str = "~/.crime/config.toml";
 pub const PROJECT_LABEL: &str = ".crime/config.toml";
@@ -428,6 +784,15 @@ pub enum ConfigFault {
     /// it the one key it cannot be used without. Found after the merge,
     /// because a layer is a patch and completeness is not a patch's to satisfy.
     Incomplete { entry: String, key: String },
+    /// Two `[lsp.*]` rows claiming one extension, named in the order the
+    /// merged table holds them. Found after the merge for the same reason.
+    ClaimedTwice {
+        extension: String,
+        rows: [String; 2],
+    },
+    /// The file is there and the edge could not read it. Never written over:
+    /// what cannot be read cannot be kept.
+    Unreadable,
 }
 
 impl std::fmt::Display for ConfigError {
@@ -440,6 +805,11 @@ impl std::fmt::Display for ConfigError {
             ConfigFault::NotToml => write!(f, "config is not valid TOML"),
             ConfigFault::WrongType(detail) => write!(f, "{detail}"),
             ConfigFault::Incomplete { entry, key } => write!(f, "[{entry}] names no {key}"),
+            ConfigFault::ClaimedTwice {
+                extension,
+                rows: [first, second],
+            } => write!(f, "[{first}] and [{second}] both claim .{extension}"),
+            ConfigFault::Unreadable => write!(f, "config cannot be read"),
         }
     }
 }
@@ -608,6 +978,13 @@ pub struct Server {
     /// every configured server asking whether it fancies this extension.
     #[serde(default)]
     pub also_served_by: Vec<String>,
+    /// The file extensions this row owns, and the only way a file finds its
+    /// server: the table name is then the language id the protocol is sent, so
+    /// a language CRIME has never heard of is a row and no release (ADR 0018).
+    /// Two rows claiming one extension is refused at start rather than settled
+    /// by the order the merge happened to leave them in.
+    #[serde(default)]
+    pub extensions: Vec<String>,
     /// What installs this server, keyed by the OS the binary was built for.
     /// Typed like the rest, so `install.macos = 12` faults with a file and a
     /// line rather than being dropped (R9.5), and a map rather than three
@@ -696,11 +1073,10 @@ pub struct Formatter {
     /// under the string `Startup` carried in, never a branch on it (R31.22).
     #[serde(default)]
     pub install: BTreeMap<String, String>,
-    /// The file extensions this row claims, for the languages `lsp::language`
-    /// has no entry for. It is what keeps `html`, `css`, `json` and `yaml` out
-    /// of that table — a language named there is a language CRIME goes looking
-    /// for a server for — without a second hand-written map in `src/`. Named
-    /// only where the first table is silent, so no extension has two authors.
+    /// The file extensions this row claims. Asked on its own, never after the
+    /// `[lsp.*]` rows: a file's server and its formatter are separate choices,
+    /// so `rs` named in both tables is two facts rather than one with two
+    /// authors (ADR 0018).
     #[serde(default)]
     pub extensions: Vec<String>,
 }
@@ -754,6 +1130,10 @@ pub struct Fact {
     /// already would be.
     #[serde(default)]
     pub optional: bool,
+    /// What puts the fallback `command` on this machine, per OS, as a program
+    /// row's `install` does. A search still: nothing it finds is written back.
+    #[serde(default)]
+    pub install: BTreeMap<String, String>,
 }
 
 /// What is handed over once the marker is found: the marker itself, or the
@@ -805,7 +1185,7 @@ struct SourceLayer {
 type Origins = BTreeMap<String, (String, usize)>;
 
 #[derive(Debug, Clone, Default)]
-pub struct Config(Table);
+pub struct Config(pub(crate) Table);
 
 impl Config {
     /// Which languages have a server, and what runs each one. `get` below
@@ -874,7 +1254,17 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
     if let Some(reason) = path_refusal(input.path_status) {
         return Err(StartupError::Path(reason));
     }
-    let config = Config(merged_config(input)?);
+    // A Bare workspace has no project configuration layer at all, so a
+    // `.crime/config.toml` that happens to sit in the folder — most likely
+    // somebody else's — is not read. Skipped rather than refused: an
+    // unparseable file CRIME never looks at must not stop it starting either.
+    let project = match &input.sidecar {
+        Some(_) => None,
+        None => input.project_config.as_deref(),
+    };
+    let config = Config(
+        merged_config(input.global_config.as_deref(), project).map_err(StartupError::Config)?,
+    );
     let (checkout, update) = checkout(input);
     let binary_install = checkout.is_none();
     let mut state = initial_state(input, &config, checkout, update);
@@ -907,6 +1297,14 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
         effects.push(Effect::WriteFile {
             path: crate::crime_dir(&input.root, input.sidecar.as_deref()).join(CONFIG_FILE),
             contents: SEEDED_CONFIG.to_string(),
+        });
+    }
+    // The global file by the same rule, and in a Bare workspace too: it lives
+    // in `~/.crime`, not the workspace, so nothing about the folder decides it.
+    if input.global_config.is_none() {
+        effects.push(Effect::WriteFile {
+            path: input.crime_home.join(CONFIG_FILE),
+            contents: template(),
         });
     }
     // The editor comes back to the files it had, which is the only part of the
@@ -955,40 +1353,35 @@ fn path_refusal(status: PathStatus) -> Option<&'static str> {
     }
 }
 
-/// The defaults, under the global config, under the project's own. A layer that
-/// is not there is an empty one, which merges nothing.
+/// The Settings, under the global config, under the project's own. A project
+/// layer that is not there is an empty one, which merges nothing; a global one
+/// that is not there is the [`template`] this same start seeds it with, so a
+/// fresh machine has its servers on the start that writes them. The Program
+/// rows have no layer of their own beneath the files: what the files name is
+/// what runs (ADR 0018).
 ///
 /// Each layer is held to the types as it is parsed, because only the source
 /// text can name a line — but a layer is a *patch*, so completeness is the
 /// merged table's to satisfy and is checked once, at the end. `origins` is what
 /// lets that fault still name a file and a line after the source text is gone.
-fn merged_config(input: &Startup) -> Result<toml::Table, StartupError> {
+pub(crate) fn merged_config(
+    global: Option<&str>,
+    project: Option<&str>,
+) -> Result<Table, ConfigError> {
     let mut table = toml::Table::new();
     let mut origins = BTreeMap::new();
+    let seeded = template();
     for (source, label) in [
         (DEFAULTS, "defaults"),
-        (
-            input.global_config.as_deref().unwrap_or_default(),
-            GLOBAL_LABEL,
-        ),
-        (
-            // A Bare workspace has no project configuration layer at all, so a
-            // `.crime/config.toml` that happens to sit in the folder — most
-            // likely somebody else's — is not read. Skipped rather than
-            // refused: an unparseable file CRIME never looks at must not stop
-            // it starting either.
-            match &input.sidecar {
-                Some(_) => "",
-                None => input.project_config.as_deref().unwrap_or_default(),
-            },
-            PROJECT_LABEL,
-        ),
+        (global.unwrap_or(&seeded), GLOBAL_LABEL),
+        (project.unwrap_or_default(), PROJECT_LABEL),
     ] {
-        let (overlay, mentioned) = parse(source, label).map_err(StartupError::Config)?;
+        let (overlay, mentioned) = parse(source, label)?;
         origins.extend(mentioned);
         merge(&mut table, overlay);
     }
-    refuse_incomplete(&table, &origins).map_err(StartupError::Config)?;
+    refuse_incomplete(&table, &origins)?;
+    refuse_claimed_twice(&table, &origins)?;
     Ok(table)
 }
 
@@ -1031,6 +1424,51 @@ fn refuse_incomplete(table: &Table, origins: &Origins) -> Result<(), ConfigError
                 fault: ConfigFault::Incomplete {
                     entry,
                     key: key.to_string(),
+                },
+            });
+        }
+    }
+    Ok(())
+}
+
+/// An extension two `[lsp.*]` rows claim has no server a reader can predict:
+/// the rows come from a merge, and whichever one serde met first is not an
+/// answer (ADR 0018). Blamed on whichever of the two the nearest layer named,
+/// which is the file the reader is editing.
+fn refuse_claimed_twice(table: &Table, origins: &Origins) -> Result<(), ConfigError> {
+    let Some(rows) = table.get("lsp").and_then(toml::Value::as_table) else {
+        return Ok(());
+    };
+    let mut owners: BTreeMap<&str, &str> = BTreeMap::new();
+    for (name, values) in rows {
+        let claimed = values.get("extensions").and_then(toml::Value::as_array);
+        for extension in claimed
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_str)
+        {
+            // A row naming one extension twice is one claim, not a collision.
+            let Some(owner) = owners
+                .insert(extension, name)
+                .filter(|owner| *owner != name)
+            else {
+                continue;
+            };
+            let rows = [format!("lsp.{owner}"), format!("lsp.{name}")];
+            let layer = |row: &String| {
+                let file = origins.get(row).map(|(file, _)| file.as_str());
+                ["defaults", GLOBAL_LABEL, PROJECT_LABEL]
+                    .iter()
+                    .position(|label| Some(*label) == file)
+            };
+            let nearest = rows.iter().max_by_key(|row| layer(row)).expect("two rows");
+            let (file, line) = origins.get(nearest).cloned().unwrap_or_default();
+            return Err(ConfigError {
+                file,
+                line,
+                fault: ConfigFault::ClaimedTwice {
+                    extension: extension.to_string(),
+                    rows,
                 },
             });
         }
@@ -1151,7 +1589,7 @@ fn initial_state(
 /// never a branch on it (R31.22). A row this machine has no entry on is a
 /// blank, which is the refusal `reading::start` names out loud rather than a
 /// command that cannot work.
-fn speech(config: &Config, os: &str) -> crate::reading::Speech {
+pub(crate) fn speech(config: &Config, os: &str) -> crate::reading::Speech {
     let named = |key: &str| config.get(key).unwrap_or_default();
     crate::reading::Speech {
         command: named("speech.command"),
@@ -1183,14 +1621,16 @@ pub struct Dep {
     pub install: Option<String>,
 }
 
-/// The `[lsp.*]`, `[formatter.*]` and `[speech]` rows of [`DEFAULTS`], read by
-/// the same parse startup does, so a machine with no source can ask the binary
-/// what it needs rather than keeping a second table that drifts. The speech
-/// row's player is a row of its own, kind `player`, with no install: the table
-/// names none, since it ships with macOS and comes with alsa-utils on Linux.
-pub fn deps(os: &str) -> Vec<Dep> {
-    let (table, _) = parse(DEFAULTS, "defaults").expect("the shipped defaults parse");
-    let config = Config(table);
+/// The `[lsp.*]`, `[formatter.*]` and `[speech]` rows `~/.crime/config.toml`
+/// names — or the [`template`], when there is no file, since that is what the
+/// next start runs — read by the same merge startup does, so what `install.sh`
+/// offers is what CRIME would start. A file CRIME would refuse to start on is
+/// refused here too. The speech row's player is a row of its own, kind
+/// `player`, with no install: the table names none, since it ships with macOS
+/// and comes with alsa-utils on Linux. Either is left out when no file names
+/// its command, since `[speech]` is the one table the Settings share.
+pub fn deps(global_config: Option<&str>, os: &str) -> Result<Vec<Dep>, ConfigError> {
+    let config = Config(merged_config(global_config, None)?);
     let row = |kind, name: &str, command: &str, install: Option<&String>| Dep {
         kind,
         name: name.to_string(),
@@ -1199,7 +1639,7 @@ pub fn deps(os: &str) -> Vec<Dep> {
     };
     let speech = speech(&config, os);
     let install = (!speech.install.is_empty()).then_some(&speech.install);
-    config
+    Ok(config
         .servers()
         .iter()
         .map(|(name, s)| row("lsp", name, &s.command, s.install.get(os)))
@@ -1213,7 +1653,8 @@ pub fn deps(os: &str) -> Vec<Dep> {
             row("speech", "speech", &speech.command, install),
             row("player", "speech", &speech.player, None),
         ])
-        .collect()
+        .filter(|dep| !dep.command.is_empty())
+        .collect())
 }
 
 /// The figure on disk, if it describes the commit that is checked out. A folder
@@ -1390,14 +1831,31 @@ fn last_view(state_json: Option<&str>) -> Option<View> {
 #[cfg(test)]
 mod tests {
     use super::{
-        asset_name, deps, is_update, parse, release, start, verify, Config, ConfigError,
-        ConfigFault, Dep, Effect, FactValue, ReplaceFailed, Startup, StartupError, DEFAULTS,
-        PROJECT_LABEL, SEEDED_CONFIG,
+        asset_name, deps, is_update, merged_config, release, start, template, verify, Config,
+        ConfigError, ConfigFault, Dep, Effect, FactValue, ReplaceFailed, Startup, StartupError,
+        DEFAULTS, GLOBAL_LABEL, PROGRAMS, PROJECT_LABEL, SEEDED_CONFIG,
     };
 
-    /// The bottom layer on its own, as several tests below read it.
-    fn defaults() -> Config {
-        Config(parse(DEFAULTS, "defaults").expect("valid TOML").0)
+    /// What a fresh machine starts on: the Settings under the template it
+    /// seeds as the global layer, as several tests below read the rows.
+    fn fresh() -> Config {
+        Config(merged_config(None, None).expect("the template parses"))
+    }
+
+    /// A config text with every `# key = value` line made live, and nothing
+    /// else: prose that happens to hold ` = ` has a space or a backtick in
+    /// what would be its key.
+    fn uncommented(text: &str) -> toml::Table {
+        let is_key = |k: &str| k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        text.lines()
+            .map(|line| match line.strip_prefix("# ") {
+                Some(key) if key.split_once(" = ").is_some_and(|(k, _)| is_key(k)) => key,
+                _ => line,
+            })
+            .collect::<Vec<&str>>()
+            .join("\n")
+            .parse()
+            .expect("valid TOML uncommented")
     }
 
     /// The refusal a project layer earns, so that the tests below assert the
@@ -1564,7 +2022,7 @@ mod tests {
             ),
         ];
         for (os, player) in [("macos", "afplay"), ("linux", "aplay")] {
-            let rows = deps(os);
+            let rows = deps(None, os).expect("the template parses");
             let (table, speech) = rows.split_last_chunk::<2>().expect("the speech rows");
             let expected: Vec<Dep> = pinned
                 .iter()
@@ -1575,17 +2033,32 @@ mod tests {
                     install: if os == "macos" { macos } else { linux }.clone(),
                 })
                 .collect();
-            assert_eq!(table, expected, "{os}");
+            let config = fresh();
+            assert_eq!(
+                table.len(),
+                config.servers().len() + config.formatters().len(),
+                "{os}"
+            );
+            for dep in expected {
+                assert!(table.contains(&dep), "{os}: {dep:?}");
+            }
             let [synth, play] = speech;
             assert_eq!(
                 (synth.kind, synth.name.as_str(), synth.command.as_str()),
                 ("speech", "speech", "piper")
             );
+            // What the row configures is the file its own install fetches.
+            let template: toml::Table = PROGRAMS.parse().expect("the template parses");
+            assert_eq!(
+                template["speech"]["configures"]["voice"].as_str(),
+                Some("~/.crime/voices/en_US-bryce-medium.onnx")
+            );
             assert!(synth
                 .install
                 .as_deref()
                 .is_some_and(|line| line.starts_with("uv tool install piper-tts")
-                    && line.contains(r#"speech.voice = ""#)));
+                    && line.contains("--output-dir ~/.crime/voices")
+                    && line.contains("/en_US-bryce-medium.onnx ")));
             assert_eq!(
                 play,
                 &Dep {
@@ -1598,34 +2071,134 @@ mod tests {
         }
     }
 
-    /// A shipped default nothing can reach is a language served by nobody: the
-    /// spawn is decided from the file that was opened, so a `[lsp.<language>]`
-    /// whose spelling no extension produces is data that never fires.
+    /// `crime --deps` answers from the file, not the binary: a global config
+    /// naming one server lists that server and nothing the template ships, and
+    /// one CRIME would refuse to start on is refused with its file and line.
     #[test]
-    fn every_default_language_is_the_language_of_some_file() {
-        let files = [
-            "a.rs", "a.ts", "a.js", "a.vue", "a.java", "a.zig", "a.py", "a.go", "a.c", "a.cpp",
+    fn deps_lists_the_rows_the_global_config_names() {
+        let file = "[lsp.ruby]\ncommand = \"ruby-lsp\"\nextensions = [\"rb\"]\n";
+        assert_eq!(
+            deps(Some(file), "linux").expect("a usable file"),
+            [Dep {
+                kind: "lsp",
+                name: "ruby".into(),
+                command: "ruby-lsp".into(),
+                install: None,
+            }]
+        );
+        let broken = deps(Some("[lsp.ruby]\ncommand = 12\n"), "linux").expect_err("refused");
+        assert_eq!((broken.file.as_str(), broken.line), (GLOBAL_LABEL, 2));
+    }
+
+    /// The files each language was served before its rows named their own
+    /// extensions — the `match` those rows replaced, kept as the list it was —
+    /// are served the same way after, by both tables. A row that dropped one
+    /// is a file that quietly lost its server or its formatter.
+    #[test]
+    fn the_shipped_rows_serve_every_file_the_match_they_replaced_served() {
+        let mut state = crate::State {
+            servers: fresh().servers(),
+            formatters: fresh().formatters(),
+            ..crate::State::default()
+        };
+        let served = [
+            ("rust", "rs"),
+            ("typescript", "ts tsx mts cts"),
+            ("javascript", "js jsx mjs cjs"),
+            ("vue", "vue"),
+            ("java", "java"),
+            ("zig", "zig"),
+            ("python", "py pyi"),
+            ("go", "go"),
+            ("c", "c h"),
+            ("cpp", "cpp cc cxx hpp hh hxx"),
         ];
-        let reachable: std::collections::BTreeSet<&str> = files
-            .iter()
-            .filter_map(|name| crate::lsp::language(std::path::Path::new(name)))
-            .collect();
-        for language in defaults().servers().keys() {
-            assert!(
-                reachable.contains(language.as_str()),
-                "no file reaches {language}"
-            );
+        for (language, extensions) in served {
+            for extension in extensions.split(' ') {
+                let path = std::path::PathBuf::from(format!("/w/a.{extension}"));
+                assert_eq!(
+                    crate::lsp::language(&state, &path),
+                    Some(language),
+                    "{path:?}"
+                );
+                if state.formatters.contains_key(language) {
+                    state.current_buffer = Some(path.clone());
+                    state
+                        .buffers
+                        .insert(path.clone(), crate::editor::Buffer::open("", false, 4));
+                    assert!(
+                        matches!(
+                            crate::format::run(&state).as_slice(),
+                            [Effect::RunFormatter { language: formatted, .. }] if formatted == language
+                        ),
+                        "{path:?} is not laid out by [formatter.{language}]"
+                    );
+                }
+            }
         }
     }
 
-    /// The bottom layer held to the same check as the two above it, and named
-    /// here so a typo in the data fails as itself rather than as every scenario
-    /// that starts CRIME.
+    /// A row claiming nothing is a server no file reaches, and a formatter
+    /// that lays nothing out: data that never fires.
     #[test]
-    fn every_default_language_names_a_server() {
-        let config = defaults();
-        let named = config.0["lsp"].as_table().expect("lsp tables").len();
-        assert_eq!(config.servers().len(), named);
+    fn every_shipped_row_claims_an_extension() {
+        let config = fresh();
+        for (language, server) in config.servers() {
+            assert!(!server.extensions.is_empty(), "[lsp.{language}]");
+        }
+        for (language, formatter) in config.formatters() {
+            assert!(!formatter.extensions.is_empty(), "[formatter.{language}]");
+        }
+    }
+
+    /// The claim is refused naming both rows, and blamed on the layer that
+    /// made it rather than on the template it collided with.
+    #[test]
+    fn two_rows_claiming_one_extension_refuse_to_start_naming_both() {
+        let problem = refusal("\n[lsp.rustier]\ncommand = \"r\"\nextensions = [\"rs\"]\n");
+        assert_eq!((problem.file.as_str(), problem.line), (PROJECT_LABEL, 2));
+        assert_eq!(
+            problem.to_string(),
+            ".crime/config.toml:2: [lsp.rust] and [lsp.rustier] both claim .rs"
+        );
+    }
+
+    #[test]
+    fn a_row_naming_its_own_extension_twice_claims_it_once() {
+        start(&Startup {
+            project_config: Some("[lsp.rust]\nextensions = [\"rs\", \"rs\"]\n".to_string()),
+            ..Startup::default()
+        })
+        .expect("CRIME started");
+    }
+
+    /// The template held to the same check as a file a reader wrote, and named
+    /// here so a typo in the data fails as itself rather than as every scenario
+    /// that starts CRIME. One bad row empties its whole kind, so a count short
+    /// of the tables is any row failing.
+    #[test]
+    fn every_template_row_parses_into_a_valid_row() {
+        let config = fresh();
+        let named = |kind: &str| config.0[kind].as_table().expect(kind).len();
+        assert_eq!(config.servers().len(), named("lsp"));
+        assert_eq!(config.formatters().len(), named("formatter"));
+        assert_eq!(config.facts().len(), named("facts"));
+    }
+
+    /// Read off the template itself rather than through the merge, so the
+    /// template stays held if the merge's own refusal ever stops holding it.
+    #[test]
+    fn no_two_template_servers_claim_one_extension() {
+        let template: toml::Table = PROGRAMS.parse().expect("the template parses");
+        let mut owners = std::collections::BTreeMap::new();
+        for (language, row) in template["lsp"].as_table().expect("lsp tables") {
+            for extension in row["extensions"].as_array().expect("extensions") {
+                let extension = extension.as_str().expect("a string");
+                if let Some(owner) = owners.insert(extension, language) {
+                    assert_eq!(owner, language, ".{extension} is claimed twice");
+                }
+            }
+        }
     }
 
     /// R9.5 again, for the key this ticket adds: an install command that is not
@@ -1647,7 +2220,7 @@ mod tests {
     /// what `main.rs` hands in.
     #[test]
     fn every_default_install_command_is_keyed_by_an_os_that_can_run_crime() {
-        for (language, server) in defaults().servers() {
+        for (language, server) in fresh().servers() {
             for os in server.install.keys() {
                 assert!(
                     ["macos", "linux", "windows"].contains(&os.as_str()),
@@ -1663,7 +2236,7 @@ mod tests {
     /// one line of TOML away from being right.
     #[test]
     fn a_language_nobody_has_packaged_for_an_os_has_no_key_for_it() {
-        let servers = defaults().servers();
+        let servers = fresh().servers();
         for language in ["zig", "java"] {
             assert_eq!(
                 servers[language].install.keys().collect::<Vec<_>>(),
@@ -1692,7 +2265,7 @@ mod tests {
         })
         .expect("CRIME started");
         let patched = &state.servers["vue"];
-        let shipped = &defaults().servers()["vue"];
+        let shipped = &fresh().servers()["vue"];
         assert_eq!(patched.args, ["--from-project"]);
         assert_eq!(
             (
@@ -1723,7 +2296,7 @@ mod tests {
         .expect("CRIME started");
         let patched = &state.facts["typescript_sdk"];
         assert_eq!(patched.value, FactValue::Marker);
-        assert_eq!(patched.marker, defaults().facts()["typescript_sdk"].marker);
+        assert_eq!(patched.marker, fresh().facts()["typescript_sdk"].marker);
     }
 
     /// The `[lsp.*]` half of this is a scenario; the `[facts.*]` half is only
@@ -1803,7 +2376,7 @@ mod tests {
     /// instead, which is what makes the assertion count.
     #[test]
     fn every_name_the_defaults_interpolate_is_one_the_defaults_declare() {
-        let config = defaults();
+        let config = fresh();
         let declared = config.facts();
         let mut seen = 0;
         for (language, server) in config.servers() {
@@ -1843,7 +2416,7 @@ mod tests {
     /// `typescript.js` itself and every Vue server pointed at a file.
     #[test]
     fn the_shipped_fact_names_a_marker_and_the_directory_holding_it() {
-        let facts = defaults().facts();
+        let facts = fresh().facts();
         let sdk = &facts["typescript_sdk"];
         assert_eq!(sdk.marker, "node_modules/typescript/lib/typescript.js");
         assert_eq!(sdk.value, FactValue::Directory);
@@ -1878,15 +2451,16 @@ mod tests {
         );
     }
 
-    /// The seed is decided by one fact: `project_config` is `None`. The edge
+    /// Each seed is decided by one fact: its layer is `None`. The edge
     /// hands `Some("")` for a file it found and could not read — not UTF-8, or
     /// write-only — because an empty layer merges nothing and still says "a
     /// file is here". Seeding over it would be a silent delete of settings
     /// CRIME could not parse, which is the one way this feature can destroy
     /// something.
     #[test]
-    fn a_project_config_that_is_there_but_says_nothing_is_not_seeded_over() {
+    fn a_config_that_is_there_but_says_nothing_is_not_seeded_over() {
         let (_state, _config, effects) = start(&Startup {
+            global_config: Some(String::new()),
             project_config: Some(String::new()),
             ..Startup::default()
         })
@@ -1931,16 +2505,8 @@ mod tests {
             "a live key in the seeded config: {seeded:?}"
         );
 
-        let uncommented: String = SEEDED_CONFIG
-            .lines()
-            .map(|line| match line.strip_prefix("# ") {
-                Some(key) if key.split_once(" = ").is_some_and(|(k, _)| !k.contains(' ')) => key,
-                _ => line,
-            })
-            .collect::<Vec<&str>>()
-            .join("\n");
-        let uncommented: toml::Table = uncommented.parse().expect("valid TOML uncommented");
-        let defaults: toml::Table = DEFAULTS.parse().expect("valid TOML");
+        let uncommented = uncommented(SEEDED_CONFIG);
+        let defaults = fresh().0;
         assert!(
             !uncommented.is_empty()
                 && uncommented
@@ -1969,6 +2535,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The template's two halves, held the way the project seed is. Its live
+    /// text is exactly the Program rows — the Settings' tables are there, and
+    /// empty. Made live, it is exactly the built-in layers, so every Setting is
+    /// named, commented, and quoted at its default, and no Program row hides
+    /// behind a `#`.
+    #[test]
+    fn the_template_has_live_program_rows_and_commented_settings() {
+        let mut live: toml::Table = template().parse().expect("valid TOML");
+        let programs: toml::Table = PROGRAMS.parse().expect("valid TOML");
+        let settings: toml::Table = DEFAULTS.parse().expect("valid TOML");
+        for (table, keys) in &settings {
+            for key in keys.as_table().expect("a table").keys() {
+                assert!(
+                    live[table].get(key).is_none(),
+                    "a live Setting in the template: {table}.{key}"
+                );
+            }
+        }
+        assert_eq!(uncommented(&template()), fresh().0);
+        live.retain(|table, keys| {
+            programs.contains_key(table) || !keys.as_table().is_some_and(toml::Table::is_empty)
+        });
+        assert_eq!(live, programs);
     }
 
     /// The reason `semver` is a dependency: `"0.10.0" < "0.9.0"` as strings,

@@ -90,7 +90,7 @@ The palette is grouped. Press the letter, or click the row:
 | | `r` | Review | switch to Review view |
 | | `s` | Story | switch to Story view |
 | Project | `f` | Find | project-wide search, the same as `Ctrl+F` |
-| | `v` | Servers | the language server list ([language-intelligence.md](language-intelligence.md)) |
+| | `v` | Tools | everything CRIME runs, and what is installed ([language-intelligence.md](language-intelligence.md)) |
 | | `c` | Collapse | close every open folder in the tree |
 | Help | `h` | Keys | take the Cheatsheet down or put it back, the same as `:help` |
 | | `u` | Update | rebuild CRIME from its checkout, the same as `:update` |

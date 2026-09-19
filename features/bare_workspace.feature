@@ -37,12 +37,15 @@ Feature: A Bare workspace
   # Three things a Bare workspace stops doing, because doing them into a
   # directory that is deleted at exit is worse than not doing them at all. The
   # Risk pane's own recompute is unchanged: the measurement stops happening
-  # unasked, which removes no capability.
-
-  Scenario: A Bare workspace seeds no config file
+  # unasked, which removes no capability. The global config is seeded all the
+  # same: it lives in the home directory, not the workspace, and outlives the
+  # Sidecar.
+  Scenario: A Bare workspace seeds the global config and nothing in the folder
+    Given there is no global config
     When CRIME starts with no folder in "/home/me/projects/theirs"
-    Then the project ".crime/config.toml" is unchanged
-    And no config file was seeded anywhere
+    Then the global config was seeded from the template
+    And the project ".crime/config.toml" is unchanged
+    And no config file was seeded in the workspace
 
   Scenario: A Bare workspace reads the global configuration
     Given the global config is:

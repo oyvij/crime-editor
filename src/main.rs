@@ -52,15 +52,31 @@ struct Args {
     /// each on this OS, one tab-separated line each, and exit.
     #[arg(long, conflicts_with = "folder")]
     deps: bool,
+    /// Print the template a new `~/.crime/config.toml` starts as, and exit.
+    #[arg(long, conflicts_with_all = ["folder", "deps"])]
+    default_config: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    let crime_home = home().join(crime::CRIME_DIR);
+    let global_config = config_layer(&crime_home.join(startup::CONFIG_FILE));
     if args.deps {
-        for dep in crime::startup::deps(std::env::consts::OS) {
+        let deps = match startup::deps(global_config.as_deref(), std::env::consts::OS) {
+            Ok(deps) => deps,
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        };
+        for dep in deps {
             let install = dep.install.unwrap_or_default();
             println!("{}\t{}\t{}\t{install}", dep.kind, dep.name, dep.command);
         }
+        return Ok(());
+    }
+    if args.default_config {
+        print!("{}", startup::template());
         return Ok(());
     }
     // Optional rather than defaulted to ".", because `crime` and `crime .`
@@ -86,11 +102,10 @@ fn main() -> Result<()> {
         .as_ref()
         .and_then(|exe| exe.ancestors().nth(3).map(Path::to_path_buf));
 
-    let crime_home = home().join(crime::CRIME_DIR);
     let input = Startup {
         path_status: path_status(folder),
-        global_config: read(&crime_home.join(startup::CONFIG_FILE)),
-        project_config: project_config(
+        global_config,
+        project_config: config_layer(
             &crime_dir(&root, sidecar.as_deref()).join(startup::CONFIG_FILE),
         ),
         state_json: read(&crime_dir(&root, sidecar.as_deref()).join(STATE_FILE)),
@@ -106,7 +121,7 @@ fn main() -> Result<()> {
             .and_then(|checkout| read(&checkout.join("Cargo.toml"))),
         checkout,
         running_version: env!("CARGO_PKG_VERSION").to_string(),
-        // Which install command a server list row offers. Read here rather than
+        // Which install command a Tools row offers. Read here rather than
         // in the library, exactly as the version above is (R31.22).
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
@@ -252,14 +267,14 @@ fn read(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-/// The one layer whose absence starting acts on: `None` is what `start` reads
-/// as "there is no file to lose" before it seeds one (R9.7). `read` answers
-/// `None` for every failure, not only for a file that is not there, so a
-/// `.crime/config.toml` that exists and cannot be read — not UTF-8, or
+/// Either config layer, both of whose absence starting acts on: `None` is what
+/// `start` reads as "there is no file to lose" before it seeds one (R9.7). `read`
+/// answers `None` for every failure, not only for a file that is not there, so a
+/// `config.toml` that exists and cannot be read — not UTF-8, or
 /// write-only — would be overwritten with the seed and the reader's settings
 /// would be gone. An empty layer merges nothing, so the effective config is
 /// what it was either way, and the file survives to be fixed in another editor.
-fn project_config(path: &Path) -> Option<String> {
+fn config_layer(path: &Path) -> Option<String> {
     read(path).or_else(|| path.try_exists().unwrap_or(false).then(String::new))
 }
 
@@ -621,7 +636,7 @@ struct Edge {
     /// a second shape (`docs/adr/0011-a-language-server-is-a-second-hosted-child.md`).
     servers: BTreeMap<String, rpc::Server>,
     /// Which of the configured commands a probe of this process's `PATH` found,
-    /// and `None` for "not probed since the server list was last opened" —
+    /// and `None` for "not probed since Tools was last opened" —
     /// which is what makes reopening the list a fresh answer rather than a
     /// cached one (R31.23).
     on_path: Option<BTreeSet<String>>,
@@ -1495,6 +1510,11 @@ fn drain(state: &mut State, edge: &mut Edge, queue: &mut VecDeque<Event>) -> boo
         worked = true;
         let (next, effects) = update(state, next_event);
         *state = next;
+        // The one `[speech]` value the core writes is the voice an install
+        // configured, and the synthesizer the edge starts has to load it.
+        if edge.speech != state.speech {
+            edge.speech = state.speech.clone();
+        }
         for effect in effects {
             perform(effect, state.split(), edge, queue);
         }
@@ -1552,7 +1572,7 @@ fn tell_core(state: &mut State, edge: &mut Edge) {
         .map(|(_, answers)| answers.clone())
         .unwrap_or_default();
     state.ai_running = edge.ai.is_some();
-    // Asked once and kept, unlike the server list's probe above: nobody
+    // Asked once and kept, unlike the Tools list's probe above: nobody
     // installs git mid-session, and the answer is a `PATH` walk that every
     // event would otherwise pay for.
     state.git_installed = *edge.git.get_or_insert_with(|| which::which("git").is_ok());
@@ -1563,6 +1583,10 @@ fn tell_core(state: &mut State, edge: &mut Edge) {
     state.player_installed = *edge
         .player
         .get_or_insert_with(|| which::which(&edge.speech.player).is_ok());
+    // Asked every time, unlike the player: an install that exited 0 is not
+    // proof the file is still there, and a stat is cheap.
+    state.voice_installed =
+        reading::voice_file(&state.speech.voice, &home()).is_some_and(|file| file.is_file());
     // R10.5: only forward clicks when the running program asked for them, and
     // only in the encoding it asked for.
     // The count first: `split()` is bounded by it, and the shell the two
@@ -1593,11 +1617,11 @@ fn tell_core(state: &mut State, edge: &mut Edge) {
 /// the press that wanted sound (R35.11). Nothing is spoken here: this is the
 /// ~600ms voice load, paid while the reader is still reading.
 ///
-/// Nothing to configure means nothing to start, and that is not an error — it
-/// is the state `reading::start` names out loud, with the install line beside
-/// it.
+/// No voice on disk means nothing to start, and that is not an error — it
+/// is the state `reading::start` names out loud, with the speech row offered
+/// beside it.
 fn start_voice(state: &State, edge: &mut Edge) {
-    if edge.voice.is_some() || edge.speech.voice.is_empty() {
+    if edge.voice.is_some() || !state.voice_installed {
         return;
     }
     if !state.buffers.keys().any(|path| preview::is_markdown(path)) {
@@ -1621,12 +1645,13 @@ fn start_voice(state: &State, edge: &mut Edge) {
 fn spawn_voice(edge: &mut Edge, speed: f32) -> Option<Voice> {
     let dir = tmp_dir(&edge.crime_home);
     let scale = reading::duration_scale(speed);
+    let voice = reading::voice_file(&edge.speech.voice, &home()).unwrap_or_default();
     let args: Vec<String> = edge
         .speech
         .args
         .iter()
         .map(|arg| {
-            arg.replace("${voice}", &edge.speech.voice)
+            arg.replace("${voice}", &voice.to_string_lossy())
                 .replace("${dir}", &dir.to_string_lossy())
                 .replace("${scale}", &format!("{scale:.4}"))
         })
@@ -1961,14 +1986,16 @@ fn reap_player(edge: &mut Edge, queue: &mut VecDeque<Event>) {
     }
 }
 
-/// Whether each configured command is on this machine, asked while the list
-/// that shows it is open and at no other time: the premise of the list is that
-/// what it describes is about to change, so an answer kept from startup would
-/// describe the machine as it was. `which` rather than a walk over `PATH` — an
-/// executable bit, a `PATHEXT` on Windows and a command that is already an
-/// absolute path are the edge cases nobody meets until they hit one.
+/// Whether each configured command, and the program each install starts
+/// with, is on this machine, asked while the list that shows it is open or a
+/// re-check waits on the answer, and at no other time: the premise of the list
+/// is that what it describes is about to change, so an answer kept from
+/// startup would describe the machine as it was. `which` rather than a walk
+/// over `PATH` — an executable bit, a `PATHEXT` on Windows and a command that
+/// is already an absolute path are the edge cases nobody meets until they hit
+/// one.
 fn probe_path(state: &State, edge: &mut Edge) {
-    if !matches!(state.modal, Modal::Servers { .. }) {
+    if !matches!(state.modal, Modal::Tools { .. }) && state.recheck.is_none() {
         edge.on_path = None;
         return;
     }
@@ -1976,11 +2003,14 @@ fn probe_path(state: &State, edge: &mut Edge) {
         return;
     }
     edge.on_path = Some(
-        state
-            .servers
-            .values()
-            .filter(|server| which::which(&server.command).is_ok())
-            .map(|server| server.command.clone())
+        crime::tools::rows(state)
+            .into_iter()
+            .flat_map(|row| {
+                let installer = row.install.as_deref().and_then(crime::tools::installer);
+                [Some(row.command), installer]
+            })
+            .flatten()
+            .filter(|command| which::which(command).is_ok())
             .collect(),
     );
 }
@@ -2047,7 +2077,7 @@ fn found(fact: &Fact, root: &Path, from: &BTreeSet<PathBuf>) -> Option<String> {
 ///
 /// It is what makes a fact a question about the *workspace* rather than about
 /// whichever files are open. A monorepo installs per package, so with nothing
-/// open — the state the server list is read in — the walk above had only the
+/// open — the state Tools is read in — the walk above had only the
 /// root to search and the row said `missing-requirement` about a workspace
 /// holding the SDK all along, then said `installed` as soon as a file in the
 /// package was opened. An answer that changes with the buffer list is the
@@ -2659,6 +2689,38 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
                 }
             };
             queue.push_back(Event::Branches(branching));
+        }
+        // A file that is not there is an empty one: appending to it loses
+        // nothing. One that is there and cannot be read is `None`, which the
+        // core refuses rather than writing over.
+        Effect::ReadGlobalConfig {
+            path,
+            kind,
+            name,
+            write,
+        } => {
+            let text = match std::fs::read_to_string(&path) {
+                Ok(text) => Some(text),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
+                Err(error) => {
+                    eprintln!("crime: cannot read {}: {error}", path.display());
+                    None
+                }
+            };
+            queue.push_back(Event::GlobalConfigRead {
+                kind,
+                name,
+                write,
+                text,
+            });
+        }
+        Effect::ReadInstallStatus(sentinel) => {
+            let status = std::fs::read_to_string(&sentinel)
+                .inspect_err(|error| {
+                    eprintln!("crime: cannot read {}: {error}", sentinel.display())
+                })
+                .ok();
+            queue.push_back(Event::InstallEnded(status));
         }
         Effect::CheckoutBranch { repo, name } => queue.push_back(match checkout(&repo, &name) {
             Ok(left) => Event::CheckedOut { left },
@@ -3852,12 +3914,12 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
     ),
     (
         "no-voice",
-        "No voice configured — set speech.voice in ~/.crime/config.toml; the command on the terminal's line fetches one",
+        "No voice on this machine — press i to install the speech row, which fetches one and names it in ~/.crime/config.toml",
         ui::Tone::Warning,
     ),
     (
         "no-synthesizer",
-        "No speech synthesizer — the command speech.command names is not on this machine; the install is on the terminal's line, unrun",
+        "No speech synthesizer — the command speech.command names is not running; press i to install the speech row",
         ui::Tone::Warning,
     ),
     (
@@ -4138,7 +4200,7 @@ mod tests {
 
     /// The shipped fact, spelled here so these tests search for what CRIME
     /// actually ships without reaching for the whole config merge. The
-    /// `DEFAULTS` unit test in `startup.rs` holds the two spellings level.
+    /// `PROGRAMS` unit test in `startup.rs` holds the two spellings level.
     fn typescript_sdk() -> Fact {
         Fact {
             marker: "node_modules/typescript/lib/typescript.js".to_string(),
@@ -4146,6 +4208,7 @@ mod tests {
             command: None,
             command_marker: None,
             optional: false,
+            install: Default::default(),
         }
     }
 
@@ -4220,7 +4283,7 @@ mod tests {
         );
     }
 
-    /// The same monorepo with nothing open, which is the state the server list
+    /// The same monorepo with nothing open, which is the state Tools
     /// is read in: the walk starts at the open files, so a workspace with no
     /// file of that language open had only the root to search and the row said
     /// `missing-requirement` about a workspace holding the SDK all along —
@@ -4334,6 +4397,7 @@ mod tests {
             command: None,
             command_marker: None,
             optional: false,
+            install: Default::default(),
         };
         assert_eq!(
             found(&interpreter, root.path(), &from(&[&source])).as_deref(),

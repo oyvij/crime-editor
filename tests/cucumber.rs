@@ -9,6 +9,7 @@ use crime::startup::{
     self, Config, Formatter, PathStatus, Server, Startup, StartupError, Unanswerable,
 };
 use crime::story;
+use crime::tools;
 use crime::tree::{self, Entry};
 use crime::tree_actions::{Action, Target};
 use crime::{
@@ -63,11 +64,13 @@ pub struct CrimeWorld {
     /// from the pane it holds rather than the core remembering it, so the world
     /// does too.
     ai_pane: bool,
-    /// Whether the edge holds a synthesizer child, and whether it found the
-    /// configured player. Told to the core rather than set by it, exactly as
-    /// `ai_pane` above is and for the same reason.
+    /// Whether the edge holds a synthesizer child, whether it found the
+    /// configured player, and whether the file the voice names is on disk.
+    /// Told to the core rather than set by it, exactly as `ai_pane` above is
+    /// and for the same reason.
     voice_child: bool,
     player_on_path: bool,
+    voice_on_disk: bool,
     /// What the edge is playing, and the stream it built to play it — the
     /// words `Effect::Speak` handed over, cleared by `Effect::StopSpeaking`.
     /// The stream file itself lives outside every workspace and is the edge's
@@ -553,6 +556,8 @@ impl CrimeWorld {
         self.state.workspace_facts = self.workspace_facts.clone();
         self.state.voice_running = self.voice_child;
         self.state.player_installed = self.player_on_path;
+        // A blank voice names no file, so none is on disk.
+        self.state.voice_installed = self.voice_on_disk && !self.state.speech.voice.is_empty();
     }
 
     /// What the edge does wherever it stops holding a pane: the core is told
@@ -989,6 +994,31 @@ impl CrimeWorld {
                 };
                 self.send_now(Event::Branches(branching));
             }
+            // The world plays the edge reading its modelled disk: the file as
+            // a step last left it, or as CRIME was started on.
+            Effect::ReadGlobalConfig {
+                path,
+                kind,
+                name,
+                write,
+            } => {
+                let text = self
+                    .files
+                    .get(&path)
+                    .cloned()
+                    .or_else(|| self.startup.global_config.clone())
+                    .unwrap_or_default();
+                self.send_now(Event::GlobalConfigRead {
+                    kind,
+                    name,
+                    write,
+                    text: Some(text),
+                });
+            }
+            Effect::ReadInstallStatus(sentinel) => {
+                let status = self.files.get(&sentinel).cloned();
+                self.send_now(Event::InstallEnded(status));
+            }
             // The world plays the edge (ADR 0015): the exit status is what the
             // sentinel holds, and a clone that worked is read like any other
             // repository — the refs the scenario declared.
@@ -1182,6 +1212,11 @@ fn project_config(world: &mut CrimeWorld, step: &Step) {
 #[given(expr = "the global config is empty")]
 fn global_config_empty(world: &mut CrimeWorld) {
     world.startup.global_config = Some(String::new());
+}
+
+#[given(expr = "there is no global config")]
+fn no_global_config(world: &mut CrimeWorld) {
+    world.startup.global_config = None;
 }
 
 #[given(expr = "the project has no config file")]
@@ -1496,14 +1531,22 @@ fn told_nothing_to_update(world: &mut CrimeWorld) {
     assert_eq!(world.notices, vec!["nothing-to-update".to_string()]);
 }
 
-/// The write ledger, not the disk model, and minus the one write no gesture
-/// makes: starting seeds the project's config file (R9.7), so a scenario that
-/// starts carries a write it never asked for. Nothing but starting ever writes
-/// that path, so leaving it out costs the promise nothing.
+/// The write ledger, not the disk model, and minus the two writes no gesture
+/// makes: starting seeds the project's config file (R9.7) and the global one,
+/// so a scenario that starts carries writes it never asked for. Nothing but
+/// starting ever writes those paths, so leaving them out costs the promise
+/// nothing.
 #[then(expr = "no file was written")]
 fn nothing_written(world: &mut CrimeWorld) {
-    let seed = world.startup.root.join(".crime/config.toml");
-    let wrote: Vec<&PathBuf> = world.wrote.iter().filter(|path| **path != seed).collect();
+    let seeds = [
+        world.startup.root.join(".crime/config.toml"),
+        world.startup.crime_home.join(startup::CONFIG_FILE),
+    ];
+    let wrote: Vec<&PathBuf> = world
+        .wrote
+        .iter()
+        .filter(|path| !seeds.contains(path))
+        .collect();
     assert!(wrote.is_empty(), "written: {wrote:?}");
 }
 
@@ -1543,6 +1586,19 @@ fn project_file_was_seeded(world: &mut CrimeWorld, name: String) {
         world.files.get(&path).map(String::as_str),
         Some(startup::SEEDED_CONFIG)
     );
+}
+
+#[then(expr = "the global config was seeded from the template")]
+fn global_file_was_seeded(world: &mut CrimeWorld) {
+    let path = world.startup.crime_home.join(startup::CONFIG_FILE);
+    assert!(world.wrote.contains(&path), "written: {:?}", world.wrote);
+    assert_eq!(world.files.get(&path), Some(&startup::template()));
+}
+
+#[then(expr = "the global config is unchanged")]
+fn global_file_unchanged(world: &mut CrimeWorld) {
+    let path = world.startup.crime_home.join(startup::CONFIG_FILE);
+    assert!(!world.wrote.contains(&path), "written: {:?}", world.wrote);
 }
 
 /// The seeded text itself, read back off the modelled disk and handed to a
@@ -1634,9 +1690,9 @@ fn no_language_server_started(world: &mut CrimeWorld) {
                     | Effect::AnalyseRisk { .. }
                     | Effect::CheckRelease { .. }
                     | Effect::RenderView(_)
-            )
-                && !matches!(effect, Effect::DeleteDir(path) if is_scratch(world, path))
-                && !matches!(effect, Effect::WriteFile { contents, .. } if contents == startup::SEEDED_CONFIG)
+            ) && !matches!(effect, Effect::DeleteDir(path) if is_scratch(world, path))
+                && !matches!(effect, Effect::WriteFile { contents, .. }
+                    if *contents == startup::SEEDED_CONFIG || *contents == startup::template())
         })
         .collect();
     assert!(
@@ -1676,8 +1732,18 @@ fn fault_is(world: &mut CrimeWorld, expected: String) {
         startup::ConfigFault::NotToml => "not-toml",
         startup::ConfigFault::WrongType(_) => "wrong-type",
         startup::ConfigFault::Incomplete { .. } => "incomplete",
+        startup::ConfigFault::ClaimedTwice { .. } => "extension-claimed-twice",
+        startup::ConfigFault::Unreadable => "unreadable",
     };
     assert_eq!(actual, expected);
+}
+
+#[then(expr = "the error names the rows {string} and {string}")]
+fn error_names_rows(world: &mut CrimeWorld, first: String, second: String) {
+    match &config_error(world).fault {
+        startup::ConfigFault::ClaimedTwice { rows, .. } => assert_eq!(rows, &[first, second]),
+        other => panic!("expected an extension claimed twice, got {other:?}"),
+    }
 }
 
 #[then(expr = "the reason is {string}")]
@@ -1808,13 +1874,14 @@ fn written_into_folder(world: &mut CrimeWorld, name: String) {
 /// The folder is the obvious place a seed could land, and the Sidecar is the
 /// plausible-looking one: writing the file *somewhere* looks like the promise
 /// kept while the key is still in a directory deleted at exit. Held against
-/// every write of a config file, wherever it went.
-#[then(expr = "no config file was seeded anywhere")]
-fn no_config_seeded_anywhere(world: &mut CrimeWorld) {
+/// every write of a config file but the global one, wherever it went.
+#[then(expr = "no config file was seeded in the workspace")]
+fn no_config_seeded_in_workspace(world: &mut CrimeWorld) {
+    let global = world.startup.crime_home.join(startup::CONFIG_FILE);
     let seeded: Vec<&PathBuf> = world
         .wrote
         .iter()
-        .filter(|path| path.file_name() == Some(startup::CONFIG_FILE.as_ref()))
+        .filter(|path| path.file_name() == Some(startup::CONFIG_FILE.as_ref()) && **path != global)
         .collect();
     assert!(seeded.is_empty(), "seeded: {seeded:?}");
 }
@@ -7367,7 +7434,7 @@ fn modal_is(world: &mut CrimeWorld, expected: String) {
         Modal::ConfirmStory { .. } => "confirm-story",
         Modal::ConfirmSubmit => "confirm-submit",
         Modal::Palette => "palette",
-        Modal::Servers { .. } => "servers",
+        Modal::Tools { .. } => "tools",
         Modal::Branches { .. } => "branches",
         Modal::Comment => "comment",
         Modal::NameBox { .. } => "name-box",
@@ -7706,7 +7773,11 @@ fn showing_a_story_step(world: &mut CrimeWorld) {
 #[then(expr = "the editor refuses with {string}")]
 fn editor_refuses_with(world: &mut CrimeWorld, reason: String) {
     assert_eq!(
-        world.state.refusal.map(crime::preview::Refusal::as_str),
+        world
+            .state
+            .refusal
+            .as_ref()
+            .map(crime::preview::Refusal::as_str),
         Some(reason.as_str())
     );
 }
@@ -9616,14 +9687,29 @@ fn contributes_no_figure(world: &mut CrimeWorld, path: String) {
 // the buffer. No scenario runs one: the world plays the edge, and everything a
 // server says arrives as canned JSON.
 
+/// CRIME started on the template alone, whose rows say which files each
+/// language claims: a server or formatter a scenario configures "for rust"
+/// serves what the shipped rust row serves, and a language nothing ships
+/// claims nothing.
+fn shipped() -> State {
+    startup::start(&Startup::default())
+        .expect("the defaults start")
+        .0
+}
+
 #[given(expr = "a language server {string} is configured for {string}")]
 fn server_configured(world: &mut CrimeWorld, command: String, language: String) {
     world.state.servers.insert(
-        language,
+        language.clone(),
         Server {
             command,
             args: Vec::new(),
             also_served_by: Vec::new(),
+            extensions: shipped()
+                .servers
+                .get(&language)
+                .map(|server| server.extensions.clone())
+                .unwrap_or_default(),
             install: BTreeMap::new(),
             initialization_options: None,
             partial: None,
@@ -9646,6 +9732,11 @@ fn server_is_ready(world: &mut CrimeWorld, language: String) {
             command: format!("{language}-language-server"),
             args: Vec::new(),
             also_served_by: Vec::new(),
+            extensions: shipped()
+                .servers
+                .get(&language)
+                .map(|server| server.extensions.clone())
+                .unwrap_or_default(),
             install: BTreeMap::new(),
             initialization_options: None,
             partial: None,
@@ -9671,6 +9762,11 @@ fn server_is_already_running(world: &mut CrimeWorld, language: String) {
             command: command.clone(),
             args: Vec::new(),
             also_served_by: Vec::new(),
+            extensions: shipped()
+                .servers
+                .get(&language)
+                .map(|server| server.extensions.clone())
+                .unwrap_or_default(),
             install: BTreeMap::new(),
             initialization_options: None,
             partial: None,
@@ -10668,6 +10764,19 @@ fn told_open(world: &mut CrimeWorld, language: String, path: String) {
     );
 }
 
+#[then(expr = "the language server for {string} was told {string} is a {string} document")]
+fn told_language_id(world: &mut CrimeWorld, language: String, path: String, id: String) {
+    let uri = format!("file://{}", abs(world, &path).display());
+    let ids: Vec<Value> = sent(world, &language)
+        .iter()
+        .filter(|message| message["method"] == "textDocument/didOpen")
+        .map(|message| &message["params"]["textDocument"])
+        .filter(|document| document["uri"] == uri.as_str())
+        .map(|document| document["languageId"].clone())
+        .collect();
+    assert_eq!(ids, vec![Value::from(id)]);
+}
+
 #[then(expr = "the language server for {string} was told {string} is open with:")]
 fn told_open_with(world: &mut CrimeWorld, language: String, path: String, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
@@ -11331,18 +11440,18 @@ fn press_in_palette(world: &mut CrimeWorld, key: String) {
     route_key(world, &key, 0);
 }
 
-#[given(expr = "I open the language server list")]
-#[when(expr = "I open the language server list")]
-fn open_server_list(world: &mut CrimeWorld) {
+#[given(expr = "I open Tools")]
+#[when(expr = "I open Tools")]
+fn open_tools(world: &mut CrimeWorld) {
     open_the_palette(world);
-    press_in_palette(world, palette_key("Servers").to_string());
+    press_in_palette(world, palette_key("Tools").to_string());
 }
 
-#[then(expr = "the palette is listing language servers")]
-fn listing_servers(world: &mut CrimeWorld) {
+#[then(expr = "the palette is listing tools")]
+fn listing_tools(world: &mut CrimeWorld) {
     assert!(
-        matches!(world.state.modal, Modal::Servers { .. }),
-        "not listing servers: {:?}",
+        matches!(world.state.modal, Modal::Tools { .. }),
+        "not listing tools: {:?}",
         world.state.modal
     );
 }
@@ -11352,19 +11461,102 @@ fn palette_is_closed(world: &mut CrimeWorld) {
     assert_eq!(world.state.modal, Modal::None);
 }
 
-fn server_row(world: &CrimeWorld, language: &str) -> crime::lsp::ServerRow {
-    crime::lsp::server_rows(&world.state)
+/// A row by its group and name: `rust` is a language server and a formatter,
+/// so a name alone does not say which row is meant.
+fn tool_row(world: &CrimeWorld, kind: tools::Kind, name: &str) -> tools::ToolRow {
+    tools::rows(&world.state)
         .into_iter()
-        .find(|row| row.language == language)
+        .find(|row| row.kind == kind && row.name == name)
         .unwrap_or_else(|| {
             panic!(
-                "no row for {language}; rows: {:?}",
-                crime::lsp::server_rows(&world.state)
+                "no {} row for {name}; rows: {:?}",
+                kind.as_str(),
+                tools::rows(&world.state)
                     .iter()
-                    .map(|row| row.language.clone())
+                    .map(|row| (row.kind.as_str(), row.name.clone()))
                     .collect::<Vec<_>>()
             )
         })
+}
+
+/// The group a step names, spelled the way a reader says it.
+fn kind(word: &str) -> tools::Kind {
+    match word {
+        "server" => tools::Kind::Server,
+        "formatter" => tools::Kind::Formatter,
+        "requirement" => tools::Kind::Requirement,
+        "speech" => tools::Kind::Speech,
+        other => panic!("no group {other:?}"),
+    }
+}
+
+/// The language server scenarios' own spelling: a row named by language alone is
+/// the language server's.
+fn server_row(world: &CrimeWorld, language: &str) -> tools::ToolRow {
+    tool_row(world, tools::Kind::Server, language)
+}
+
+#[then(expr = "the {word} row for {string} is {string}")]
+fn kind_row_reads(world: &mut CrimeWorld, group: String, name: String, expected: String) {
+    assert_eq!(
+        tool_row(world, kind(&group), &name).availability.as_str(),
+        expected
+    );
+}
+
+/// The package manager the row's install needs and this machine lacks, named
+/// on the row because `needs-installer` alone does not say which to install.
+#[then(expr = "the {word} row for {string} needs the installer {string}")]
+fn row_needs_installer(world: &mut CrimeWorld, group: String, name: String, expected: String) {
+    match tool_row(world, kind(&group), &name).availability {
+        tools::Availability::NeedsInstaller { installer } => assert_eq!(installer, expected),
+        other => panic!("{name} reads {}", other.as_str()),
+    }
+}
+
+/// The `[facts.*]` row a server's command is here without, named on the row
+/// because `missing-requirement` alone does not say what to install.
+#[then(expr = "the {word} row for {string} needs the requirement {string}")]
+fn row_needs_requirement(world: &mut CrimeWorld, group: String, name: String, expected: String) {
+    match tool_row(world, kind(&group), &name).availability {
+        tools::Availability::Unmet { needs } => assert_eq!(needs, expected),
+        other => panic!("{name} reads {}", other.as_str()),
+    }
+}
+
+#[then(expr = "the {word} row for {string} differs from its template")]
+fn row_differs(world: &mut CrimeWorld, group: String, name: String) {
+    assert_eq!(
+        tool_row(world, kind(&group), &name).origin,
+        tools::Origin::Differs
+    );
+}
+
+#[then(expr = "the {word} row for {string} is the template's")]
+fn row_is_the_templates(world: &mut CrimeWorld, group: String, name: String) {
+    assert_eq!(
+        tool_row(world, kind(&group), &name).origin,
+        tools::Origin::Template
+    );
+}
+
+/// Each group once, in the order the list draws them — which is the order
+/// the rows come in, since the renderer heads a group where its kind changes.
+#[then("the tools list is grouped as:")]
+fn tools_grouped_as(world: &mut CrimeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let mut actual: Vec<String> = tools::rows(&world.state)
+        .iter()
+        .map(|row| row.kind.as_str().to_string())
+        .collect();
+    actual.dedup();
+    assert_eq!(actual, expected);
 }
 
 #[then(expr = "the list offers a row for {string}")]
@@ -11387,7 +11579,7 @@ fn row_reads(world: &mut CrimeWorld, language: String, expected: String) {
 #[then(expr = "the row for {string} says it cannot do {string}")]
 fn row_says_it_cannot(world: &mut CrimeWorld, language: String, expected: String) {
     match server_row(world, &language).availability {
-        crime::lsp::Availability::Partial { without } => assert_eq!(without, expected),
+        tools::Availability::Partial { without } => assert_eq!(without, expected),
         other => panic!("{language} reads {}", other.as_str()),
     }
 }
@@ -11410,45 +11602,119 @@ fn built_for(world: &mut CrimeWorld, os: String) {
 #[when(expr = "I install the row for {string}")]
 #[given(expr = "I asked to install the row for {string}")]
 fn install_the_row(world: &mut CrimeWorld, language: String) {
-    walk_to_row(world, &language);
+    walk_to_row(world, tools::Kind::Server, &language);
     press_in_palette(world, "i".to_string());
 }
 
-/// The list open with the selection on that language's row, walked to with the
-/// arrows rather than reached into: what the list answers to is the router's
-/// answer, and walking is what holds the selection to being reachable with no
-/// modifier. Reopened when it is not up, because `i` closes it — the command
-/// goes to the terminal's input line and the focus follows it — so a re-check
-/// after an install has no list to walk. `r` leaves it standing.
-fn walk_to_row(world: &mut CrimeWorld, language: &str) {
-    if !matches!(world.state.modal, Modal::Servers { .. }) {
-        open_server_list(world);
-    }
-    let index = crime::lsp::server_rows(&world.state)
-        .iter()
-        .position(|row| row.language == language)
-        .unwrap_or_else(|| panic!("no row for {language}"));
-    for _ in 0..index {
-        press_in_palette(world, "Down".to_string());
-    }
+#[when(expr = "I take the {word} row for {string}")]
+#[given(expr = "I took the {word} row for {string}")]
+fn take_the_row(world: &mut CrimeWorld, group: String, name: String) {
+    walk_to_row(world, kind(&group), &name);
+    press_in_palette(world, "i".to_string());
 }
 
-#[then(expr = "the terminal is offered {string}")]
-fn terminal_is_offered(world: &mut CrimeWorld, expected: String) {
-    assert_eq!(world.terminal_input, expected);
+fn global_config_path(world: &CrimeWorld) -> PathBuf {
+    world.startup.crime_home.join(startup::CONFIG_FILE)
+}
+
+/// Edited in another editor after CRIME started, so what CRIME started on
+/// and what is on disk now are two different texts.
+#[given("the global config has since been edited to:")]
+fn global_config_edited(world: &mut CrimeWorld, step: &Step) {
+    started(world);
+    let path = global_config_path(world);
+    let text = step.docstring().expect("docstring").trim().to_string();
+    world.files.insert(path, text);
+}
+
+#[then("the global config still holds everything it held")]
+fn global_config_kept(world: &mut CrimeWorld) {
+    let held = world
+        .startup
+        .global_config
+        .clone()
+        .expect("a global config");
+    let now = &world.files[&global_config_path(world)];
+    assert!(now.starts_with(&held), "the file now reads:\n{now}");
+}
+
+#[then(expr = "the global config names the row {string}")]
+fn global_config_names(world: &mut CrimeWorld, dotted: String) {
+    let now = &world.files[&global_config_path(world)];
+    let table: toml::Table = now.parse().expect("the written file parses");
+    let (section, name) = dotted.split_once('.').expect("section.name");
+    assert!(
+        table
+            .get(section)
+            .and_then(toml::Value::as_table)
+            .is_some_and(|rows| rows.contains_key(name)),
+        "no [{dotted}] in:\n{now}"
+    );
+}
+
+#[then(expr = "the global config sets {string} to {string}")]
+fn global_config_sets(world: &mut CrimeWorld, dotted: String, expected: String) {
+    let now = &world.files[&global_config_path(world)];
+    let table: toml::Table = now.parse().expect("the written file parses");
+    let (section, key) = dotted.split_once('.').expect("section.key");
+    assert_eq!(
+        table.get(section).and_then(|rows| rows.get(key)?.as_str()),
+        Some(expected.as_str()),
+        "in:\n{now}"
+    );
+}
+
+fn install_sentinel(world: &CrimeWorld) -> PathBuf {
+    crime::crime_dir(&world.startup.root, world.startup.sidecar.as_deref()).join(tools::SENTINEL)
+}
+
+#[then(expr = "the shell pane runs {string} reporting its exit status")]
+fn shell_pane_runs_install(world: &mut CrimeWorld, install: String) {
+    assert_eq!(
+        world.executed,
+        vec![tools::reported(&install, &install_sentinel(world))]
+    );
 }
 
 /// The shipped default, asserted on the server it names rather than on the
 /// package manager that installs it: which manager is right for a machine is
-/// data `DEFAULTS` carries and a config file may replace, so a scenario pinning
+/// data `PROGRAMS` carries and a config file may replace, so a scenario pinning
 /// the whole string would be a scenario about the data.
-#[then(expr = "the terminal is offered a command mentioning {string}")]
-fn terminal_offer_mentions(world: &mut CrimeWorld, fragment: String) {
+#[then(expr = "the shell pane runs a command mentioning {string}")]
+fn shell_pane_runs_mentioning(world: &mut CrimeWorld, fragment: String) {
     assert!(
-        world.terminal_input.contains(&fragment),
-        "offered {:?}, which does not mention {fragment:?}",
-        world.terminal_input
+        matches!(world.executed.as_slice(), [run] if run.contains(&fragment)),
+        "executed {:?}, which does not mention {fragment:?}",
+        world.executed
     );
+}
+
+/// The sentinel written and seen by the watcher, as the shell's `echo $?`
+/// and the rename after it leave it.
+#[when(expr = "the install reports the exit status {string}")]
+fn install_reports(world: &mut CrimeWorld, status: String) {
+    let sentinel = install_sentinel(world);
+    world.files.insert(sentinel.clone(), format!("{status}\n"));
+    world.send(Event::FilesAppeared(vec![(sentinel, tree::Kind::File)]));
+}
+
+/// The list open with the selection on that row, walked to with the
+/// arrows rather than reached into: what the list answers to is the router's
+/// answer, and walking is what holds the selection to being reachable with no
+/// modifier. Reopened when it is not up, because `i` closes it — the install
+/// runs in the shell pane and the focus follows it — so a re-check
+/// after an install has no list to walk. `r` leaves it standing.
+fn walk_to_row(world: &mut CrimeWorld, group: tools::Kind, name: &str) {
+    if !matches!(world.state.modal, Modal::Tools { .. }) {
+        open_tools(world);
+    }
+    let index = tools::rows(&world.state)
+        .iter()
+        .position(|row| row.kind == group && row.name == name)
+        .unwrap_or_else(|| panic!("no {} row for {name}", group.as_str()));
+    for _ in 0..index {
+        press_in_palette(world, "Down".to_string());
+    }
 }
 
 #[then(expr = "the focus is the terminal")]
@@ -11498,7 +11764,7 @@ fn no_language_server_is_started(world: &mut CrimeWorld) {
 #[when(expr = "I re-check the row for {string}")]
 #[given(expr = "I re-check the row for {string}")]
 fn recheck_the_row(world: &mut CrimeWorld, language: String) {
-    walk_to_row(world, &language);
+    walk_to_row(world, tools::Kind::Server, &language);
     press_in_palette(world, "r".to_string());
 }
 
@@ -11521,7 +11787,6 @@ fn is_not_asking_whether_to_restart(world: &mut CrimeWorld) {
 /// which row asked it is not something a Scenario can observe.
 #[given(expr = "CRIME is asking whether to restart")]
 fn is_asking_whether_to_restart(world: &mut CrimeWorld) {
-    install_the_row(world, "zig".to_string());
     recheck_the_row(world, "zig".to_string());
     command_is_not_on_path(world, "zls".to_string());
     assert_eq!(world.state.modal, Modal::Restart);
@@ -11586,12 +11851,16 @@ fn document_formatting_reply(world: &mut CrimeWorld, language: &str, result: Val
 #[given(expr = "a formatter {string} is configured for {string}")]
 fn formatter_configured(world: &mut CrimeWorld, command: String, language: String) {
     world.state.formatters.insert(
-        language,
+        language.clone(),
         Formatter {
             command,
             args: Vec::new(),
             install: BTreeMap::new(),
-            extensions: Vec::new(),
+            extensions: shipped()
+                .formatters
+                .get(&language)
+                .map(|formatter| formatter.extensions.clone())
+                .unwrap_or_default(),
         },
     );
 }
@@ -11646,6 +11915,15 @@ fn a_formatter_is_configured(world: &mut CrimeWorld, language: String) {
         world.state.formatters.contains_key(&language),
         "configured: {:?}",
         world.state.formatters.keys().collect::<Vec<_>>()
+    );
+}
+
+#[then(expr = "there is no formatter configured for {string}")]
+fn no_formatter_configured(world: &mut CrimeWorld, language: String) {
+    assert_eq!(
+        world.state.formatters.get(&language),
+        None,
+        "a formatter is configured for {language}"
     );
 }
 
@@ -12198,7 +12476,7 @@ fn history_selection_in_view(world: &mut CrimeWorld) {
 /// Everything a Reading needs, in place. The rows are `[speech]`'s own shape
 /// with the per-OS tables already resolved, which is what `startup` hands the
 /// core — no scenario names a synthesizer, so these are stand-ins with the
-/// right *shape* rather than the commands `DEFAULTS` ships (ADR 0013).
+/// right *shape* rather than the commands `PROGRAMS` ships (ADR 0013).
 #[given("a voice is configured")]
 fn voice_configured(world: &mut CrimeWorld) {
     world.state.speech = reading::Speech {
@@ -12207,10 +12485,11 @@ fn voice_configured(world: &mut CrimeWorld) {
         voice: "/voices/a-voice".to_string(),
         speed: 1.00,
         player: "a-player".to_string(),
-        install: "install the voice".to_string(),
+        install: "fetch-a-voice".to_string(),
     };
     world.voice_child = true;
     world.player_on_path = true;
+    world.voice_on_disk = true;
     world.tell_core();
 }
 
@@ -12226,6 +12505,14 @@ fn no_synthesizer(world: &mut CrimeWorld) {
 #[given("no voice is configured")]
 fn no_voice(world: &mut CrimeWorld) {
     world.state.speech.voice = String::new();
+    world.tell_core();
+}
+
+/// Named, and deleted since — or never fetched to where the row says.
+#[given("the voice file is not on disk")]
+fn voice_not_on_disk(world: &mut CrimeWorld) {
+    world.voice_on_disk = false;
+    world.tell_core();
 }
 
 #[given("no audio player is configured")]
@@ -12409,10 +12696,31 @@ fn spoken_text_is(world: &mut CrimeWorld, expected: String) {
     );
 }
 
-#[then("the install command is waiting on the terminal's input line")]
-fn install_is_waiting(world: &mut CrimeWorld) {
-    assert_eq!(world.terminal_input, world.state.speech.install);
-    assert!(!world.terminal_input.is_empty());
+#[then("nothing is waiting on the terminal's input line")]
+fn nothing_is_waiting(world: &mut CrimeWorld) {
+    assert_eq!(world.terminal_input, "");
+}
+
+#[given("a reading was refused")]
+fn reading_was_refused(world: &mut CrimeWorld) {
+    world.send(Event::StartReading);
+    reading_not_in_flight(world);
+}
+
+/// Offered as Tools offers it: the list up, with the install key's row on it.
+#[then(expr = "the {word} row for {string} is offered")]
+fn row_is_offered(world: &mut CrimeWorld, group: String, name: String) {
+    let Modal::Tools { row } = world.state.modal else {
+        panic!("not listing tools: {:?}", world.state.modal);
+    };
+    let offered = tools::rows(&world.state)
+        .into_iter()
+        .nth(row)
+        .expect("the row is in the list");
+    assert_eq!(
+        (offered.kind, offered.name.as_str()),
+        (kind(&group), name.as_str())
+    );
 }
 
 /// R35.10. The stream is CRIME's own scratch and lives outside every

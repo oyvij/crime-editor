@@ -126,33 +126,43 @@ Which language a file is, for formatting, is looked up three ways: the language 
 configuration knows it as, then the `extensions` a formatter row claims, then the file's own
 extension — or, for a file with none, its name, so `[formatter.Makefile]` is a key you can write.
 
-## The server list
+## Tools
 
-`Ctrl+Space` then `v` (the palette's **Servers** entry) opens the list of every language
-configuration names, one row each with the command that serves it and its state on this machine.
-It is probed when the list opens, so the moment after an install is the moment to look. Opening
-the list starts no server.
+`Ctrl+Space` then `v` (the palette's **Tools** entry) opens the list of everything CRIME runs,
+grouped into language servers, formatters, requirements (`[facts.*]`) and speech (the synthesizer
+with its voice, and the player). One row each, with the command it runs and its state on this
+machine. It is probed when the list opens, so the moment after an install is the moment to look.
+Opening the list starts no server.
+
+Every template row your config files do not name is listed too, as `available`: a row you deleted,
+or one a newer CRIME added. A row that differs from the template's says so, since a corrected
+template never edits a row you already have.
 
 | State | Means |
 |---|---|
 | `installed` | the command is on your `PATH` and, if it has been started, it is answering |
 | `missing` | the command is not on your `PATH` |
 | `stopped` | the command is here but its server exited — see `.crime/lsp-<language>.log` |
-| `missing-requirement` | the command is here but something it needs is not, e.g. a TypeScript SDK in the workspace; the row says which |
+| `missing-requirement` | the command is here but something it needs is not, e.g. a TypeScript SDK; the row says which, and `i` runs that requirement's install if it has one for this OS |
 | `partly-working` | the configuration says this server cannot do something, and the row names it |
 | `no-install-command` | not installed, and nothing is configured to install it on this OS |
+| `available` | a template row no config file names, so CRIME does not run it |
+| `install-failed` | its install ran and exited with a failure — the output is in the terminal pane |
+| `needs-installer` | not installed, and the program its install starts with (`npm`, `uv`, `go`, …, looking past `sudo`) is not on your `PATH` either; the row names it, and taking it does nothing — `install.sh` installs package managers |
 
 | Key | Does |
 |---|---|
-| `i` | put the row's install command for this OS on the terminal's input line and move focus there — **it is never run for you** |
+| `i` | take the row: add it to `~/.crime/config.toml` if the file lacks it, and run its install command for this OS in the terminal pane |
 | `r` | re-check the row |
 | `Esc` | close the list |
 
-An install has consequences on a machine CRIME does not own, so you read the command, edit it if
-your package manager differs, and press Enter yourself. A row already `installed` refuses `i`; a
-`stopped` row offers its install command, since reinstalling is exactly what fixes a command that
-is present and does not work. Once the command appears — on a re-check, or simply on the next pass —
-the server starts on the next file you open, with no restart.
+The row is appended after the last line of your global config, with any requirement it names,
+and nothing you wrote is touched; a row the file already has is not written again. The install runs
+where you can watch it and answer a `sudo` prompt, and when it ends CRIME checks for the command
+again. If your global config does not parse, `i` names the fault and writes and runs nothing. A row
+already `installed` refuses `i`; a `stopped` row runs its install, since reinstalling is exactly
+what fixes a command that is present and does not work. Once the command appears the server
+starts, with no restart.
 
 One case needs a restart: an installer that added its directory to your shell profile, which a
 running CRIME cannot see. If a re-check after installing still finds nothing, CRIME asks whether to
@@ -162,7 +172,8 @@ declining leaves everything as it was.
 ## What ships
 
 These servers are configured out of the box. Install one and it works — nothing else to configure.
-The `install.sh` described in [Installing CRIME](../install.md) offers the same commands. A blank
+Take one in Tools to install it; the `install.sh` described in [Installing CRIME](../install.md)
+offers the package managers these commands start with. A blank
 cell means nobody has packaged that server for that OS; add an `install.<os>` key yourself (below).
 
 | Language | Server | macOS | Linux | Windows |
@@ -284,5 +295,5 @@ language; nothing needs restarting unless the list asks.
 - [Editing](editing.md) — the keys around these: `Tab`, `u`, `Ctrl+P`, the results box.
 - [Configuration](configuration.md) — where `[lsp.*]`, `[formatter.*]` and `[facts.*]` live and how
   the layers merge.
-- [Installing CRIME](../install.md) — `install.sh` reads these same rows and offers to install them.
+- [Installing CRIME](../install.md) — `install.sh` reads these same rows and offers the package managers they need.
 - [Review](review.md) — the error and warning counts over a change.

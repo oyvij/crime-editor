@@ -365,7 +365,7 @@ focus keys they are the alternative to.
 **R6.2** The double-tap window is **300 ms**, configurable in `~/.crime` (Q16b).
 **R6.3** The palette lists **panes, views and commands, grouped** — Panes: `(o)` Editor, `(d)`
 Files, `(t)` Terminal, `(k)` Risk, `(a)` AI, `(l)` Tall · Views: `(e)` Edit, `(r)` Review, `(s)`
-Story · Project: `(f)` Find, `(v)` Servers · Help: `(h)` Keys, `(u)` Update · `(q)`
+Story · Project: `(f)` Find, `(v)` Tools · Help: `(h)` Keys, `(u)` Update · `(q)`
 Quit (Q17). *Amended with F22: a view takes its own initial, so `s` moved from submit to Story and
 **submit was `u`**. Amended again once the flat list reached thirteen rows: it is **grouped**,
 `Editor` joined it as a pane of its own, `(u)` became Update, and **Copy, Write and Submit left**.*
@@ -1685,8 +1685,10 @@ forbids — is argued in `docs/adr/0011-a-language-server-is-a-second-hosted-chi
 **R31.1** A server is **named in configuration**, in `[lsp.<language>]` tables carrying a `command`
 and its `args`, and **no branch in `src/` names a server**. The falsifiable form is a grep: search for
 any server's command name and every hit is inside the built-in defaults string or a test fixture.
-**R31.2** **A default is always set.** The defaults ship as TOML data in the bottom layer of F9's
-merge, so a fresh install works with nothing configured, and F9's deep merge means a project
+**R31.2** **A server is a row in a config file, and nowhere else** (ADR 0018). The rows ship as the
+template `~/.crime/config.toml` is seeded with, and a start that finds no global file reads the
+template as that layer, so a fresh install works with nothing configured; a global file naming no
+`[lsp.*]` row starts no server at all. F9's deep merge means a project
 overriding one language leaves the others alone for free — **and a project naming one *key* of a
 shipped language leaves that language's other keys alone too**. A layer is a *patch*, so every key in
 it is optional and completeness is required of the **merged** table instead. Held of a layer, the
@@ -1897,7 +1899,11 @@ not own. The command is one more key in the `[lsp.<language>]` table, shipped as
 `DEFAULTS` exactly as the server names are, so it is overridable by a file, inspectable as a string
 and extensible without a release. `docs/adr/0012-an-install-command-is-configuration.md` argues why
 that is R31.1's rule rather than an exception to it, and records asking the AI session as the
-rejected alternative and the natural fallback for the unpackaged long tail.
+rejected alternative and the natural fallback for the unpackaged long tail. *Amended by
+`docs/adr/0018-the-global-config-is-the-list-of-programs.md`: the key **takes** the row — a row the
+global config lacks is appended from the template with any `[facts.*]` row it names, and the install
+**runs** in the shell pane as `<install>; echo $? > <sentinel>`, visibly, where a `sudo` prompt is
+answered. A global config that does not parse refuses the key and nothing is written or run.*
 
 **R31.22** **The command is per-OS, and a language with no command for this OS is a normal row.** The
 key is a small table — `install.macos`, `install.linux`, `install.windows` — selected by the OS the
@@ -1912,7 +1918,14 @@ A claim about the filesystem and this process's environment, so written by `tell
 rather than cached at startup, because the premise of the list is that what it describes is about to
 change. **An install is observed, never believed:** nothing reads the terminal's output, which
 ADR-0004 forbids anyway, and what changes CRIME's behaviour is the probe finding the command on a
-later pass.
+later pass. *Amended by ADR 0018: an install taken from Tools reports its exit status through a
+sentinel the watcher sees, a non-zero status reads `install-failed` on its row, and a zero is a
+re-check of that row. The program an install starts with, or the one after `sudo`, is probed with
+the commands: a row whose command and package manager are both missing reads `needs-installer`,
+names the package manager, and taking it writes nothing and runs nothing. A row may carry
+`configures`, the keys its install makes true: once that install exits 0, each one
+`~/.crime/config.toml` leaves blank or absent is written as the row spells it, `~` unexpanded, and a
+key the reader set is never overwritten.*
 
 **R31.24** **A command that appears is a reason to forget that it was missing, which is why there is
 no restart.** A failed spawn writes a `Gone` conversation and `sync` skips any language that has one,
@@ -2108,6 +2121,15 @@ server that dies on the first `didOpen`.
   project — a requirement nobody declared, and machine-dependent, so it works for whoever tested it
   and silently takes the language away from whoever did not. A row whose optional fact went unfound
   reads `installed`, because nothing is missing.
+- **A missing requirement offers its own install.** A `[facts.<name>]` table may carry
+  `install.<os>` like a program row, and a `missing-requirement` row names the fact and, taken,
+  runs the fact's install exactly as a server row runs the server's. The usual cause is
+  machine-wide — a server on `PATH` with no classic `tsc` beside it — so the template's
+  `typescript_sdk` carries `npm install -g typescript` on every OS. A fact with no install for this
+  OS offers none and still names what is missing, and one whose package manager is not on `PATH` is
+  refused with `needs-installer` while the row goes on naming the fact. A re-check of the row asks
+  after the fact's `command`, since that is what a restart could bring. The fact stays a search: nothing found is ever
+  written into a config file (`docs/adr/0018-the-global-config-is-the-list-of-programs.md`).
 
   **Rejected: an option set conditional on the file being served.** The alternative was to send the
   plugin only when a `.vue` file is actually open — truer to the intent, and the option would then
@@ -2447,15 +2469,14 @@ was pressed for, so unlike the on-type half — which nobody pressed a key for �
 comes back empty**: `nothing-to-format`. **Both halves say it**, with one slug, because the reader
 pressed one key and does not know which half answered: a command that hands back the text it was
 given has changed nothing, and a key that changes nothing and says nothing reads as a broken key.
-**R32.3** **Which language a file is, for the purpose of formatting, is three lookups and no second
-table**: what `lsp::language` calls it, then the row whose own `extensions` claim it, then the name
-the file gives itself — its extension, or, where it has none, the file name. A `Makefile` is
+**R32.3** **Which language a file is, for the purpose of formatting, is two lookups and no second
+table**: the `[formatter.*]` row whose own `extensions` claim it, then the name the file gives
+itself — its extension, or, where it has none, the file name. The `[lsp.*]` rows are not asked: a
+file's server and its formatter are separate choices, so every formatter row names its own
+extensions (ADR 0018). A `Makefile` is
 `[formatter.Makefile]`, which is a key a reader can write, and the last lookup *is* the map lookup so
 writing it works; the empty extension it would otherwise fall back to names `[formatter.]`, a refusal
-that asks somebody to write a key TOML will not take. `html`, `css`, `json`, `yaml` and `markdown` are deliberately kept **out**
-of `lsp::language` — a language named there is a language CRIME goes looking for a *server* for — and
-the row's own `extensions` key is what covers them without a second hand-written map in `src/` that
-could disagree with the first. The extension-as-a-name fallback is what makes a
+that asks somebody to write a key TOML will not take. The extension-as-a-name fallback is what makes a
 `[formatter.<anything>]` a reader invents reachable with no code at all.
 **R32.4** **The command sees the Buffer, never the file.** Its text goes in on the child's stdin and
 what it writes on stdout replaces the Buffer. This is R31.6 in a second shape and it is not
@@ -2921,10 +2942,11 @@ overflows the border and wraps the bar off it. **Play with no Reading in flight 
 Selection** — R35.1's "select, play" is the gesture, and a control that does nothing until `:read`
 has been typed is a control the reader presses twice and then stops believing; a play with nothing
 selected still refuses out loud, through the same `reading::start`.
-**R35.9** Every missing piece **refuses out loud** — no voice configured, no synthesizer on `PATH`,
-no player — naming which one, and putting the install command on the terminal's input line without
-pressing Enter, per R9 and ADR 0012. Silence is not an acceptable failure here, because silence is
-also what success sounds like before the first word.
+**R35.9** Every missing piece **refuses out loud** — no voice on disk, no synthesizer on `PATH`,
+no player — naming which one, and opening Tools on the speech row that installs it, so one key takes
+it exactly as it would in Tools (ADR 0018). Nothing is typed onto the terminal's input line. A
+`voice` naming a file that is not there is `no-voice`, the same as a blank one. Silence is not an
+acceptable failure here, because silence is also what success sounds like before the first word.
 **R35.10** **Nothing appears in the workspace when CRIME speaks.** The stream is written outside the
 workspace root, the file tree is unchanged, `git status` is unchanged, and a project search finds
 nothing new. It is deleted when the player exits and again when CRIME exits.
@@ -3067,7 +3089,8 @@ checksum list, replace the binary at its resolved path and **Relaunch** — refu
 `unsaved-changes` exactly as quitting is, and a second `:update` after that refusal relaunches
 without fetching. Each failed step is its own notice.
 **R39.5** `crime --deps` prints the dependency table one line per program, with no folder and no
-terminal, so `install.sh` asks the binary rather than reading the source.
+terminal, so `install.sh` asks the binary rather than reading the source. The table is the rows
+`~/.crime/config.toml` names, or the template's when there is no file (ADR 0018).
 **R39.6** The four Asset names are pinned by a unit test that names `.github/workflows/release.yml`,
 and the workflow names the test.
 

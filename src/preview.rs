@@ -131,7 +131,7 @@ impl Row {
 /// refusing to touch a Preview. A reason rather than a sentence: `update`
 /// records this and `ui` renders the wording, so a scenario asserts the
 /// decision and a reworded footer never turns the suite red.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     NotMarkdown,
     NoFileOpen,
@@ -142,17 +142,26 @@ pub enum Refusal {
     /// The install key on a row whose command this machine already has. Said
     /// out loud rather than passed over: the row reads `installed`, so a key
     /// that quietly did nothing would read as a key that failed.
-    ServerAlreadyInstalled,
+    ToolAlreadyInstalled,
+    /// A Tools row taken while the global config is one CRIME would refuse
+    /// to start on. Nothing is written and nothing runs, and the fault is
+    /// named, since the reader has to fix the file before anything is taken.
+    BrokenConfig(crate::startup::ConfigError),
+    /// A Tools row taken whose install starts with a program this machine
+    /// lacks. Nothing is written and nothing runs; the program is named.
+    NeedsInstaller(String),
 }
 
 impl Refusal {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Refusal::NotMarkdown => "not-a-markdown-file",
             Refusal::NoFileOpen => "no-file-open",
             Refusal::ReadOnlyPreview => "read-only-preview",
             Refusal::GuestReadOnly => "guest-read-only",
-            Refusal::ServerAlreadyInstalled => "server-already-installed",
+            Refusal::ToolAlreadyInstalled => "tool-already-installed",
+            Refusal::BrokenConfig(_) => "broken-config",
+            Refusal::NeedsInstaller(_) => "needs-installer",
         }
     }
 }

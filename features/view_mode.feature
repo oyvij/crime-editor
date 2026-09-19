@@ -43,7 +43,7 @@ Feature: The command palette
       | Views   | r   | Review         |
       | Views   | s   | Story          |
       | Project | f   | Find           |
-      | Project | v   | Servers        |
+      | Project | v   | Tools          |
       | Project | c   | Collapse       |
       | Help    | h   | Keys           |
       | Help    | u   | Update         |

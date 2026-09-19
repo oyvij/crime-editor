@@ -33,6 +33,7 @@ pub mod risk;
 pub mod search;
 pub mod startup;
 pub mod story;
+pub mod tools;
 pub mod tree;
 pub mod tree_actions;
 
@@ -202,7 +203,7 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
             // closing one. `v` because every letter that reads as "servers" or
             // "language" is already spent, and it must be reachable with no
             // modifier (R31.11).
-            ('v', "Servers"),
+            ('v', "Tools"),
             ('c', "Collapse"),
         ],
     ),
@@ -318,8 +319,8 @@ pub enum Modal {
     /// no use for through to the buffer behind it — which is what keeps typing
     /// working while it is up.
     Candidates(lsp::Candidates),
-    /// The palette's second face: what configuration says could serve this
-    /// workspace, one row per language, and whether each command is on this
+    /// The palette's second face, Tools: every program configuration names
+    /// and every template row it does not, and whether each command is on this
     /// machine. One variant rather than a bool beside `Palette`, for the reason
     /// [`Modal`] exists at all — two bools can both be true, and a list that is
     /// open and closed at once has no answer for the next keystroke.
@@ -327,7 +328,7 @@ pub enum Modal {
     /// `row` is which row the install key acts on, carried here rather than
     /// beside the modal for the same reason: a selection that outlives the list
     /// is a selection in a list nobody can see.
-    Servers {
+    Tools {
         row: usize,
     },
     /// The branch picker `:story?` opens: the repository's branches, and which
@@ -338,7 +339,7 @@ pub enum Modal {
     /// narrowing are that function's, and not this modal's to redo.
     ///
     /// `row` rides here rather than beside the modal for the reason
-    /// [`Modal::Servers`]'s does: a selection that outlives the list is a
+    /// [`Modal::Tools`]'s does: a selection that outlives the list is a
     /// selection in a list nobody can see.
     Branches {
         refs: Vec<story::BranchRef>,
@@ -951,14 +952,28 @@ pub enum Event {
     AcceptCandidate,
     /// Tab, through a snippet's tab stops: the next place a value is needed.
     NextStop,
-    /// The arrows, through the server list.
-    MoveServerRow(Direction),
-    /// `i` on a row of the server list: the command that installs it, typed
-    /// into the terminal and never run.
-    InstallServer,
-    /// `r` on a row of the server list: ask `PATH` again about that row's
+    /// The arrows, through Tools.
+    MoveToolRow(Direction),
+    /// `i` on a row of Tools: take it — write the row into the global config
+    /// if the file lacks it, and run what installs it in the shell pane
+    /// (`docs/adr/0018-the-global-config-is-the-list-of-programs.md`).
+    InstallTool,
+    /// The global config's text, read for the row being taken or for what its
+    /// install configures, or `None` for a file that is there and could not
+    /// be read. The row is carried out and back rather than kept: the list it
+    /// was taken from is gone by now.
+    GlobalConfigRead {
+        kind: tools::Kind,
+        name: String,
+        write: tools::Write,
+        text: Option<String>,
+    },
+    /// What a taken row's install reported in [`tools::SENTINEL`], or `None`
+    /// when the sentinel could not be read.
+    InstallEnded(Option<String>),
+    /// `r` on a row of Tools: ask `PATH` again about that row's
     /// command, because the user has just installed it.
-    RecheckServer,
+    RecheckTool,
     /// A fresh `PATH` probe has landed — `State::commands_on_path` now
     /// describes the machine as it is. What it is for is the pass every event
     /// ends with: a command that has appeared is a reason to forget that it was
@@ -1138,7 +1153,7 @@ pub enum Effect {
         args: Vec<String>,
     },
     /// Ask this process's `PATH` again, and say so when the answer has landed.
-    /// The only producer is the server list's re-check: everywhere else the
+    /// The only producer is the Tools list's re-check: everywhere else the
     /// edge probes on its own, when the list opens. It answers with
     /// `Event::PathProbed` rather than with the set itself, so the set stays a
     /// field only the edge writes (R31.23) — the core reads what it is told and
@@ -1246,6 +1261,17 @@ pub enum Effect {
         /// to move.
         path: PathBuf,
     },
+    /// Read the global config for a Tools row being taken, or for what its
+    /// install configures. Only the edge reads a file; what is written back is
+    /// decided from the text it returns.
+    ReadGlobalConfig {
+        path: PathBuf,
+        kind: tools::Kind,
+        name: String,
+        write: tools::Write,
+    },
+    /// A taken row's install has ended: read the status its sentinel holds.
+    ReadInstallStatus(PathBuf),
     /// Read the repository's branch refs for the picker, with whether the
     /// folder is a repository and whether its tree is clean — three git
     /// questions one read answers, so the picker is refused before it is drawn
@@ -1684,7 +1710,7 @@ pub struct State {
     /// where the first newline in a pasted stack trace filed a fragment of one.
     ///
     /// Beside the modal rather than inside `Modal::Comment` for the reason
-    /// `Modal::Servers` gives about its row: the renderer and `update` both read
+    /// `Modal::Tools` gives about its row: the renderer and `update` both read
     /// it, and a variant is the wrong place for something two callers need.
     pub comment: Option<Buffer>,
     last_tap: Option<(Tap, u64)>,
@@ -1859,7 +1885,7 @@ pub struct State {
     /// Which of the configured commands this process can find on its `PATH`.
     /// A claim about the filesystem and this process's environment, so the
     /// edge's to observe and never `update`'s to write (R31.23) — the same
-    /// split `lsp_running` above draws. Probed when the server list is opened
+    /// split `lsp_running` above draws. Probed when Tools is opened
     /// rather than kept from startup, because the premise of the list is that
     /// what it describes is about to change.
     pub commands_on_path: BTreeSet<String>,
@@ -1874,13 +1900,16 @@ pub struct State {
     /// the install line says: which binary speaks and which one plays is the
     /// edge's copy of the same rows (ADR 0013).
     pub speech: reading::Speech,
-    /// Whether the edge holds a synthesizer child, and whether it found the
-    /// configured player on this machine. Two facts only the edge can observe,
-    /// so `tell_core` sets them and `update` never does — `ai_running`'s lesson
-    /// applied before it can bite, since a spawn that failed and a child that
-    /// died are exactly the states a remembered flag gets wrong.
+    /// Whether the edge holds a synthesizer child, whether it found the
+    /// configured player on this machine, and whether the file the voice names
+    /// is on disk. Facts only the edge can observe, so `tell_core` sets them
+    /// and `update` never does — `ai_running`'s lesson applied before it can
+    /// bite, since a spawn that failed, a child that died and a model deleted
+    /// after its install exited 0 are exactly the states a remembered flag
+    /// gets wrong.
     pub voice_running: bool,
     pub player_installed: bool,
+    pub voice_installed: bool,
     /// The Reading in flight, if there is one. The core's, unlike the two
     /// above: which passage is being read is a consequence of an event rather
     /// than an observation of a child.
@@ -1892,12 +1921,17 @@ pub struct State {
     /// core does (R31.27). A declared name with no entry here is a name no
     /// server that asks for it is started with.
     pub workspace_facts: BTreeMap<String, String>,
-    /// The language a re-check is waiting on an answer about, if any. Set by
-    /// `r` in the server list and taken by the probe landing: without it a
+    /// The Tools row a re-check is waiting on an answer about, if any. Set by
+    /// `r` in the list and taken by the probe landing: without it a
     /// probe from opening the list and a probe the user asked for would be the
     /// same event, and the restart question would be offered to somebody who
     /// only looked at the list.
-    pub recheck: Option<String>,
+    pub recheck: Option<(tools::Kind, String)>,
+    /// The Tools row whose install is running in the shell pane, until its
+    /// sentinel reports. One at a time: they share the sentinel.
+    pub installing: Option<(tools::Kind, String)>,
+    /// The rows whose install reported a failure, until each is taken again.
+    pub install_failed: BTreeSet<(tools::Kind, String)>,
     /// Which operating system this binary was built for, as `Startup` handed it
     /// in — the key an install command is looked up under, and nothing else. It
     /// is here rather than read from the environment for the reason R31.22
@@ -2125,9 +2159,12 @@ impl Default for State {
             speech: reading::Speech::default(),
             voice_running: false,
             player_installed: false,
+            voice_installed: false,
             reading: None,
             workspace_facts: BTreeMap::new(),
             recheck: None,
+            installing: None,
+            install_failed: BTreeSet::new(),
             os: String::new(),
             arch: String::new(),
             diagnostics: BTreeMap::new(),
@@ -3213,8 +3250,8 @@ fn on_key_5(state: &State, mut next: State, event: Event, _wheeled: bool) -> Ans
             // The one entry that opens a face of the palette rather than
             // closing it. Nothing is probed from here: whether each command
             // exists is the edge's answer to the list being open (R31.23).
-            if entry == "Servers" {
-                next.modal = Modal::Servers { row: 0 };
+            if entry == "Tools" {
+                next.modal = Modal::Tools { row: 0 };
                 return Ok((next, vec![]));
             }
             next.modal = Modal::None;
@@ -3329,6 +3366,12 @@ fn on_key_6(_state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 }
                 _ => None,
             };
+            // A taken row's install, by the same watcher and the same rule:
+            // only while one is running.
+            let install = crime_dir(&next.root, next.sidecar.as_deref()).join(tools::SENTINEL);
+            let read_the_install = (next.installing.is_some()
+                && appeared.iter().any(|(path, _)| path == &install))
+            .then_some(Effect::ReadInstallStatus(install));
             for (path, kind) in appeared {
                 let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
                     continue;
@@ -3353,6 +3396,7 @@ fn on_key_6(_state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 false => vec![],
             };
             effects.extend(read_the_download);
+            effects.extend(read_the_install);
             effects
         }
 
@@ -5445,7 +5489,7 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
         Event::StartReading => match reading::start(state) {
             // The stop goes first, so the player holding the old stream is
             // gone before the next one is built over it.
-            (Some(reading), effects) => {
+            Ok((reading, effects)) => {
                 let stopping = next.reading.is_some().then_some(Effect::StopSpeaking);
                 next.reading = Some(reading);
                 stopping.into_iter().chain(effects).collect()
@@ -5453,7 +5497,20 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
             // A refusal takes nothing away: `:read` with nothing selected is a
             // press that did not name a passage, and silencing the one already
             // playing would make a mistyped key the way to lose your place.
-            (None, effects) => effects,
+            //
+            // A missing piece is one key from installed: Tools opens on the
+            // speech row that fixes it, and `i` takes it there exactly as it
+            // would had the reader opened Tools (ADR 0018).
+            Err((slug, offers)) => {
+                if let Some(row) = offers.and_then(|name| {
+                    tools::rows(&next)
+                        .iter()
+                        .position(|row| row.kind == tools::Kind::Speech && row.name == name)
+                }) {
+                    next.modal = Modal::Tools { row };
+                }
+                vec![Effect::Notify(slug)]
+            }
         },
 
         Event::StopReading => {
@@ -5522,8 +5579,8 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
 }
 
 /// LspReceived, LspGone, CandidatesDue, PointerMoved, HoverDue, FormatBuffer, FormatterAnswered,
-/// MoveCandidate, AcceptCandidate, NextStop, MoveServerRow, InstallServer,
-/// RecheckServer, PathProbed
+/// MoveCandidate, AcceptCandidate, NextStop, MoveToolRow, InstallTool,
+/// GlobalConfigRead, InstallEnded, RecheckTool, PathProbed
 fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::LspReceived { language, json } => lsp::received(&mut next, &language, &json),
@@ -5667,9 +5724,9 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
             vec![]
         }
 
-        Event::MoveServerRow(direction) => {
-            let last = lsp::server_rows(&next).len().saturating_sub(1);
-            if let Modal::Servers { row } = &mut next.modal {
+        Event::MoveToolRow(direction) => {
+            let last = tools::rows(&next).len().saturating_sub(1);
+            if let Modal::Tools { row } = &mut next.modal {
                 *row = match direction {
                     Direction::Up => row.saturating_sub(1),
                     Direction::Down => (*row + 1).min(last),
@@ -5680,72 +5737,206 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
             vec![]
         }
 
-        // Typed into the terminal, never run: an install has consequences on a
-        // machine CRIME does not own, and the person who owns it is sitting in
-        // front of the pane. It is `SetTerminalInput` for the same reason the
-        // tree's actions are, and the command CRIME never composed — it is the
-        // string configuration carried — so a default that is wrong for this
-        // machine is one word away from being right (R31.22).
-        Event::InstallServer => {
+        // Taking a row, which is the whole install (ADR 0018). The key only
+        // asks for the global config's text: what is written back is decided
+        // against the file as it is now, never as it was when CRIME started,
+        // since a reader who edited it since would lose the edit.
+        Event::InstallTool => {
             let offered = match next.modal {
-                Modal::Servers { row } => lsp::server_rows(&next).into_iter().nth(row),
+                Modal::Tools { row } => tools::rows(&next).into_iter().nth(row),
                 _ => None,
             };
-            match offered.map(|row| row.availability) {
-                // A command that is here and does not work is the one row an
-                // install would fix, so it offers rather than refuses — which
-                // is the whole reason `installed` had to stop meaning "a path
-                // exists": refusing here was refusing the fix.
-                Some(lsp::Availability::Missing { install })
-                | Some(lsp::Availability::Stopped {
-                    install: Some(install),
-                }) => {
-                    // The list goes: the command is on the terminal's input
-                    // line waiting for an Enter that has to land in that pane,
-                    // and `settle` moves the focus there for every injection.
-                    next.modal = Modal::None;
-                    vec![Effect::SetTerminalInput(install)]
-                }
+            let Some(row) = offered else {
+                return Ok(settle(next, vec![], wheeled));
+            };
+            match (&row.availability, &row.install) {
                 // The command is here and installing it again would not add
                 // what its row says is missing — that is a second program, or a
                 // configuration key, and neither is what this binding runs.
-                Some(lsp::Availability::Installed | lsp::Availability::Partial { .. }) => {
-                    next.refusal = Some(preview::Refusal::ServerAlreadyInstalled);
+                (tools::Availability::Installed | tools::Availability::Partial { .. }, _) => {
+                    next.refusal = Some(preview::Refusal::ToolAlreadyInstalled);
                     vec![]
                 }
-                // No refusal for `Unpackaged`: a language nobody has packaged
-                // for this OS is a normal row, not an error, and the row itself
-                // already says `no-install-command` under the cursor. Nor for
-                // `Unmet`, for the same reason and with a sharper one behind
-                // it: the command is already installed, and what the row is
-                // missing is a directory in this workspace that no package
-                // manager would put there (R31.27). `None` is the key pressed
-                // at a list of nothing, which is a statement about
-                // configuration rather than about the binding.
-                Some(
-                    lsp::Availability::Unpackaged
-                    | lsp::Availability::Unmet { .. }
-                    | lsp::Availability::Stopped { install: None },
-                )
-                | None => {
+                // No refusal for `Unpackaged`, a stopped row, or a missing
+                // requirement with no install for this OS: a language nobody
+                // has packaged here is a normal row, not an error, and the row
+                // already says so under the cursor — an unmet one names the
+                // fact it lacks.
+                (
+                    tools::Availability::Unpackaged
+                    | tools::Availability::Stopped
+                    | tools::Availability::Unmet { .. },
+                    None,
+                ) => vec![],
+                // Speech is keys of one `[speech]` table, not a table of its
+                // own, so there is no row to append — and an install run for a
+                // row no file names installs a program nothing runs.
+                (tools::Availability::Available, _) if row.kind == tools::Kind::Speech => vec![],
+                (tools::Availability::NeedsInstaller { installer }, _) => {
+                    next.refusal = Some(preview::Refusal::NeedsInstaller(installer.clone()));
                     vec![]
+                }
+                // The same refusal for a requirement's install, whose row goes
+                // on naming the fact rather than the package manager: the fact
+                // is what is missing, and the manager is only why it stays so.
+                (tools::Availability::Unmet { .. }, Some(install))
+                    if tools::installer(install)
+                        .is_some_and(|installer| !next.commands_on_path.contains(&installer)) =>
+                {
+                    next.refusal = tools::installer(install).map(preview::Refusal::NeedsInstaller);
+                    vec![]
+                }
+                // A command that is here and does not work is one an install
+                // would fix, so a stopped row is taken rather than refused.
+                _ => {
+                    // The list goes: the install runs in the shell pane, where
+                    // a `sudo` prompt is answered, and `settle` moves the focus
+                    // there for every injection.
+                    next.modal = Modal::None;
+                    vec![Effect::ReadGlobalConfig {
+                        path: next.crime_home.join(startup::CONFIG_FILE),
+                        kind: row.kind,
+                        name: row.name,
+                        write: tools::Write::Row,
+                    }]
                 }
             }
         }
+
+        // What an install that exited 0 configures, decided against the file
+        // as it is now: the reader may have chosen a voice while it ran.
+        Event::GlobalConfigRead {
+            write: tools::Write::Configures,
+            text,
+            ..
+        } => {
+            let configured = match text {
+                Some(text) => tools::configure(&text),
+                None => Err(startup::ConfigError {
+                    file: startup::GLOBAL_LABEL.to_string(),
+                    line: 1,
+                    fault: startup::ConfigFault::Unreadable,
+                }),
+            };
+            match configured {
+                Err(error) => {
+                    next.refusal = Some(preview::Refusal::BrokenConfig(error));
+                    vec![]
+                }
+                Ok(None) => vec![],
+                Ok(Some((contents, config))) => {
+                    // Speaks from now on, as a start reading this file would —
+                    // unless a project's own voice beats the global one.
+                    if next.speech.voice.is_empty() {
+                        next.speech.voice = startup::speech(&config, &next.os).voice;
+                    }
+                    vec![Effect::WriteFile {
+                        path: next.crime_home.join(startup::CONFIG_FILE),
+                        contents,
+                    }]
+                }
+            }
+        }
+
+        // The row written and its install run, or neither: a file CRIME would
+        // refuse to start on is refused here too, before anything is written
+        // or run.
+        Event::GlobalConfigRead {
+            kind,
+            name,
+            write: tools::Write::Row,
+            text,
+        } => {
+            let Some(row) = tools::rows(&next)
+                .into_iter()
+                .find(|row| row.kind == kind && row.name == name)
+            else {
+                return Ok(settle(next, vec![], wheeled));
+            };
+            let taken = match text {
+                Some(text) => tools::take(&text, kind, &name),
+                None => Err(startup::ConfigError {
+                    file: startup::GLOBAL_LABEL.to_string(),
+                    line: 1,
+                    fault: startup::ConfigFault::Unreadable,
+                }),
+            };
+            let mut effects = vec![];
+            match taken {
+                Err(error) => next.refusal = Some(preview::Refusal::BrokenConfig(error)),
+                Ok(written) => {
+                    if let Some((contents, config)) = written {
+                        // The rows it added run from now on, as a start
+                        // reading this file would run them: a row the file
+                        // names is a row CRIME starts, with no restart.
+                        for (name, server) in config.servers() {
+                            next.servers.entry(name).or_insert(server);
+                        }
+                        for (name, formatter) in config.formatters() {
+                            next.formatters.entry(name).or_insert(formatter);
+                        }
+                        for (name, fact) in config.facts() {
+                            next.facts.entry(name).or_insert(fact);
+                        }
+                        effects.push(Effect::WriteFile {
+                            path: next.crime_home.join(startup::CONFIG_FILE),
+                            contents,
+                        });
+                    }
+                    if let Some(install) = row.install {
+                        let sentinel =
+                            crime_dir(&next.root, next.sidecar.as_deref()).join(tools::SENTINEL);
+                        next.install_failed.remove(&(kind, name.clone()));
+                        next.installing = Some((kind, name));
+                        // Where a `sudo` prompt or a passphrase is typed.
+                        next.focus = Pane::Terminal;
+                        effects.push(Effect::RunInTerminal(tools::reported(&install, &sentinel)));
+                    }
+                }
+            }
+            effects
+        }
+
+        // A status of 0 is a re-check of the row: the probe finds the command,
+        // and the pass every event ends with starts the server as a fresh
+        // start would. Anything else — a sentinel with nothing readable in it
+        // included — is said on the row.
+        Event::InstallEnded(status) => match next.installing.take() {
+            Some(row) if status.as_deref().map(str::trim) == Some("0") => {
+                // And what the install put on disk, named in the file: the
+                // voice it fetched is what the row needs to speak. Only
+                // `[speech]` carries `configures`.
+                let configures = (row.0 == tools::Kind::Speech).then(|| Effect::ReadGlobalConfig {
+                    path: next.crime_home.join(startup::CONFIG_FILE),
+                    kind: row.0,
+                    name: row.1.clone(),
+                    write: tools::Write::Configures,
+                });
+                next.recheck = Some(row);
+                std::iter::once(Effect::ProbePath)
+                    .chain(configures)
+                    .collect()
+            }
+            Some(row) => {
+                next.install_failed.insert(row);
+                vec![]
+            }
+            None => vec![],
+        },
 
         // The probe again, and named as the row it was asked about: the answer
         // has to be read against a command, and the list may be gone by the
         // time it lands. Nothing is decided here — an install that worked is
         // indistinguishable from one that has not finished until `PATH` is
         // asked, and asking is the edge's (R31.23).
-        Event::RecheckServer => {
+        Event::RecheckTool => {
             let row = match next.modal {
-                Modal::Servers { row } => lsp::server_rows(&next).into_iter().nth(row),
+                Modal::Tools { row } => tools::rows(&next).into_iter().nth(row),
                 _ => None,
             };
             match row {
                 Some(row) => {
-                    next.recheck = Some(row.language);
+                    next.recheck = Some((row.kind, row.name));
                     vec![Effect::ProbePath]
                 }
                 None => vec![],
@@ -5759,11 +5950,26 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         // that is the whole of what a restart answers, so it is offered here
         // and taken nowhere (R31.24).
         Event::PathProbed => {
-            if let Some(language) = next.recheck.take() {
-                let found = next
-                    .servers
-                    .get(&language)
-                    .is_some_and(|server| next.commands_on_path.contains(&server.command));
+            if let Some((kind, name)) = next.recheck.take() {
+                // What a restart can change is `PATH`, so that is all this
+                // asks. A requirement found is a search of the workspace,
+                // which a restart finds no differently.
+                let found = tools::rows(&next)
+                    .into_iter()
+                    .find(|row| row.kind == kind && row.name == name)
+                    .is_some_and(|row| match &row.availability {
+                        // Missing a requirement, what a restart can bring is
+                        // the requirement's command, not the row's own.
+                        tools::Availability::Unmet { needs } => next
+                            .facts
+                            .get(needs)
+                            .and_then(|fact| fact.command.as_ref())
+                            .is_none_or(|command| next.commands_on_path.contains(command)),
+                        _ => {
+                            row.kind == tools::Kind::Requirement
+                                || next.commands_on_path.contains(&row.command)
+                        }
+                    });
                 // And only over the list that asked. A question that replaced
                 // whatever is on screen when the answer happens to land is a
                 // modal that appeared on its own, which is the one thing no
@@ -5772,7 +5978,7 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                 // the answer lands in the same drain as the asking, so there is
                 // nothing to step on; this is what keeps that true rather than
                 // incidental.
-                if !found && matches!(next.modal, Modal::Servers { .. }) {
+                if !found && matches!(next.modal, Modal::Tools { .. }) {
                     next.modal = Modal::Restart;
                 }
             }
@@ -8773,14 +8979,14 @@ mod tests {
         assert_eq!(left.shown(), "one\ntwo");
     }
 
-    /// The ends of the server list, which no Scenario reaches: they walk to a
+    /// The ends of Tools, which no Scenario reaches: they walk to a
     /// row and act on it, so an unclamped selection would show up as an offer
     /// from the wrong row rather than as a panic. Down at the bottom stays, and
     /// Up at the top stays — the same as every other list in CRIME.
     #[test]
-    fn the_server_lists_selection_stops_at_both_ends() {
+    fn the_tools_selection_stops_at_both_ends() {
         let mut state = State {
-            modal: Modal::Servers { row: 0 },
+            modal: Modal::Tools { row: 0 },
             os: "macos".to_string(),
             ..State::default()
         };
@@ -8791,6 +8997,7 @@ mod tests {
                     command: language.to_string(),
                     args: Vec::new(),
                     also_served_by: Vec::new(),
+                    extensions: Vec::new(),
                     install: BTreeMap::new(),
                     initialization_options: None,
                     partial: None,
@@ -8798,12 +9005,16 @@ mod tests {
                 },
             );
         }
-        let up = update(&state, Event::MoveServerRow(Direction::Up)).0;
-        assert_eq!(up.modal, Modal::Servers { row: 0 });
-        let down = update(&state, Event::MoveServerRow(Direction::Down)).0;
-        assert_eq!(down.modal, Modal::Servers { row: 1 });
-        let bottom = update(&down, Event::MoveServerRow(Direction::Down)).0;
-        assert_eq!(bottom.modal, Modal::Servers { row: 1 });
+        let up = update(&state, Event::MoveToolRow(Direction::Up)).0;
+        assert_eq!(up.modal, Modal::Tools { row: 0 });
+        let down = update(&state, Event::MoveToolRow(Direction::Down)).0;
+        assert_eq!(down.modal, Modal::Tools { row: 1 });
+        // The template's rows follow the configured ones, so the end is
+        // wherever the list's own length puts it.
+        let last = tools::rows(&state).len() - 1;
+        state.modal = Modal::Tools { row: last };
+        let bottom = update(&state, Event::MoveToolRow(Direction::Down)).0;
+        assert_eq!(bottom.modal, Modal::Tools { row: last });
     }
 
     /// A re-check asks `PATH` again and says which row it asked about: the
@@ -8813,7 +9024,7 @@ mod tests {
     #[test]
     fn a_re_check_asks_path_again_and_names_the_row_it_asked_about() {
         let mut state = State {
-            modal: Modal::Servers { row: 0 },
+            modal: Modal::Tools { row: 0 },
             os: "macos".to_string(),
             ..State::default()
         };
@@ -8823,18 +9034,22 @@ mod tests {
                 command: "zls".to_string(),
                 args: Vec::new(),
                 also_served_by: Vec::new(),
+                extensions: Vec::new(),
                 install: BTreeMap::new(),
                 initialization_options: None,
                 partial: None,
                 unanswerable: None,
             },
         );
-        let (asked, effects) = update(&state, Event::RecheckServer);
+        let (asked, effects) = update(&state, Event::RecheckTool);
         assert_eq!(effects, vec![Effect::ProbePath]);
-        assert_eq!(asked.recheck.as_deref(), Some("zig"));
+        assert_eq!(
+            asked.recheck,
+            Some((tools::Kind::Server, "zig".to_string()))
+        );
         // And the answer is what decides, not the asking: nothing is offered
         // until a probe has landed (R31.24).
-        assert_eq!(asked.modal, Modal::Servers { row: 0 });
+        assert_eq!(asked.modal, Modal::Tools { row: 0 });
         let (told, _) = update(&asked, Event::PathProbed);
         assert_eq!(told.modal, Modal::Restart);
         assert_eq!(told.recheck, None, "the question was answered once");
@@ -8848,6 +9063,136 @@ mod tests {
         let (told, _) = update(&elsewhere, Event::PathProbed);
         assert_eq!(told.modal, Modal::None);
         assert_eq!(told.recheck, None);
+    }
+
+    /// A global config that is there and could not be read is never written
+    /// over: what cannot be read cannot be kept. No scenario reaches it — the
+    /// world's modelled disk has no unreadable file.
+    #[test]
+    fn an_unreadable_global_config_is_refused_and_nothing_runs() {
+        let state = State {
+            os: "linux".to_string(),
+            ..State::default()
+        };
+        let (refused, effects) = update(
+            &state,
+            Event::GlobalConfigRead {
+                kind: tools::Kind::Server,
+                name: "go".to_string(),
+                write: tools::Write::Row,
+                text: None,
+            },
+        );
+        assert_eq!(effects, vec![]);
+        assert!(matches!(
+            refused.refusal,
+            Some(preview::Refusal::BrokenConfig(startup::ConfigError {
+                fault: startup::ConfigFault::Unreadable,
+                ..
+            }))
+        ));
+    }
+
+    /// What an install configures is decided against the file too, so one
+    /// that cannot be read is refused rather than written over.
+    #[test]
+    fn an_unreadable_global_config_configures_nothing() {
+        let state = State::default();
+        let (refused, effects) = update(
+            &state,
+            Event::GlobalConfigRead {
+                kind: tools::Kind::Speech,
+                name: "synthesizer".to_string(),
+                write: tools::Write::Configures,
+                text: None,
+            },
+        );
+        assert_eq!(effects, vec![]);
+        assert_eq!(refused.speech.voice, "");
+        assert!(matches!(
+            refused.refusal,
+            Some(preview::Refusal::BrokenConfig(_))
+        ));
+    }
+
+    /// The voice written speaks from now on, as a start reading the file would
+    /// — unless a voice beats the global file's, which only a project can.
+    #[test]
+    fn a_configured_voice_speaks_now_unless_one_beats_it() {
+        let mut state = State::default();
+        let read = Event::GlobalConfigRead {
+            kind: tools::Kind::Speech,
+            name: "synthesizer".to_string(),
+            write: tools::Write::Configures,
+            text: Some("[speech]\nvoice = \"\"\nconfigures.voice = \"~/v\"\n".to_string()),
+        };
+        let (configured, effects) = update(&state, read.clone());
+        assert_eq!(configured.speech.voice, "~/v");
+        assert!(matches!(effects.as_slice(), [Effect::WriteFile { .. }]));
+        state.speech.voice = "/project/voice.onnx".to_string();
+        let (beaten, _) = update(&state, read);
+        assert_eq!(beaten.speech.voice, "/project/voice.onnx");
+    }
+
+    /// A taken row runs from now on, as a start reading the new file would run
+    /// it, and taking it again is what clears the failure its last install
+    /// left on it.
+    #[test]
+    fn a_taken_row_is_configured_now_and_forgets_its_last_failure() {
+        let mut state = State {
+            os: "linux".to_string(),
+            ..State::default()
+        };
+        let go = (tools::Kind::Server, "go".to_string());
+        state.install_failed.insert(go.clone());
+        let (taken, effects) = update(
+            &state,
+            Event::GlobalConfigRead {
+                kind: go.0,
+                name: go.1.clone(),
+                write: tools::Write::Row,
+                text: Some(String::new()),
+            },
+        );
+        assert!(taken.servers.contains_key("go"));
+        assert!(taken.install_failed.is_empty());
+        assert_eq!(taken.installing, Some(go));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::WriteFile { .. }, Effect::RunInTerminal(_)]
+        ));
+    }
+
+    /// No scenario takes an available speech row: nothing writes one yet.
+    #[test]
+    fn an_available_speech_row_is_not_taken() {
+        let mut state = State {
+            os: "linux".to_string(),
+            ..State::default()
+        };
+        let synthesizer = tools::rows(&state)
+            .iter()
+            .position(|row| row.kind == tools::Kind::Speech && row.name == "synthesizer")
+            .expect("the template names a synthesizer");
+        state.modal = Modal::Tools { row: synthesizer };
+        let (_, effects) = update(&state, Event::InstallTool);
+        assert_eq!(effects, vec![]);
+    }
+
+    /// An install that reported 0 is a re-check of its row, asked outside the
+    /// list: the probe that answers it is what forgets a server written off
+    /// for a missing command, which is how the server starts with no restart.
+    #[test]
+    fn an_install_that_worked_asks_path_again_about_its_row() {
+        let state = State {
+            installing: Some((tools::Kind::Server, "go".to_string())),
+            ..State::default()
+        };
+        let (asked, effects) = update(&state, Event::InstallEnded(Some("0\n".to_string())));
+        assert_eq!(effects, vec![Effect::ProbePath]);
+        assert_eq!(asked.recheck, Some((tools::Kind::Server, "go".to_string())));
+        assert_eq!(asked.installing, None);
+        assert!(asked.install_failed.is_empty());
     }
 
     /// A preview is clean by construction, so clearing up closes it — and a

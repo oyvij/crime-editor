@@ -10,7 +10,7 @@ features the keys belong to, see [language-intelligence.md](language-intelligenc
 
 | File | Scope | Created by |
 |---|---|---|
-| `~/.crime/config.toml` | You, on this machine — every project | You (or `install.sh`, which writes `speech.voice` there once it has fetched a voice). CRIME never writes to it. |
+| `~/.crime/config.toml` | You, on this machine — every project | CRIME seeds it from the template when it is missing. Taking a row in Tools appends that row, and the speech install fills in a blank `speech.voice`; nothing already in the file is changed. |
 | `<project>/.crime/config.toml` | This project — everyone who opens it | CRIME, the first time it opens the folder and finds nothing there. |
 
 The effective configuration is a **deep merge** of three layers: the defaults built into the binary,
@@ -104,6 +104,7 @@ toolchain gets its own answer.
 | `value` | `"marker"` | `"marker"` or `"directory"` | Whether the answer is the marker file itself or the directory holding it. |
 | `command` | unset | string | A machine-wide fallback: a command on `PATH` to resolve (symlinks followed) when no marker is found. Both this and `command_marker`, or neither. |
 | `command_marker` | unset | string | Where the marker sits relative to the directory holding that command's real file. It is checked, not assumed. |
+| `install.<os>` | unset | string | What puts `command` on this machine, as on an `[lsp.*]` row. A server here without this fact offers it in Tools, and `i` runs it — or refuses with `needs-installer` when the package manager it starts with is not on `PATH`. |
 | `optional` | `false` | boolean | Whether a server whose row names this fact starts without it. Required (the default) and unfound: the server is not started and its row reads `missing-requirement`. Optional and unfound: the argument or option that asked for it is dropped and the server starts as if the row never mentioned it. A found optional fact is filled in like any other. |
 
 **Worked example — the two shipped facts.** `@vue/language-server` must be told its TypeScript SDK
@@ -115,6 +116,7 @@ marker = "node_modules/typescript/lib/typescript.js"
 value = "directory"                # the server wants the `lib` directory, not the file
 command = "tsc"                    # fall back to the global install…
 command_marker = "../lib/typescript.js"   # …but only if it really has typescript.js in it
+install.linux = "npm install -g typescript"   # what puts `tsc` there
 
 [lsp.vue]
 args = ["--stdio", "--tsdk=${typescript_sdk}"]
@@ -123,8 +125,10 @@ args = ["--stdio", "--tsdk=${typescript_sdk}"]
 Opening `src/App.vue` looks for `node_modules/typescript/lib/typescript.js` in `src/`, then the
 project root; failing that, resolves where `tsc` on `PATH` really lives and checks for the file
 beside it. Found, the server starts with `--tsdk=/your/project/node_modules/typescript/lib`. Not
-found, no server starts and the Servers list says `missing-requirement`; install TypeScript and the
-next check starts it, no restart needed.
+found, no server starts and Tools says `missing-requirement` naming `typescript_sdk`; `i` on the
+row runs the fact's `install`, and the next check starts the server, no restart needed. Nothing the
+search finds is ever written into the file: the fact stays a search, so the row is right on every
+machine and after every Node upgrade.
 
 The second shipped fact, `vue_typescript_plugin`, is what lets the *TypeScript* server answer about
 `.vue` files. It is `optional = true` because it is named on the `[lsp.typescript]` row every
@@ -140,7 +144,7 @@ a string.
 
 One table per language, the language being what the file's extension maps to (`rust`, `typescript`,
 `vue`, `python`, …). Naming a server is not starting one: it is spawned when a file in that language
-is open, and only if the command is on `PATH`. The Servers list (palette, `v`) shows every row and
+is open, and only if the command is on `PATH`. Tools (palette, `v`) shows every row and
 its state — `installed`, `missing`, `stopped`, `no-install-command`, `missing-requirement`,
 `partly-working` — with `i` to offer the install and `r` to re-check.
 
@@ -149,7 +153,7 @@ its state — `installed`, `missing`, `stopped`, `no-install-command`, `missing-
 | `command` | required after the merge | string | The server binary. |
 | `args` | `[]` | array of strings | Its arguments. `${fact}` names are filled. |
 | `also_served_by` | `[]` | array of language names | Other languages' servers that also serve this language's files. A `.vue` file is served by the Vue server *and* the TypeScript server. |
-| `install.macos`, `install.linux`, `install.windows` | per row | string | What installs the server on that OS. Typed onto the terminal's input line by the Servers list, never run. A row with no key for your OS says `no-install-command` and offers nothing. |
+| `install.macos`, `install.linux`, `install.windows` | per row | string | What installs the server on that OS. Run in the terminal pane when the row is taken in Tools. A row with no key for your OS says `no-install-command` and offers nothing. |
 | `initialization_options` | unset | table | Handed to the server untouched at start-up, as JSON. CRIME reads nothing inside it; `${fact}` values are filled, and a key whose value asked for an unfound optional fact is dropped. |
 | `partial` | unset | string | What this server, installed and running, still cannot do — in your words. Shown on its row, which then reads `partly-working`. |
 | `unanswerable.request`, `unanswerable.response` | unset | two strings, both or neither | A question this server puts to its client that CRIME will not answer, and the method to refuse it on — so the server moves on instead of waiting forever. |
@@ -210,10 +214,11 @@ What reads a Selection aloud. Explained in full in [reading-aloud.md](reading-al
 |---|---|---|---|
 | `command` | `"piper"` | string | The synthesizer. |
 | `args` | `["--model", "${voice}", "--length-scale", "${scale}", "--noise-w-scale", "1.0", "--output_dir", "${dir}"]` | array of strings | `${voice}` is the row below, `${scale}` the reciprocal of `speed`, `${dir}` where the stream is written. |
-| `voice` | `""` | string | Absolute path to the voice model. Blank until you have one. |
+| `voice` | `""` | string | Path to the voice model; a leading `~` is your home directory. Blank until the install fills it in. |
 | `speed` | `1.0` | float | Multiplier, higher is faster. Applies to the next Reading. |
 | `player.macos`, `player.linux` | `"afplay"`, `"aplay"` | string | What plays the stream. No `player.windows` is shipped. |
-| `install.macos`, `install.linux` | shipped | string | Installs `piper` with `uv`, fetches the `en_US-bryce-medium` voice into `~/.crime/voices/`, and prints the `speech.voice` line to write. Typed, never run. No `install.windows`. |
+| `install.macos`, `install.linux` | shipped | string | Installs `piper` with `uv` and fetches the `en_US-bryce-medium` voice into `~/.crime/voices/`. Run in the shell pane when the row is taken in Tools. No `install.windows`. |
+| `configures.voice` | `"~/.crime/voices/en_US-bryce-medium.onnx"` | string | Written into `voice` once the install exits 0, unless `voice` is already set. |
 
 ### Substitutions, in one place
 
@@ -225,13 +230,16 @@ What reads a Selection aloud. Explained in full in [reading-aloud.md](reading-al
 
 Nothing else is a placeholder. There is no environment-variable expansion and no template language.
 
-### `install.<os>`: typed, never run
+### `install.<os>`: run when you take the row
 
-Every `install` key — server, formatter, voice — is offered the same way: CRIME puts the command on
-the terminal pane's input line and does **not** press Enter. You read it, change it if your machine
-wants a different package manager, and run it yourself. Nothing is installed because a file was
-opened; nothing is downloaded by CRIME; nothing is written to your config file. Which key applies is
-the operating system the binary was built for. Once the command exists, the next check picks it up
+Taking a row in Tools (`i`) is the whole install: the row is appended to `~/.crime/config.toml` if
+the file lacks it, and its `install` key runs in the terminal pane, where you watch it and answer a
+`sudo` prompt. Its exit status comes back to the row, which reads `install-failed` if it failed.
+An install whose first program (or the one after `sudo`) is not on your `PATH` is not run at all:
+the row reads `needs-installer` and names the package manager, which `install.sh` installs.
+Elsewhere — `:format` finding its command missing, reading aloud — the command is still put on the
+terminal pane's input line without Enter pressed. Nothing is installed because a file was opened.
+Which key applies is the operating system the binary was built for. Once the command exists, the next check picks it up
 with no restart — unless the installer only appended to your shell profile, in which case a restart is
 offered, never taken.
 

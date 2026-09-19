@@ -1,7 +1,7 @@
 Feature: Configuration and state
 
-  CRIME reads TOML config from two places: ~/.crime/config.toml, created when CRIME is
-  installed, and <project>/.crime/config.toml, alongside the per-user state that lives in
+  CRIME reads TOML config from two places: ~/.crime/config.toml, seeded whenever it is
+  missing, and <project>/.crime/config.toml, alongside the per-user state that lives in
   <project>/.crime/state.json.
 
   Project config overrides global config key by key — a project sets only what it needs to
@@ -40,6 +40,25 @@ Feature: Configuration and state
     When CRIME starts in the project
     Then the project ".crime/config.toml" is unchanged
     And the effective setting "editor.tab_width" is "2"
+
+  # The global file is seeded by the same rule, from the template: every
+  # Program row live, since a file is where CRIME's programs are read from, and
+  # every Setting commented out for the reason the project's are (ADR 0018).
+  # That the template's Settings are the defaults is held by a unit test beside
+  # it, for the reason given above.
+  Scenario: Starting with no global config seeds it from the template
+    Given there is no global config
+    When CRIME starts in the project
+    Then the global config was seeded from the template
+
+  Scenario: Starting with a global config leaves it alone
+    Given the global config is:
+      """
+      [editor]
+      tab_width = 2
+      """
+    When CRIME starts in the project
+    Then the global config is unchanged
 
   Scenario: A seeded config file changes nothing about the effective settings
     Given the global config is empty

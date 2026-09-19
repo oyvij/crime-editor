@@ -254,9 +254,28 @@ to* — a file's own shallowest indentation beats it, because the lines already 
 evidence about that file than a configured number is.
 _Avoid_: tab size, tab stop (that is where a Candidate left a blank), shift width, indentation
 
+**Setting**:
+A value CRIME cannot work without — an indent width, a double-tap window, a threshold, a speed. It has
+a built-in answer that a config file may beat, and a file that does not name it changes nothing.
+_Avoid_: option, preference, program (that is a row naming something CRIME starts)
+
+**Program row**:
+A config table naming something CRIME starts — a language server, a formatter, the voice — with the
+files it serves and the command that installs it. Program rows exist only in a config file: a row no
+file names does not run, and the ones CRIME knows about but the user has not taken are *available*,
+not configured, until taken from Tools.
+_Avoid_: default, built-in server, plugin, integration
+
+**Tools**:
+The one list of everything CRIME runs — language servers, formatters, requirements and speech —
+each row with its status and one key that takes it: configured in the global file and installed.
+It shows the rows the reader has and the ones CRIME knows about that they have not taken yet.
+_Avoid_: servers list, formatter list, plugins, extensions, marketplace
+
 **Seeding**:
 Writing a file the first time CRIME opens a folder, and only when nothing is there — the project's
-`config.toml`, whose every key arrives commented out. A key nobody can find is a key nobody sets,
+`config.toml`, whose every key arrives commented out. The global `config.toml` is seeded the same
+way when it is missing, except that its Program rows arrive live, since nothing else will run them. A key nobody can find is a key nobody sets,
 which is the whole reason it is written at all; a live value in it would be this binary's answer
 frozen into a file that outlives it — and so would a commented one gone stale, so a test uncomments
 them and holds each against the shipped defaults. "Nothing is there" is the config layer the edge
