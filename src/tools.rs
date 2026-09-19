@@ -95,9 +95,9 @@ pub enum Availability {
     /// answer for it, so the server would run without what it needs — which is
     /// why [`lsp::sync`] starts nothing for it. Installed is the wrong word for
     /// that, and the list is the one place the difference shows before a file
-    /// is opened (R31.27). It offers no install: the command is already here,
-    /// and what is missing is a directory no package manager puts in a
-    /// workspace.
+    /// is opened (R31.27). It offers the fact's install, not the server's: the
+    /// command is already here, and what is missing is usually machine-wide —
+    /// a server on `PATH` with no classic `tsc` beside it.
     Unmet { needs: String },
     /// Not on this machine, and nothing is configured to install it for this
     /// OS. A normal row and not an error: several servers are genuinely
@@ -157,7 +157,18 @@ pub fn rows(state: &State) -> Vec<ToolRow> {
         &state.servers,
         template.servers(),
         |server| server.command.clone(),
-        |server| server.install.get(&state.os).cloned(),
+        // A server that is here and missing a requirement is fixed by the
+        // requirement's install, not its own.
+        |server| match on_path(&server.command) {
+            true => match lsp::unmet(state, server) {
+                Some(needs) => state
+                    .facts
+                    .get(&needs)
+                    .and_then(|fact| fact.install.get(&state.os).cloned()),
+                None => server.install.get(&state.os).cloned(),
+            },
+            false => server.install.get(&state.os).cloned(),
+        },
         |language, server| match on_path(&server.command) {
             // A command that is here still answers for what its configuration
             // asks the edge to find: a Vue server started without its SDK is a
@@ -195,13 +206,13 @@ pub fn rows(state: &State) -> Vec<ToolRow> {
     ));
     // A requirement is a search, not a command: what it reads is whether the
     // edge found an answer for it in this workspace, in the word the server
-    // that needs it reads. Nothing installs one yet.
+    // that needs it reads.
     rows.extend(group(
         Kind::Requirement,
         &state.facts,
         template.facts(),
         |fact| fact.command.clone().unwrap_or_default(),
-        |_| None,
+        |fact| fact.install.get(&state.os).cloned(),
         |name, _| match state.workspace_facts.contains_key(name) {
             true => Availability::Installed,
             false => Availability::Unmet {
@@ -526,6 +537,20 @@ mod tests {
             row(&state, Kind::Requirement, "typescript_sdk").availability,
             Availability::Installed
         );
+    }
+
+    /// The template's TypeScript SDK is one global install on every OS, which
+    /// is what a server here without it offers.
+    #[test]
+    fn the_typescript_sdk_installs_everywhere() {
+        let template = Config(PROGRAMS.parse().expect("the template parses"));
+        let sdk = &template.facts()["typescript_sdk"];
+        for os in ["macos", "linux", "windows"] {
+            assert_eq!(
+                sdk.install.get(os).map(String::as_str),
+                Some("npm install -g typescript")
+            );
+        }
     }
 
     /// The append is after the file's last byte, so every comment and every

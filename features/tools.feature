@@ -210,3 +210,95 @@ Feature: Tools — one list of everything CRIME runs
       And the command "go" is not on PATH
       When I open Tools
       Then the server row for "go" is "installed"
+
+  Rule: A missing requirement offers its own install
+
+    A server whose command is here and whose required `[facts.*]` row finds nothing reads
+    `missing-requirement` and names the fact. The usual cause is machine-wide — a language server on
+    `PATH` with no classic `tsc` beside it — so a fact may carry `install.<os>` like a program row,
+    and taking the server's row runs the fact's install exactly as taking a server runs the
+    server's. A fact stays a search: the install puts `tsc` on `PATH` and the next search finds the
+    SDK beside it, and nothing found is ever written into the file.
+
+    Scenario: A row missing a requirement names it
+      Given there is no global config
+      And the project has no config file
+      And the command "vue-language-server" is on PATH
+      And the edge resolved no "typescript_sdk"
+      When I open Tools
+      Then the server row for "vue" is "missing-requirement"
+      And the server row for "vue" needs the requirement "typescript_sdk"
+
+    Scenario: Taking a row missing a requirement runs the requirement's install
+      Given the global config is:
+        """
+        [facts.typescript_sdk]
+        marker = "node_modules/typescript/lib/typescript.js"
+        value = "directory"
+        command = "tsc"
+        command_marker = "../lib/typescript.js"
+        install.linux = "npm install -g typescript"
+
+        [lsp.vue]
+        command = "vue-language-server"
+        args = ["--stdio", "--tsdk=${typescript_sdk}"]
+        extensions = ["vue"]
+        """
+      And the project has no config file
+      And the command "vue-language-server" is on PATH
+      And the command "npm" is on PATH
+      And the edge resolved no "typescript_sdk"
+      When I take the server row for "vue"
+      Then the global config is unchanged
+      And the shell pane runs "npm install -g typescript" reporting its exit status
+
+    Scenario: A requirement with no install for this OS offers nothing, and still names itself
+      Given the global config is:
+        """
+        [facts.typescript_sdk]
+        marker = "node_modules/typescript/lib/typescript.js"
+        value = "directory"
+        install.macos = "npm install -g typescript"
+
+        [lsp.vue]
+        command = "vue-language-server"
+        args = ["--stdio", "--tsdk=${typescript_sdk}"]
+        extensions = ["vue"]
+        install.linux = "npm install -g @vue/language-server"
+        """
+      And the project has no config file
+      And the command "vue-language-server" is on PATH
+      And the edge resolved no "typescript_sdk"
+      When I take the server row for "vue"
+      Then no command has been executed
+      And the global config is unchanged
+      And the server row for "vue" needs the requirement "typescript_sdk"
+
+    Scenario: Taking the requirement's own row runs its install
+      Given there is no global config
+      And the project has no config file
+      And the command "npm" is on PATH
+      And the edge resolved no "typescript_sdk"
+      When I take the requirement row for "typescript_sdk"
+      Then the shell pane runs "npm install -g typescript" reporting its exit status
+
+    Scenario: Taking a row whose requirement's package manager is missing runs nothing
+      Given there is no global config
+      And the project has no config file
+      And the command "vue-language-server" is on PATH
+      And the command "npm" is not on PATH
+      And the edge resolved no "typescript_sdk"
+      When I take the server row for "vue"
+      Then the editor refuses with "needs-installer"
+      And no command has been executed
+      And the server row for "vue" needs the requirement "typescript_sdk"
+
+    Scenario: A re-check of a row missing a requirement asks after the requirement's command
+      Given there is no global config
+      And the project has no config file
+      And the command "vue-language-server" is on PATH
+      And the command "tsc" is not on PATH
+      And the edge resolved no "typescript_sdk"
+      When I re-check the row for "vue"
+      And the command "tsc" is not on PATH
+      Then CRIME asks whether to restart

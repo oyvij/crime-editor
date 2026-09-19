@@ -5736,19 +5736,33 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                     next.refusal = Some(preview::Refusal::ToolAlreadyInstalled);
                     vec![]
                 }
-                // No refusal for `Unpackaged` or a stopped row with no install
-                // for this OS: a language nobody has packaged here is a normal
-                // row, not an error, and the row already says so under the
-                // cursor. Nor for `Unmet`: the command is installed, and what
-                // the row is missing is a directory in this workspace (R31.27).
-                (tools::Availability::Unpackaged | tools::Availability::Stopped, None)
-                | (tools::Availability::Unmet { .. }, _) => vec![],
+                // No refusal for `Unpackaged`, a stopped row, or a missing
+                // requirement with no install for this OS: a language nobody
+                // has packaged here is a normal row, not an error, and the row
+                // already says so under the cursor — an unmet one names the
+                // fact it lacks.
+                (
+                    tools::Availability::Unpackaged
+                    | tools::Availability::Stopped
+                    | tools::Availability::Unmet { .. },
+                    None,
+                ) => vec![],
                 // Speech is keys of one `[speech]` table, not a table of its
                 // own, so there is no row to append — and an install that
                 // configures nothing leaves the row offering it again forever.
                 (tools::Availability::Available, _) if row.kind == tools::Kind::Speech => vec![],
                 (tools::Availability::NeedsInstaller { installer }, _) => {
                     next.refusal = Some(preview::Refusal::NeedsInstaller(installer.clone()));
+                    vec![]
+                }
+                // The same refusal for a requirement's install, whose row goes
+                // on naming the fact rather than the package manager: the fact
+                // is what is missing, and the manager is only why it stays so.
+                (tools::Availability::Unmet { .. }, Some(install))
+                    if tools::installer(install)
+                        .is_some_and(|installer| !next.commands_on_path.contains(&installer)) =>
+                {
+                    next.refusal = tools::installer(install).map(preview::Refusal::NeedsInstaller);
                     vec![]
                 }
                 // A command that is here and does not work is one an install
@@ -5865,14 +5879,23 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         Event::PathProbed => {
             if let Some((kind, name)) = next.recheck.take() {
                 // What a restart can change is `PATH`, so that is all this
-                // asks. A requirement is a search of the workspace, which a
-                // restart finds no differently.
+                // asks. A requirement found is a search of the workspace,
+                // which a restart finds no differently.
                 let found = tools::rows(&next)
                     .into_iter()
                     .find(|row| row.kind == kind && row.name == name)
-                    .is_some_and(|row| {
-                        row.kind == tools::Kind::Requirement
-                            || next.commands_on_path.contains(&row.command)
+                    .is_some_and(|row| match &row.availability {
+                        // Missing a requirement, what a restart can bring is
+                        // the requirement's command, not the row's own.
+                        tools::Availability::Unmet { needs } => next
+                            .facts
+                            .get(needs)
+                            .and_then(|fact| fact.command.as_ref())
+                            .is_none_or(|command| next.commands_on_path.contains(command)),
+                        _ => {
+                            row.kind == tools::Kind::Requirement
+                                || next.commands_on_path.contains(&row.command)
+                        }
                     });
                 // And only over the list that asked. A question that replaced
                 // whatever is on screen when the answer happens to land is a

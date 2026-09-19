@@ -11504,6 +11504,16 @@ fn row_needs_installer(world: &mut CrimeWorld, group: String, name: String, expe
     }
 }
 
+/// The `[facts.*]` row a server's command is here without, named on the row
+/// because `missing-requirement` alone does not say what to install.
+#[then(expr = "the {word} row for {string} needs the requirement {string}")]
+fn row_needs_requirement(world: &mut CrimeWorld, group: String, name: String, expected: String) {
+    match tool_row(world, kind(&group), &name).availability {
+        tools::Availability::Unmet { needs } => assert_eq!(needs, expected),
+        other => panic!("{name} reads {}", other.as_str()),
+    }
+}
+
 #[then(expr = "the {word} row for {string} differs from its template")]
 fn row_differs(world: &mut CrimeWorld, group: String, name: String) {
     assert_eq!(

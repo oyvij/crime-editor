@@ -143,7 +143,7 @@ template never edits a row you already have.
 | `installed` | the command is on your `PATH` and, if it has been started, it is answering |
 | `missing` | the command is not on your `PATH` |
 | `stopped` | the command is here but its server exited — see `.crime/lsp-<language>.log` |
-| `missing-requirement` | the command is here but something it needs is not, e.g. a TypeScript SDK in the workspace; the row says which |
+| `missing-requirement` | the command is here but something it needs is not, e.g. a TypeScript SDK; the row says which, and `i` runs that requirement's install if it has one for this OS |
 | `partly-working` | the configuration says this server cannot do something, and the row names it |
 | `no-install-command` | not installed, and nothing is configured to install it on this OS |
 | `available` | a template row no config file names, so CRIME does not run it |

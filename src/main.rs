@@ -4188,6 +4188,7 @@ mod tests {
             command: None,
             command_marker: None,
             optional: false,
+            install: Default::default(),
         }
     }
 
@@ -4376,6 +4377,7 @@ mod tests {
             command: None,
             command_marker: None,
             optional: false,
+            install: Default::default(),
         };
         assert_eq!(
             found(&interpreter, root.path(), &from(&[&source])).as_deref(),

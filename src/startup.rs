@@ -73,6 +73,9 @@ marker = "node_modules/typescript/lib/typescript.js"
 value = "directory"
 command = "tsc"
 command_marker = "../lib/typescript.js"
+install.macos = "npm install -g typescript"
+install.linux = "npm install -g typescript"
+install.windows = "npm install -g typescript"
 
 # What teaches a TypeScript server to answer about a `.vue` file. It needs no
 # install of its own: `@vue/language-server` carries it in its own
@@ -849,6 +852,10 @@ pub struct Fact {
     /// already would be.
     #[serde(default)]
     pub optional: bool,
+    /// What puts the fallback `command` on this machine, per OS, as a program
+    /// row's `install` does. A search still: nothing it finds is written back.
+    #[serde(default)]
+    pub install: BTreeMap<String, String>,
 }
 
 /// What is handed over once the marker is found: the marker itself, or the

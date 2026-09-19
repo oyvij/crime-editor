@@ -3766,6 +3766,7 @@ fn tool_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>>
         let says = match &row.availability {
             tools::Availability::Partial { without } => format!("  no {without}"),
             tools::Availability::NeedsInstaller { installer } => format!("  needs {installer}"),
+            tools::Availability::Unmet { needs } => format!("  needs {needs}"),
             _ => String::new(),
         };
         let differs = match row.origin {

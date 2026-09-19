@@ -2118,6 +2118,15 @@ server that dies on the first `didOpen`.
   project — a requirement nobody declared, and machine-dependent, so it works for whoever tested it
   and silently takes the language away from whoever did not. A row whose optional fact went unfound
   reads `installed`, because nothing is missing.
+- **A missing requirement offers its own install.** A `[facts.<name>]` table may carry
+  `install.<os>` like a program row, and a `missing-requirement` row names the fact and, taken,
+  runs the fact's install exactly as a server row runs the server's. The usual cause is
+  machine-wide — a server on `PATH` with no classic `tsc` beside it — so the template's
+  `typescript_sdk` carries `npm install -g typescript` on every OS. A fact with no install for this
+  OS offers none and still names what is missing, and one whose package manager is not on `PATH` is
+  refused with `needs-installer` while the row goes on naming the fact. A re-check of the row asks
+  after the fact's `command`, since that is what a restart could bring. The fact stays a search: nothing found is ever
+  written into a config file (`docs/adr/0018-the-global-config-is-the-list-of-programs.md`).
 
   **Rejected: an option set conditional on the file being served.** The alternative was to send the
   plugin only when a `.vue` file is actually open — truer to the intent, and the option would then

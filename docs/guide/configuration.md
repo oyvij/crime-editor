@@ -104,6 +104,7 @@ toolchain gets its own answer.
 | `value` | `"marker"` | `"marker"` or `"directory"` | Whether the answer is the marker file itself or the directory holding it. |
 | `command` | unset | string | A machine-wide fallback: a command on `PATH` to resolve (symlinks followed) when no marker is found. Both this and `command_marker`, or neither. |
 | `command_marker` | unset | string | Where the marker sits relative to the directory holding that command's real file. It is checked, not assumed. |
+| `install.<os>` | unset | string | What puts `command` on this machine, as on an `[lsp.*]` row. A server here without this fact offers it in Tools, and `i` runs it — or refuses with `needs-installer` when the package manager it starts with is not on `PATH`. |
 | `optional` | `false` | boolean | Whether a server whose row names this fact starts without it. Required (the default) and unfound: the server is not started and its row reads `missing-requirement`. Optional and unfound: the argument or option that asked for it is dropped and the server starts as if the row never mentioned it. A found optional fact is filled in like any other. |
 
 **Worked example — the two shipped facts.** `@vue/language-server` must be told its TypeScript SDK
@@ -115,6 +116,7 @@ marker = "node_modules/typescript/lib/typescript.js"
 value = "directory"                # the server wants the `lib` directory, not the file
 command = "tsc"                    # fall back to the global install…
 command_marker = "../lib/typescript.js"   # …but only if it really has typescript.js in it
+install.linux = "npm install -g typescript"   # what puts `tsc` there
 
 [lsp.vue]
 args = ["--stdio", "--tsdk=${typescript_sdk}"]
@@ -123,8 +125,10 @@ args = ["--stdio", "--tsdk=${typescript_sdk}"]
 Opening `src/App.vue` looks for `node_modules/typescript/lib/typescript.js` in `src/`, then the
 project root; failing that, resolves where `tsc` on `PATH` really lives and checks for the file
 beside it. Found, the server starts with `--tsdk=/your/project/node_modules/typescript/lib`. Not
-found, no server starts and Tools says `missing-requirement`; install TypeScript and the
-next check starts it, no restart needed.
+found, no server starts and Tools says `missing-requirement` naming `typescript_sdk`; `i` on the
+row runs the fact's `install`, and the next check starts the server, no restart needed. Nothing the
+search finds is ever written into the file: the fact stays a search, so the row is right on every
+machine and after every Node upgrade.
 
 The second shipped fact, `vue_typescript_plugin`, is what lets the *TypeScript* server answer about
 `.vue` files. It is `optional = true` because it is named on the `[lsp.typescript]` row every

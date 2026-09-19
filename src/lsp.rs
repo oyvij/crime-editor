@@ -3583,6 +3583,7 @@ mod tests {
                 command: None,
                 command_marker: None,
                 optional: false,
+                install: Default::default(),
             },
         );
         assert_eq!(
