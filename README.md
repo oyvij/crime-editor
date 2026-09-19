@@ -48,12 +48,13 @@ into a checkout instead:
 git clone https://github.com/oyvij/crime-editor.git && crime-editor/install.sh
 ```
 
-It asks which features you want — the AI pane, language servers, formatters, reading aloud — and
-then asks the installed `crime` what those need (`crime --deps`). Every external program is checked
-before it is installed, and each missing one is a `y/N` prompt with the exact command it will run.
-Declining a required one aborts; declining an optional one skips it. Run the same command again
-later and it updates what it finds behind `crime` — replacing a binary with the latest Release, or
-pulling and rebuilding a checkout — and offers whatever is still missing. `./install.sh --list`
+It writes `~/.crime/config.toml`, then asks the installed `crime` which package managers its rows'
+install commands need (`crime --deps`) and offers each one that is missing, naming the rows it is
+for. Language servers, formatters and the voice themselves are one key each in Tools inside CRIME.
+Every missing program is a `y/N` prompt with the exact command it will run. Declining a required one
+aborts; declining an optional one skips it. Run the same command again later and it updates what it
+finds behind `crime` — replacing a binary with the latest Release, or pulling and rebuilding a
+checkout — and offers whatever is still missing. `./install.sh --list`
 prints every program CRIME can be configured to run and whether it is installed, without touching
 anything.
 

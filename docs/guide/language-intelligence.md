@@ -172,7 +172,8 @@ declining leaves everything as it was.
 ## What ships
 
 These servers are configured out of the box. Install one and it works — nothing else to configure.
-The `install.sh` described in [Installing CRIME](../install.md) offers the same commands. A blank
+Take one in Tools to install it; the `install.sh` described in [Installing CRIME](../install.md)
+offers the package managers these commands start with. A blank
 cell means nobody has packaged that server for that OS; add an `install.<os>` key yourself (below).
 
 | Language | Server | macOS | Linux | Windows |
@@ -294,5 +295,5 @@ language; nothing needs restarting unless the list asks.
 - [Editing](editing.md) — the keys around these: `Tab`, `u`, `Ctrl+P`, the results box.
 - [Configuration](configuration.md) — where `[lsp.*]`, `[formatter.*]` and `[facts.*]` live and how
   the layers merge.
-- [Installing CRIME](../install.md) — `install.sh` reads these same rows and offers to install them.
+- [Installing CRIME](../install.md) — `install.sh` reads these same rows and offers the package managers they need.
 - [Review](review.md) — the error and warning counts over a change.

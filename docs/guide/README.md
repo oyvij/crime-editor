@@ -31,8 +31,8 @@ executable form and is the final word where the two disagree.
 5. `:story` asks the AI to narrate the current change; `:story?` picks a branch first.
 6. The Risk list (palette `k`) names functions over the complexity threshold; its action starts a
    Refactor loop that only keeps an Iteration the project's tests accept.
-7. Language servers and formatters are rows in config, installed by `install.sh` or from the
-   server list (`Ctrl+Space v`). CRIME never installs anything silently.
+7. Language servers and formatters are rows in config, installed from Tools
+   (`Ctrl+Space v`); `install.sh` installs the package managers they need. CRIME never installs anything silently.
 8. `:format` formats the text on screen, not the file on disk. `:w` writes.
 9. Config is layered: `~/.crime/config.toml`, then `<project>/.crime/config.toml`, key by key.
 10. `:update` rebuilds CRIME from its checkout. The next launch is the new version.

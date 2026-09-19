@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install or update CRIME and everything it shells out to.
+# Install or update CRIME, its global config, and the package managers its rows use.
 #
 #   curl -fsSL https://raw.githubusercontent.com/oyvij/crime-editor/main/install.sh | bash
 #
@@ -8,12 +8,13 @@
 # its SHA256SUMS; run from inside a checkout, or answered "source", it clones and
 # builds instead. Re-run, it updates whichever kind it finds behind `crime`.
 #
-# What CRIME can be configured to run — language servers, formatters, the voice —
-# is asked of the installed binary with `crime --deps`, which lists the rows
-# ~/.crime/config.toml names (the template, before that file exists), so a row
-# with an `install.<os>` key is installable here with no change to this file. Only
-# what the edge runs *without* configuration is spelled out below: the build
-# toolchain, git, the default AI CLI and the URL opener.
+# Language servers, formatters and the voice are not installed here: each is
+# taken from Tools inside CRIME (ADR 0018). What this script offers is the package
+# managers their install commands start with, asked of the installed binary with
+# `crime --deps`, so a row that needs a new manager is asked about with no change
+# to this file. Only what the edge runs *without* configuration is spelled out
+# below: the build toolchain, git, the default AI CLI, the speech player and the
+# URL opener.
 #
 # Windows is not covered: this is a bash script, and `PROGRAMS` carries its own
 # `install.windows` rows for a hand install.
@@ -70,19 +71,17 @@ toolchain() {
   require curl "curl" "sudo apt install -y curl"
   require cc "a C compiler (the linker cargo needs)" \
     "$( [ $OS = macos ] && echo 'xcode-select --install' || echo 'sudo apt install -y build-essential pkg-config')"
-  require cargo "the Rust toolchain" "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+  require cargo "the Rust toolchain" "$(installer_install rustup)"
 }
 
-# ---- the installers the install commands themselves need ---------------------
+# ---- the package managers the rows' install commands start with ------------
 
-# The first word of an `install.<os>` command names the package manager it
-# assumes. This is where each one comes from when it is not there yet.
+# The first word of an `install.<os>` command, or the one after `sudo` — the
+# same rule Tools applies when it reads a row `needs-installer`.
 installer_for() {
-  case "$1" in
-    sudo) echo apt ;;
-    npm | go | pipx | uv | brew | rustup) echo "$1" ;;
-    *) echo "" ;;
-  esac
+  local words
+  read -r -a words <<<"$1"
+  if [ "${words[0]:-}" = sudo ]; then echo "${words[1]:-}"; else echo "${words[0]:-}"; fi
 }
 
 installer_install() { # installer_install <tool> -> the command that installs it here, or ""
@@ -95,122 +94,69 @@ installer_install() { # installer_install <tool> -> the command that installs it
     pipx:macos) echo 'brew install pipx' ;;
     pipx:linux) echo 'sudo apt install -y pipx' ;;
     uv:*) echo 'curl -LsSf https://astral.sh/uv/install.sh | sh' ;;
+    rustup:*) echo "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" ;;
     *) echo "" ;;
   esac
 }
 
-ensure_installer() { # ensure_installer "<install command>" -> 0 if its package manager is present
-  local tool
-  tool=$(installer_for "${1%% *}")
-  [ -z "$tool" ] && return 0
-  have "$tool" && return 0
+ensure_installer() { # ensure_installer <tool> "<why>" -> 0 if it is present afterwards
+  have "$1" && return 0
   local how
-  how=$(installer_install "$tool")
-  [ -z "$how" ] && { echo "  needs $tool, which this script cannot install on $OS"; return 1; }
-  if [ $OS = macos ] && ! have brew; then
-    case "$tool" in npm | go | pipx) ensure_installer brew || return 1 ;; esac
+  how=$(installer_install "$1")
+  [ -z "$how" ] && { echo "  $2, and this script cannot install $1 on $OS"; return 1; }
+  if [ $OS = macos ] && [ "$1" != brew ] && [[ "$how" == brew\ * ]]; then
+    ensure_installer brew "brew is used to install $1" || return 1
   fi
-  ask "  $tool is needed to run that. Install it with: $how ?" || return 1
-  run "$how"
+  ask "  $2. Install $1 with: $how ?" || { echo "  skipped $1"; return 1; }
+  run "$how" || { echo "  $how failed; $1 stays missing"; return 1; }
+  [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
   [ -x /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
   export PATH="$HOME/.local/bin:$PATH"
-  have "$tool"
+  have "$1"
 }
 
-# ---- rows out of `crime --deps` ------------------------------------------------
-
-# `kind<TAB>name<TAB>command<TAB>install` for every [lsp.*], [formatter.*] and
-# [speech] row, plus the speech row's `player`. Asked once, up front: a failure
-# inside `< <(rows)` would not stop the script and would read as nothing missing.
+# `kind<TAB>name<TAB>command<TAB>install` for every row the config names. Asked
+# once, up front: a failure inside `< <(...)` would not stop the script and would
+# read as nothing needed.
 ask_deps() {
   DEPS=$("$EXE" --deps) || { echo "$EXE --deps failed; cannot tell what CRIME needs." >&2; exit 1; }
 }
-rows() {
-  printf '%s\n' "$DEPS"
+
+# "a", "a and b", "a, b, and c"
+listing() {
+  case $# in
+    1) echo "$1" ;;
+    2) echo "$1 and $2" ;;
+    *) local all="" x; for x in "${@:1:$#-1}"; do all+="$x, "; done; echo "${all}and ${!#}" ;;
+  esac
 }
 
-install_rows() { # install_rows <kind> — one y/N per missing command, deduplicated
-  local seen=" "
+# One y/N per package manager the rows need and this machine lacks, naming the
+# rows that need it: servers by language, formatters by command.
+installers() {
+  local tools="" tool kind name cmd inst
   while IFS=$'\t' read -r kind name cmd inst; do
-    [ "$kind" = "$1" ] || continue
-    [[ "$seen" == *" $cmd "* ]] && continue
-    seen="$seen$cmd "
-    if have "$cmd"; then
-      echo "  $cmd ($name): installed"
-      continue
-    fi
-    if [ -z "$inst" ]; then
-      echo "  $cmd ($name): missing, and crime --deps names no install command for $OS — install it by hand"
-      continue
-    fi
-    ask "  $cmd ($name) is missing. Install with: $inst ?" || continue
-    ensure_installer "$inst" || { echo "  skipped $cmd"; continue; }
-    run "$inst" || echo "  $inst failed; $cmd stays missing"
-  done < <(rows)
-}
-
-# ---- the voice ----------------------------------------------------------------
-
-voice_path() { # where the speech install command puts its .onnx: `--output-dir` plus the URL's basename
-  local inst dir url
-  inst=$(rows | awk -F'\t' '$1 == "speech" { print $4 }')
-  dir=$(grep -oE -- '--output-dir [^ ]+' <<<"$inst" | cut -d' ' -f2)
-  url=$(grep -oE 'https?://[^ ]+\.onnx( |$)' <<<"$inst" | head -1)
-  [ -n "$dir" ] && [ -n "$url" ] && echo "${dir/#\~/$HOME}/$(basename "${url% }")"
-}
-
-reading() {
-  local cmd inst model config="$HOME/.crime/config.toml"
-  cmd=$(rows | awk -F'\t' '$1 == "speech" { print $3 }')
-  inst=$(rows | awk -F'\t' '$1 == "speech" { print $4 }')
-  model=$(voice_path) || true
-  if [ -z "$cmd" ]; then
-    echo "  $config names no [speech] command, so nothing reads aloud"
-    return 0
-  fi
-  # The voice rides on the synthesizer's install line, so a synthesizer already
-  # on PATH is no reason to skip it: the line runs whenever the model is missing.
-  if have "$cmd" && [ -f "$model" ]; then
-    echo "  $cmd (speech) and its voice: installed"
-  elif [ -z "$inst" ]; then
-    echo "  $cmd (speech): missing, and crime --deps names no install command for $OS — install it by hand"
-  elif ask "  $cmd (speech) or its voice is missing. Install with: $inst ?" && ensure_installer "$inst"; then
-    run "$inst" || echo "  $inst failed"
-  else
-    echo "  skipped $cmd"
-  fi
-  local p
-  p=$(rows | awk -F'\t' '$1 == "player" { print $3 }')
-  if [ -n "$p" ] && ! have "$p"; then
-    if [ $OS = linux ]; then
-      ask "  $p (plays the speech) is missing. Install with: sudo apt install -y alsa-utils ?" && run "sudo apt install -y alsa-utils"
-    else
-      echo "  $p is missing; it ships with macOS, so something is unusual here"
-    fi
-  fi
-  if [ -z "$model" ] || [ ! -f "$model" ]; then
-    echo "  no voice at ${model:-the path the speech install names}, so speech.voice stays unset in $config"
-    return 0
-  fi
-  if grep -qs '^voice = "[^"]' "$config"; then
-    echo "  speech.voice is already set in $config"
-    return 0
-  fi
-  # A file holding only the voice would stop CRIME seeding the template into it.
-  if [ ! -f "$config" ]; then
-    echo "  $config is missing, so speech.voice = \"$model\" was not set; CRIME creates the file on its next start"
-    return 0
-  fi
-  # The template's blank `voice = ""` is filled rather than joined by a second
-  # key, which TOML refuses.
-  if grep -qs '^voice = ""' "$config"; then
-    awk -v v="voice = \"$model\"" '/^voice = ""$/ { print v; next } { print }' "$config" > "$config.tmp" && mv "$config.tmp" "$config"
-  elif grep -qs '^\[speech\]' "$config"; then
-    awk -v v="voice = \"$model\"" '{ print } /^\[speech\]$/ { print v }' "$config" > "$config.tmp" && mv "$config.tmp" "$config"
-  else
-    printf '\n[speech]\nvoice = "%s"\n' "$model" >> "$config"
-  fi
-  echo "  set speech.voice = \"$model\" in $config"
+    [ -n "$inst" ] || continue
+    tool=$(installer_for "$inst")
+    [[ " $tools " == *" $tool "* ]] || tools+=" $tool"
+  done <<<"$DEPS"
+  for tool in $tools; do
+    if have "$tool"; then echo "  $tool: installed"; continue; fi
+    local named=() formatters=() rows=0 item
+    while IFS=$'\t' read -r kind name cmd inst; do
+      [ -n "$inst" ] && [ "$(installer_for "$inst")" = "$tool" ] || continue
+      case "$kind" in
+        formatter) rows=$((rows + 1)); item=$cmd; [[ " ${formatters[*]:-} " == *" $item "* ]] || formatters+=("$item") ;;
+        *) item=$name; [[ " ${named[*]:-} " == *" $item "* ]] || named+=("$item") ;;
+      esac
+    done <<<"$DEPS"
+    case $rows in
+      0) ;;
+      1) named+=("the ${formatters[0]} formatter") ;;
+      *) named+=("the $(listing "${formatters[@]}") formatters") ;;
+    esac
+    ensure_installer "$tool" "$tool is used to install $(listing "${named[@]}")" || continue
+  done
 }
 
 # ---- the global config ----------------------------------------------------------
@@ -243,12 +189,27 @@ ai() {
   run "curl -fsSL https://claude.ai/install.sh | bash"
 }
 
+# ---- the speech player (Linux only; `afplay` ships with macOS) ----------------
+
+# Tools offers no install for it, so this is where it comes from.
+player() {
+  [ $OS = linux ] || return 0
+  local p
+  p=$(awk -F'\t' '$1 == "player" { print $3 }' <<<"$DEPS")
+  if [ -z "$p" ] || have "$p"; then return 0; fi
+  if ask "  $p (plays the speech) is missing. Install with: sudo apt install -y alsa-utils ?"; then
+    run "sudo apt install -y alsa-utils"
+  fi
+}
+
 # ---- the URL opener (Linux only; `open` ships with macOS) ---------------------
 
 opener() {
   [ $OS = linux ] || return 0
   have xdg-open && return 0
-  ask "  xdg-open (opens URLs clicked in a pane) is missing. Install with: sudo apt install -y xdg-utils ?" && run "sudo apt install -y xdg-utils"
+  if ask "  xdg-open (opens URLs clicked in a pane) is missing. Install with: sudo apt install -y xdg-utils ?"; then
+    run "sudo apt install -y xdg-utils"
+  fi
 }
 
 # ---- which install, and where ---------------------------------------------------
@@ -342,26 +303,6 @@ fetch_and_build() {
   EXE="$CHECKOUT/target/release/crime"
 }
 
-# ---- the menu -----------------------------------------------------------------
-
-FEATURES=("AI pane (claude)" "Language servers" "Formatters" "Reading aloud (piper voice)")
-ON=(1 1 1 1)
-
-menu() {
-  local i pick
-  while :; do
-    say "Features to install or check (the editor itself is always installed):"
-    for i in "${!FEATURES[@]}"; do
-      printf '  %d. [%s] %s\n' $((i + 1)) "$( [ "${ON[$i]}" = 1 ] && echo x || echo ' ')" "${FEATURES[$i]}"
-    done
-    read -r -p "Type a number to toggle, Enter to continue: " pick </dev/tty || pick=""
-    [ -z "$pick" ] && return
-    [[ "$pick" =~ ^[0-9]+$ ]] && (( pick >= 1 && pick <= ${#FEATURES[@]} )) || continue
-    i=$((pick - 1))
-    ON[i]=$(( 1 - ON[i] ))
-  done
-}
-
 # ---- --list: what would be checked, and its state, without touching anything --
 
 list() {
@@ -370,9 +311,9 @@ list() {
   [ -n "$EXE" ] || { echo "crime is not installed; --list asks the installed binary what it needs" >&2; exit 1; }
   ask_deps
   printf '%-10s %-12s %-28s %s\n' kind name command state
-  rows | while IFS=$'\t' read -r kind name cmd inst; do
+  while IFS=$'\t' read -r kind name cmd inst; do
     printf '%-10s %-12s %-28s %s\n' "$kind" "$name" "$cmd" "$(have "$cmd" && echo installed || echo "missing${inst:+ ($inst)}")"
-  done
+  done <<<"$DEPS"
   printf '%-10s %-12s %-28s %s\n' ai default claude "$(have claude && echo installed || echo missing)"
 }
 
@@ -387,7 +328,6 @@ main() {
     0:binary) echo "Fresh install of the prebuilt binary." ;;
     0:source) echo "Fresh install from source." ;;
   esac
-  menu
   if [ "$MODE" = binary ]; then
     say "CRIME"
     require curl "curl" "sudo apt install -y curl"
@@ -400,10 +340,11 @@ main() {
   ask_deps
   say "Config"
   seed_config
-  [ "${ON[0]}" = 1 ] && { say "AI pane"; ai; }
-  [ "${ON[1]}" = 1 ] && { say "Language servers"; install_rows lsp; }
-  [ "${ON[2]}" = 1 ] && { say "Formatters"; install_rows formatter; }
-  [ "${ON[3]}" = 1 ] && { say "Reading aloud"; reading; }
+  say "Package managers"
+  installers
+  say "Programs CRIME runs"
+  ai
+  player
   opener
   say "Done"
   case ":$PATH:" in

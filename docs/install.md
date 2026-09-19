@@ -9,18 +9,16 @@ either way.
 
 ## The scripted way
 
-`install.sh` at the repo root does either, and everything around it, interactively:
+`install.sh` at the repo root does either, and sets up what CRIME needs around it, interactively:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/oyvij/crime-editor/main/install.sh | bash
 ```
 
 It reads its prompts from `/dev/tty`, which is what lets it ask questions while piped from `curl`.
-With no `crime` on PATH it asks **binary or source**, binary by default. The order is then: a
-feature menu (AI pane, language servers, formatters, reading aloud — all on by default, toggle by
-number), then CRIME itself, then one `y/N` per missing optional program. A program whose install
-command needs a package manager that is not there (`npm`, `go`, `pipx`, `uv`, `brew`) gets a second
-prompt for that first. Nothing is installed without printing the command it is about to run.
+With no `crime` on PATH it asks **binary or source**, binary by default. Then it installs CRIME,
+writes the global config, asks about package managers, and offers the default AI CLI, the speech
+player and the URL opener. Nothing is installed without printing the command it is about to run.
 
 **The binary.** The script fetches `SHA256SUMS` and `crime-<os>-<arch>` from the latest Release,
 checks the asset's SHA-256 against its line, and only then writes it — as a real file, not a
@@ -39,29 +37,43 @@ SSH, for a fork that is private.
 with the latest Release. `CRIME_REPO` overrides the repository for a fork — the clone URL and the
 Release the binary comes from are both derived from it.
 
-The language servers, formatters and the voice are not listed in the script. It asks the `crime` it
-just installed, on either path, with `crime --deps` — the `[lsp.*]`, `[formatter.*]` and
-`[speech]` rows `~/.crime/config.toml` names, which are what CRIME runs, or the template's rows
-(`PROGRAMS` in `src/startup.rs`) when that file does not exist yet — so a row with an
-`install.<os>` key is installable here with no change to the script (ADR 0018). A config file CRIME
-would refuse to start on stops `--deps` with the same file and line. Only what the edge runs *without* configuration is spelled out in `install.sh` itself: the
-build toolchain, git, the default AI CLI (`claude`), the speech player's package and the URL opener.
-**When a feature adds a program CRIME shells out to, it goes in one of those two places, and
+**The config.** Every run leaves a `~/.crime/config.toml`: when none is there, the script writes
+what `crime --default-config` prints — the template CRIME itself seeds the file with on a start that
+finds none, every setting commented out and every program row live (ADR 0018). An existing file is
+never replaced, and a binary too old to print the template is reported rather than leaving a partial
+file.
+
+**Language servers, formatters and the voice are not installed by the script.** Each one is taken
+from Tools inside CRIME, one key per row, which writes the row, runs its install in the shell pane
+and fills in what the install configures (ADR 0018). What the script does for them is make sure
+their install commands can run: it asks the `crime` it just installed, on either path, with
+`crime --deps` — the rows `~/.crime/config.toml` names, or the template's when that file does not
+exist yet — and takes the package manager each `install.<os>` starts with (the first word, or the
+one after `sudo`, the same rule Tools uses to read a row `needs-installer`). Each one this machine
+lacks is one `y/N`, naming the rows that need it:
+
+```
+npm is used to install javascript, python, typescript, vue, and the prettier formatters. Install npm with: sudo apt install -y nodejs npm ? [y/N]
+```
+
+A row that needs a new manager is asked about with no change to the script. How to install each
+manager is the one table the script still owns (`installer_install`), since a package manager cannot
+install itself; a manager missing from it is named as one the script cannot install on this OS.
+On macOS a manager that comes from `brew` asks about `brew` first.
+
+Only what the edge runs *without* configuration is spelled out in `install.sh` itself: the build
+toolchain, git, the default AI CLI (`claude`), the speech player's package (`alsa-utils`, on Linux,
+since Tools offers no install for it) and the URL opener. **When a feature adds a program
+CRIME shells out to, it is either a row with an `install.<os>` key or a line in the script, and
 `./install.sh --list` shows whether it is picked up.** `--list` asks whichever `crime` is installed,
 so it needs no source.
 
 `crime --deps` prints one line per row, tab-separated as `kind`, `name`, `command`, `install`, the
 install command being this OS's `install.<os>` or blank. The kinds are `lsp`, `formatter`, `speech`,
 and `player` for the speech row's `player.<os>`; a speech command or player no file names is not
-listed. It needs no folder and no terminal, and exits
-before touching either — which is what lets a machine with no checkout learn what to offer.
-
-Every run leaves a `~/.crime/config.toml`: when none is there, the script writes what
-`crime --default-config` prints — the template CRIME itself seeds the file with on a start that finds
-none, every setting commented out and every program row live (ADR 0018). An existing file is never
-replaced, and a binary too old to print the template is reported rather than leaving a partial file. The
-one live key the script adds is `speech.voice`, once the voice model is on disk; the voice is
-fetched whenever the model is missing, even with the synthesizer already installed.
+listed. A config file CRIME would refuse to start on stops `--deps` with the same file and line. It
+needs no folder and no terminal, and exits before touching either — which is what lets a machine
+with no checkout learn what to offer.
 
 Windows is not covered: `PROGRAMS` carries `install.windows` rows for a hand install.
 
