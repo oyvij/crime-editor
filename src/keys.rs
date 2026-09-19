@@ -3901,6 +3901,7 @@ mod tests {
                 command: "zls".to_string(),
                 args: Vec::new(),
                 also_served_by: Vec::new(),
+                extensions: Vec::new(),
                 install: [("macos".to_string(), "brew install zls".to_string())]
                     .into_iter()
                     .collect(),

@@ -82,6 +82,7 @@ max_iterations = 10
 
 [lsp.rust]
 command = "rust-analyzer"
+extensions = ["rs"]
 install.macos = "rustup component add rust-analyzer"
 install.linux = "rustup component add rust-analyzer"
 install.windows = "rustup component add rust-analyzer"
@@ -98,6 +99,7 @@ install.windows = "rustup component add rust-analyzer"
 [lsp.vue]
 command = "vue-language-server"
 args = ["--stdio", "--tsdk=${typescript_sdk}"]
+extensions = ["vue"]
 also_served_by = ["typescript"]
 unanswerable.request = "tsserver/request"
 unanswerable.response = "tsserver/response"
@@ -107,10 +109,12 @@ install.windows = "npm install -g @vue/language-server"
 
 [lsp.java]
 command = "jdtls"
+extensions = ["java"]
 install.macos = "brew install jdtls"
 
 [lsp.zig]
 command = "zls"
+extensions = ["zig"]
 install.macos = "brew install zls"
 
 # The server resolves TypeScript itself, and on a machine whose global
@@ -122,6 +126,7 @@ install.macos = "brew install zls"
 [lsp.typescript]
 command = "typescript-language-server"
 args = ["--stdio"]
+extensions = ["ts", "tsx", "mts", "cts"]
 install.macos = "npm install -g typescript typescript-language-server"
 install.linux = "npm install -g typescript typescript-language-server"
 install.windows = "npm install -g typescript typescript-language-server"
@@ -146,6 +151,7 @@ languages = ["vue"]
 [lsp.javascript]
 command = "typescript-language-server"
 args = ["--stdio"]
+extensions = ["js", "jsx", "mjs", "cjs"]
 install.macos = "npm install -g typescript typescript-language-server"
 install.linux = "npm install -g typescript typescript-language-server"
 install.windows = "npm install -g typescript typescript-language-server"
@@ -156,12 +162,14 @@ path = "${typescript_sdk}/tsserver.js"
 [lsp.python]
 command = "pyright-langserver"
 args = ["--stdio"]
+extensions = ["py", "pyi"]
 install.macos = "npm install -g pyright"
 install.linux = "npm install -g pyright"
 install.windows = "npm install -g pyright"
 
 [lsp.go]
 command = "gopls"
+extensions = ["go"]
 install.macos = "go install golang.org/x/tools/gopls@latest"
 install.linux = "go install golang.org/x/tools/gopls@latest"
 install.windows = "go install golang.org/x/tools/gopls@latest"
@@ -172,11 +180,13 @@ install.windows = "go install golang.org/x/tools/gopls@latest"
 # table refuses.
 [lsp.c]
 command = "clangd"
+extensions = ["c", "h"]
 install.linux = "sudo apt install clangd"
 install.windows = "winget install LLVM.LLVM"
 
 [lsp.cpp]
 command = "clangd"
+extensions = ["cpp", "cc", "cxx", "hpp", "hh", "hxx"]
 install.linux = "sudo apt install clangd"
 install.windows = "winget install LLVM.LLVM"
 
@@ -194,11 +204,12 @@ install.windows = "winget install LLVM.LLVM"
 # `${file}` is how a stdin-reading command is still told what it is reading —
 # JSON and YAML are the same bytes to a command with no name for them.
 #
-# `extensions` is named only where `lsp::language` cannot answer. Repeating an
-# extension it already maps would give one file two authors that can disagree,
-# and the language a file is is looked up there first.
+# Every row names the `extensions` it lays out, and is found by them alone: a
+# file's formatter is not looked up through its server, so `rs` here and in
+# `[lsp.rust]` is two choices that happen to agree (ADR 0018).
 [formatter.rust]
 command = "rustfmt"
+extensions = ["rs"]
 install.macos = "rustup component add rustfmt"
 install.linux = "rustup component add rustfmt"
 install.windows = "rustup component add rustfmt"
@@ -208,6 +219,7 @@ install.windows = "rustup component add rustfmt"
 [formatter.python]
 command = "black"
 args = ["--quiet", "-"]
+extensions = ["py", "pyi"]
 install.macos = "pipx install black"
 install.linux = "pipx install black"
 install.windows = "pip install black"
@@ -217,6 +229,7 @@ install.windows = "pip install black"
 # make itself true.
 [formatter.go]
 command = "gofmt"
+extensions = ["go"]
 
 # One command across eight rows, and eight rows rather than one because a
 # formatter is looked up by the language a file is. `--stdin-filepath` is what
@@ -224,6 +237,7 @@ command = "gofmt"
 [formatter.javascript]
 command = "prettier"
 args = ["--stdin-filepath", "${file}"]
+extensions = ["js", "jsx", "mjs", "cjs"]
 install.macos = "npm install -g prettier"
 install.linux = "npm install -g prettier"
 install.windows = "npm install -g prettier"
@@ -231,6 +245,7 @@ install.windows = "npm install -g prettier"
 [formatter.typescript]
 command = "prettier"
 args = ["--stdin-filepath", "${file}"]
+extensions = ["ts", "tsx", "mts", "cts"]
 install.macos = "npm install -g prettier"
 install.linux = "npm install -g prettier"
 install.windows = "npm install -g prettier"
@@ -238,6 +253,7 @@ install.windows = "npm install -g prettier"
 [formatter.vue]
 command = "prettier"
 args = ["--stdin-filepath", "${file}"]
+extensions = ["vue"]
 install.macos = "npm install -g prettier"
 install.linux = "npm install -g prettier"
 install.windows = "npm install -g prettier"
@@ -431,6 +447,12 @@ pub enum ConfigFault {
     /// it the one key it cannot be used without. Found after the merge,
     /// because a layer is a patch and completeness is not a patch's to satisfy.
     Incomplete { entry: String, key: String },
+    /// Two `[lsp.*]` rows claiming one extension, named in the order the
+    /// merged table holds them. Found after the merge for the same reason.
+    ClaimedTwice {
+        extension: String,
+        rows: [String; 2],
+    },
 }
 
 impl std::fmt::Display for ConfigError {
@@ -443,6 +465,10 @@ impl std::fmt::Display for ConfigError {
             ConfigFault::NotToml => write!(f, "config is not valid TOML"),
             ConfigFault::WrongType(detail) => write!(f, "{detail}"),
             ConfigFault::Incomplete { entry, key } => write!(f, "[{entry}] names no {key}"),
+            ConfigFault::ClaimedTwice {
+                extension,
+                rows: [first, second],
+            } => write!(f, "[{first}] and [{second}] both claim .{extension}"),
         }
     }
 }
@@ -611,6 +637,13 @@ pub struct Server {
     /// every configured server asking whether it fancies this extension.
     #[serde(default)]
     pub also_served_by: Vec<String>,
+    /// The file extensions this row owns, and the only way a file finds its
+    /// server: the table name is then the language id the protocol is sent, so
+    /// a language CRIME has never heard of is a row and no release (ADR 0018).
+    /// Two rows claiming one extension is refused at start rather than settled
+    /// by the order the merge happened to leave them in.
+    #[serde(default)]
+    pub extensions: Vec<String>,
     /// What installs this server, keyed by the OS the binary was built for.
     /// Typed like the rest, so `install.macos = 12` faults with a file and a
     /// line rather than being dropped (R9.5), and a map rather than three
@@ -699,11 +732,10 @@ pub struct Formatter {
     /// under the string `Startup` carried in, never a branch on it (R31.22).
     #[serde(default)]
     pub install: BTreeMap<String, String>,
-    /// The file extensions this row claims, for the languages `lsp::language`
-    /// has no entry for. It is what keeps `html`, `css`, `json` and `yaml` out
-    /// of that table — a language named there is a language CRIME goes looking
-    /// for a server for — without a second hand-written map in `src/`. Named
-    /// only where the first table is silent, so no extension has two authors.
+    /// The file extensions this row claims. Asked on its own, never after the
+    /// `[lsp.*]` rows: a file's server and its formatter are separate choices,
+    /// so `rs` named in both tables is two facts rather than one with two
+    /// authors (ADR 0018).
     #[serde(default)]
     pub extensions: Vec<String>,
 }
@@ -992,6 +1024,7 @@ fn merged_config(input: &Startup) -> Result<toml::Table, StartupError> {
         merge(&mut table, overlay);
     }
     refuse_incomplete(&table, &origins).map_err(StartupError::Config)?;
+    refuse_claimed_twice(&table, &origins).map_err(StartupError::Config)?;
     Ok(table)
 }
 
@@ -1034,6 +1067,51 @@ fn refuse_incomplete(table: &Table, origins: &Origins) -> Result<(), ConfigError
                 fault: ConfigFault::Incomplete {
                     entry,
                     key: key.to_string(),
+                },
+            });
+        }
+    }
+    Ok(())
+}
+
+/// An extension two `[lsp.*]` rows claim has no server a reader can predict:
+/// the rows come from a merge, and whichever one serde met first is not an
+/// answer (ADR 0018). Blamed on whichever of the two the nearest layer named,
+/// which is the file the reader is editing.
+fn refuse_claimed_twice(table: &Table, origins: &Origins) -> Result<(), ConfigError> {
+    let Some(rows) = table.get("lsp").and_then(toml::Value::as_table) else {
+        return Ok(());
+    };
+    let mut owners: BTreeMap<&str, &str> = BTreeMap::new();
+    for (name, values) in rows {
+        let claimed = values.get("extensions").and_then(toml::Value::as_array);
+        for extension in claimed
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_str)
+        {
+            // A row naming one extension twice is one claim, not a collision.
+            let Some(owner) = owners
+                .insert(extension, name)
+                .filter(|owner| *owner != name)
+            else {
+                continue;
+            };
+            let rows = [format!("lsp.{owner}"), format!("lsp.{name}")];
+            let layer = |row: &String| {
+                let file = origins.get(row).map(|(file, _)| file.as_str());
+                ["defaults", GLOBAL_LABEL, PROJECT_LABEL]
+                    .iter()
+                    .position(|label| Some(*label) == file)
+            };
+            let nearest = rows.iter().max_by_key(|row| layer(row)).expect("two rows");
+            let (file, line) = origins.get(nearest).cloned().unwrap_or_default();
+            return Err(ConfigError {
+                file,
+                line,
+                fault: ConfigFault::ClaimedTwice {
+                    extension: extension.to_string(),
+                    rows,
                 },
             });
         }
@@ -1601,24 +1679,86 @@ mod tests {
         }
     }
 
-    /// A shipped default nothing can reach is a language served by nobody: the
-    /// spawn is decided from the file that was opened, so a `[lsp.<language>]`
-    /// whose spelling no extension produces is data that never fires.
+    /// The files each language was served before its rows named their own
+    /// extensions — the `match` those rows replaced, kept as the list it was —
+    /// are served the same way after, by both tables. A row that dropped one
+    /// is a file that quietly lost its server or its formatter.
     #[test]
-    fn every_default_language_is_the_language_of_some_file() {
-        let files = [
-            "a.rs", "a.ts", "a.js", "a.vue", "a.java", "a.zig", "a.py", "a.go", "a.c", "a.cpp",
+    fn the_shipped_rows_serve_every_file_the_match_they_replaced_served() {
+        let mut state = crate::State {
+            servers: defaults().servers(),
+            formatters: defaults().formatters(),
+            ..crate::State::default()
+        };
+        let served = [
+            ("rust", "rs"),
+            ("typescript", "ts tsx mts cts"),
+            ("javascript", "js jsx mjs cjs"),
+            ("vue", "vue"),
+            ("java", "java"),
+            ("zig", "zig"),
+            ("python", "py pyi"),
+            ("go", "go"),
+            ("c", "c h"),
+            ("cpp", "cpp cc cxx hpp hh hxx"),
         ];
-        let reachable: std::collections::BTreeSet<&str> = files
-            .iter()
-            .filter_map(|name| crate::lsp::language(std::path::Path::new(name)))
-            .collect();
-        for language in defaults().servers().keys() {
-            assert!(
-                reachable.contains(language.as_str()),
-                "no file reaches {language}"
-            );
+        for (language, extensions) in served {
+            for extension in extensions.split(' ') {
+                let path = std::path::PathBuf::from(format!("/w/a.{extension}"));
+                assert_eq!(
+                    crate::lsp::language(&state, &path),
+                    Some(language),
+                    "{path:?}"
+                );
+                if state.formatters.contains_key(language) {
+                    state.current_buffer = Some(path.clone());
+                    state
+                        .buffers
+                        .insert(path.clone(), crate::editor::Buffer::open("", false, 4));
+                    assert!(
+                        matches!(
+                            crate::format::run(&state).as_slice(),
+                            [Effect::RunFormatter { language: formatted, .. }] if formatted == language
+                        ),
+                        "{path:?} is not laid out by [formatter.{language}]"
+                    );
+                }
+            }
         }
+    }
+
+    /// A row claiming nothing is a server no file reaches, and a formatter
+    /// that lays nothing out: data that never fires.
+    #[test]
+    fn every_shipped_row_claims_an_extension() {
+        let config = defaults();
+        for (language, server) in config.servers() {
+            assert!(!server.extensions.is_empty(), "[lsp.{language}]");
+        }
+        for (language, formatter) in config.formatters() {
+            assert!(!formatter.extensions.is_empty(), "[formatter.{language}]");
+        }
+    }
+
+    /// The claim is refused naming both rows, and blamed on the layer that
+    /// made it rather than on the template it collided with.
+    #[test]
+    fn two_rows_claiming_one_extension_refuse_to_start_naming_both() {
+        let problem = refusal("\n[lsp.rustier]\ncommand = \"r\"\nextensions = [\"rs\"]\n");
+        assert_eq!((problem.file.as_str(), problem.line), (PROJECT_LABEL, 2));
+        assert_eq!(
+            problem.to_string(),
+            ".crime/config.toml:2: [lsp.rust] and [lsp.rustier] both claim .rs"
+        );
+    }
+
+    #[test]
+    fn a_row_naming_its_own_extension_twice_claims_it_once() {
+        start(&Startup {
+            project_config: Some("[lsp.rust]\nextensions = [\"rs\", \"rs\"]\n".to_string()),
+            ..Startup::default()
+        })
+        .expect("CRIME started");
     }
 
     /// The bottom layer held to the same check as the two above it, and named

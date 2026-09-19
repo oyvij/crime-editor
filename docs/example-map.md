@@ -2447,15 +2447,14 @@ was pressed for, so unlike the on-type half — which nobody pressed a key for �
 comes back empty**: `nothing-to-format`. **Both halves say it**, with one slug, because the reader
 pressed one key and does not know which half answered: a command that hands back the text it was
 given has changed nothing, and a key that changes nothing and says nothing reads as a broken key.
-**R32.3** **Which language a file is, for the purpose of formatting, is three lookups and no second
-table**: what `lsp::language` calls it, then the row whose own `extensions` claim it, then the name
-the file gives itself — its extension, or, where it has none, the file name. A `Makefile` is
+**R32.3** **Which language a file is, for the purpose of formatting, is two lookups and no second
+table**: the `[formatter.*]` row whose own `extensions` claim it, then the name the file gives
+itself — its extension, or, where it has none, the file name. The `[lsp.*]` rows are not asked: a
+file's server and its formatter are separate choices, so every formatter row names its own
+extensions (ADR 0018). A `Makefile` is
 `[formatter.Makefile]`, which is a key a reader can write, and the last lookup *is* the map lookup so
 writing it works; the empty extension it would otherwise fall back to names `[formatter.]`, a refusal
-that asks somebody to write a key TOML will not take. `html`, `css`, `json`, `yaml` and `markdown` are deliberately kept **out**
-of `lsp::language` — a language named there is a language CRIME goes looking for a *server* for — and
-the row's own `extensions` key is what covers them without a second hand-written map in `src/` that
-could disagree with the first. The extension-as-a-name fallback is what makes a
+that asks somebody to write a key TOML will not take. The extension-as-a-name fallback is what makes a
 `[formatter.<anything>]` a reader invents reachable with no code at all.
 **R32.4** **The command sees the Buffer, never the file.** Its text goes in on the child's stdin and
 what it writes on stdout replaces the Buffer. This is R31.6 in a second shape and it is not

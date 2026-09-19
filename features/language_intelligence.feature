@@ -120,6 +120,36 @@ Feature: Language intelligence
       And the configured languages do not include "sanskrit"
       And there is no language server configured for "sanskrit"
 
+    # A language is a row, not a match arm (ADR 0018): the row's `extensions`
+    # are what sends a file to it, and its table name is the language id the
+    # server is told.
+    Scenario: A row for a language CRIME never named serves the files it claims
+      Given the project config is:
+        """
+        [lsp.ruby]
+        command = "ruby-lsp"
+        extensions = ["rb"]
+        """
+      And CRIME started in the project
+      And a language server for "ruby" is ready
+      When I open "lib/app.rb"
+      Then a language server was started with "ruby-lsp"
+      And the language server for "ruby" was told "lib/app.rb" is a "ruby" document
+
+    Scenario: Two rows claiming one extension stop CRIME from starting
+      Given the project config is:
+        """
+        [lsp.rustier]
+        command = "rustier-ls"
+        extensions = ["rs"]
+        """
+      When CRIME starts in the project
+      Then CRIME refuses to start
+      And the error names the file ".crime/config.toml"
+      And the error names line 1
+      And the fault is "extension-claimed-twice"
+      And the error names the rows "lsp.rust" and "lsp.rustier"
+
     Scenario: A malformed server entry stops CRIME from starting
       Given the project config is:
         """

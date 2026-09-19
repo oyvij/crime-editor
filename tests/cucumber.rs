@@ -1676,8 +1676,17 @@ fn fault_is(world: &mut CrimeWorld, expected: String) {
         startup::ConfigFault::NotToml => "not-toml",
         startup::ConfigFault::WrongType(_) => "wrong-type",
         startup::ConfigFault::Incomplete { .. } => "incomplete",
+        startup::ConfigFault::ClaimedTwice { .. } => "extension-claimed-twice",
     };
     assert_eq!(actual, expected);
+}
+
+#[then(expr = "the error names the rows {string} and {string}")]
+fn error_names_rows(world: &mut CrimeWorld, first: String, second: String) {
+    match &config_error(world).fault {
+        startup::ConfigFault::ClaimedTwice { rows, .. } => assert_eq!(rows, &[first, second]),
+        other => panic!("expected an extension claimed twice, got {other:?}"),
+    }
 }
 
 #[then(expr = "the reason is {string}")]
@@ -9616,14 +9625,29 @@ fn contributes_no_figure(world: &mut CrimeWorld, path: String) {
 // the buffer. No scenario runs one: the world plays the edge, and everything a
 // server says arrives as canned JSON.
 
+/// CRIME started on the template alone, whose rows say which files each
+/// language claims: a server or formatter a scenario configures "for rust"
+/// serves what the shipped rust row serves, and a language nothing ships
+/// claims nothing.
+fn shipped() -> State {
+    startup::start(&Startup::default())
+        .expect("the defaults start")
+        .0
+}
+
 #[given(expr = "a language server {string} is configured for {string}")]
 fn server_configured(world: &mut CrimeWorld, command: String, language: String) {
     world.state.servers.insert(
-        language,
+        language.clone(),
         Server {
             command,
             args: Vec::new(),
             also_served_by: Vec::new(),
+            extensions: shipped()
+                .servers
+                .get(&language)
+                .map(|server| server.extensions.clone())
+                .unwrap_or_default(),
             install: BTreeMap::new(),
             initialization_options: None,
             partial: None,
@@ -9646,6 +9670,11 @@ fn server_is_ready(world: &mut CrimeWorld, language: String) {
             command: format!("{language}-language-server"),
             args: Vec::new(),
             also_served_by: Vec::new(),
+            extensions: shipped()
+                .servers
+                .get(&language)
+                .map(|server| server.extensions.clone())
+                .unwrap_or_default(),
             install: BTreeMap::new(),
             initialization_options: None,
             partial: None,
@@ -9671,6 +9700,11 @@ fn server_is_already_running(world: &mut CrimeWorld, language: String) {
             command: command.clone(),
             args: Vec::new(),
             also_served_by: Vec::new(),
+            extensions: shipped()
+                .servers
+                .get(&language)
+                .map(|server| server.extensions.clone())
+                .unwrap_or_default(),
             install: BTreeMap::new(),
             initialization_options: None,
             partial: None,
@@ -10668,6 +10702,19 @@ fn told_open(world: &mut CrimeWorld, language: String, path: String) {
     );
 }
 
+#[then(expr = "the language server for {string} was told {string} is a {string} document")]
+fn told_language_id(world: &mut CrimeWorld, language: String, path: String, id: String) {
+    let uri = format!("file://{}", abs(world, &path).display());
+    let ids: Vec<Value> = sent(world, &language)
+        .iter()
+        .filter(|message| message["method"] == "textDocument/didOpen")
+        .map(|message| &message["params"]["textDocument"])
+        .filter(|document| document["uri"] == uri.as_str())
+        .map(|document| document["languageId"].clone())
+        .collect();
+    assert_eq!(ids, vec![Value::from(id)]);
+}
+
 #[then(expr = "the language server for {string} was told {string} is open with:")]
 fn told_open_with(world: &mut CrimeWorld, language: String, path: String, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
@@ -11586,12 +11633,16 @@ fn document_formatting_reply(world: &mut CrimeWorld, language: &str, result: Val
 #[given(expr = "a formatter {string} is configured for {string}")]
 fn formatter_configured(world: &mut CrimeWorld, command: String, language: String) {
     world.state.formatters.insert(
-        language,
+        language.clone(),
         Formatter {
             command,
             args: Vec::new(),
             install: BTreeMap::new(),
-            extensions: Vec::new(),
+            extensions: shipped()
+                .formatters
+                .get(&language)
+                .map(|formatter| formatter.extensions.clone())
+                .unwrap_or_default(),
         },
     );
 }

@@ -72,19 +72,12 @@ pub fn run(state: &State) -> Vec<Effect> {
 }
 
 /// Which language this file is, for the purpose of finding a command to lay it
-/// out. Three lookups, narrowest first, and no second hand-written table: what
-/// the protocol calls the file, then the row that claims its extension, then the
-/// name the file gives itself — which is what makes a `[formatter.<anything>]` a
-/// reader invents reachable without CRIME having heard of it.
-///
-/// `lsp::language` is asked first and is not extended, deliberately: a language
-/// named there is a language CRIME goes looking for a *server* for, and adding
-/// `html`, `css`, `json` and `yaml` to it would have the editor hunting servers
-/// nobody configured (R32.3).
+/// out: the `[formatter.*]` row claiming its extension, else the name the file
+/// gives itself — which is what makes a `[formatter.<anything>]` a reader
+/// invents reachable without CRIME having heard of it. The `[lsp.*]` rows are
+/// not asked: a file's server and its formatter are separate choices
+/// (ADR 0018).
 fn language(state: &State, path: &Path) -> String {
-    if let Some(named) = lsp::language(path) {
-        return named.to_string();
-    }
     // A file with no extension is named by itself — `Makefile`, `Dockerfile` —
     // and that name is a key a reader can write, because the last lookup *is*
     // the map lookup: `[formatter.Makefile]` finds a file called `Makefile`.

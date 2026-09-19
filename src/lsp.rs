@@ -66,29 +66,22 @@ fn formatting(state: &State) -> FormattingOptions {
     }
 }
 
-/// Which language a file is, spelled as the protocol spells it — the same names
-/// the `[lsp.<language>]` tables are keyed by, so a file finds its server by
-/// being what it is rather than by a second mapping that could disagree.
+/// Which language a file is: the `[lsp.*]` row claiming its extension, whose
+/// table name is the language id the protocol is sent (ADR 0018). The rows are
+/// the only mapping — start refuses two claiming one extension — so a language
+/// CRIME never named is served the moment a row claims its files, and a file
+/// no row claims has no server, which is a value the core holds rather than a
+/// silence it infers.
 ///
 /// Extensions, not grammar names: syntect calls `.js` "JavaScript (Babel)" and
-/// `.h` "Objective-C", neither of which is a language id, and the second would
-/// hand a C header to a server nobody configured. A file in no language here has
-/// no server, which is a value the core holds rather than a silence it infers.
-pub fn language(path: &Path) -> Option<&'static str> {
+/// `.h` "Objective-C", neither of which is a language id.
+pub fn language<'a>(state: &'a State, path: &Path) -> Option<&'a str> {
     let extension = path.extension()?.to_str()?;
-    Some(match extension {
-        "rs" => "rust",
-        "ts" | "tsx" | "mts" | "cts" => "typescript",
-        "js" | "jsx" | "mjs" | "cjs" => "javascript",
-        "vue" => "vue",
-        "java" => "java",
-        "zig" => "zig",
-        "py" | "pyi" => "python",
-        "go" => "go",
-        "c" | "h" => "c",
-        "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => "cpp",
-        _ => return None,
-    })
+    state
+        .servers
+        .iter()
+        .find(|(_, server)| server.extensions.iter().any(|claim| claim == extension))
+        .map(|(language, _)| language.as_str())
 }
 
 /// Where one language's conversation has got to. Not a claim that a process
@@ -314,7 +307,7 @@ enum Told {
 /// dropped: a server that does not exist cannot be asked, and the caller would
 /// have to filter it out again.
 pub fn served_by(state: &State, path: &Path) -> Vec<String> {
-    let Some(own) = language(path) else {
+    let Some(own) = language(state, path) else {
         return Vec::new();
     };
     let mut languages = vec![own.to_string()];
@@ -667,7 +660,7 @@ pub fn read_for_review(state: &mut State, path: &Path, contents: &str) -> Vec<Ef
                         // What the file *is*, which is not what the server that
                         // also serves it is keyed by: a `.vue` file told to a
                         // TypeScript server is still a Vue document.
-                        language_id: self::language(path).unwrap_or(&language).to_string(),
+                        language_id: self::language(state, path).unwrap_or(&language).to_string(),
                         version: document_version(REVIEW_VERSION),
                         text: contents.to_string(),
                     },
@@ -707,7 +700,7 @@ pub fn typed(state: &mut State) -> Vec<Effect> {
     let declared = state
         .current_buffer
         .as_deref()
-        .and_then(language)
+        .and_then(|path| language(state, path))
         .filter(|language| ready(state, language))
         .and_then(|language| state.lsp.get(language))
         .is_some_and(|conversation| declares(&conversation.capabilities, capability));
@@ -1129,7 +1122,7 @@ fn documents(state: &mut State, language: &str) -> Vec<Effect> {
                         // conversation it is being told to: a `.vue` file told
                         // to a TypeScript server is still a Vue document
                         // ([`served_by`]).
-                        language_id: self::language(path).unwrap_or(language).to_string(),
+                        language_id: self::language(state, path).unwrap_or(language).to_string(),
                         version: document_version(version),
                         text: buffer.shown().to_string(),
                     },
@@ -3090,6 +3083,8 @@ mod tests {
                 command: command.to_string(),
                 args: Vec::new(),
                 also_served_by: Vec::new(),
+                // The only two languages these tests open files in.
+                extensions: vec![if language == "vue" { "vue" } else { "rs" }.to_string()],
                 install: std::collections::BTreeMap::new(),
                 initialization_options: None,
                 partial: None,
@@ -4389,7 +4384,13 @@ mod tests {
         // The same configured row under a second name: what these tests turn
         // on is that two servers serve one file, never what either command is.
         let second = state.servers.get("vue").expect("the vue server").clone();
-        state.servers.insert("typescript".to_string(), second);
+        state.servers.insert(
+            "typescript".to_string(),
+            Server {
+                extensions: Vec::new(),
+                ..second
+            },
+        );
         state
             .servers
             .get_mut("vue")
@@ -4961,7 +4962,13 @@ mod tests {
     fn only_the_server_that_named_the_character_is_asked() {
         let mut state = workspace("vue", "vue-language-server");
         let second = state.servers.get("vue").expect("the vue server").clone();
-        state.servers.insert("typescript".to_string(), second);
+        state.servers.insert(
+            "typescript".to_string(),
+            Server {
+                extensions: Vec::new(),
+                ..second
+            },
+        );
         state
             .servers
             .get_mut("vue")
