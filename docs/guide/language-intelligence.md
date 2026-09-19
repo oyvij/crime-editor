@@ -179,7 +179,7 @@ cell means nobody has packaged that server for that OS; add an `install.<os>` ke
 | Language | Server | macOS | Linux | Windows |
 |---|---|---|---|---|
 | Rust | `rust-analyzer` | `rustup component add rust-analyzer` | same | same |
-| TypeScript | `typescript-language-server` | `npm install -g typescript typescript-language-server` | same | same |
+| TypeScript | `typescript-language-server` | `npm install -g typescript@6 typescript-language-server` | same | same |
 | JavaScript | `typescript-language-server` | same as TypeScript | same | same |
 | Vue | `vue-language-server` | `npm install -g @vue/language-server` | same | same |
 | Python | `pyright-langserver` | `npm install -g pyright` | same | same |

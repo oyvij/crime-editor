@@ -1,6 +1,6 @@
 [package]
 name = "crime"
-version = "0.157.2"
+version = "0.157.3"
 edition = "2021"
 description = "CRIME — Command · Review · Integrated · Modal · Editor"
 license = "MIT"

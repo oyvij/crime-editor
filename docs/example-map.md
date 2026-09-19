@@ -2125,7 +2125,7 @@ server that dies on the first `didOpen`.
   `install.<os>` like a program row, and a `missing-requirement` row names the fact and, taken,
   runs the fact's install exactly as a server row runs the server's. The usual cause is
   machine-wide — a server on `PATH` with no classic `tsc` beside it — so the template's
-  `typescript_sdk` carries `npm install -g typescript` on every OS. A fact with no install for this
+  `typescript_sdk` carries `npm install -g typescript@6` on every OS — pinned, because from 7 the package is the native compiler with no `typescript.js`. A fact with no install for this
   OS offers none and still names what is missing, and one whose package manager is not on `PATH` is
   refused with `needs-installer` while the row goes on naming the fact. A re-check of the row asks
   after the fact's `command`, since that is what a restart could bring. The fact stays a search: nothing found is ever

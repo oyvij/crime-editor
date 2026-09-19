@@ -280,7 +280,7 @@ Feature: Tools — one list of everything CRIME runs
       And the command "npm" is on PATH
       And the edge resolved no "typescript_sdk"
       When I take the requirement row for "typescript_sdk"
-      Then the shell pane runs "npm install -g typescript" reporting its exit status
+      Then the shell pane runs "npm install -g typescript@6" reporting its exit status
 
     Scenario: Taking a row whose requirement's package manager is missing runs nothing
       Given there is no global config

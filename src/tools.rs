@@ -603,16 +603,25 @@ mod tests {
     }
 
     /// The template's TypeScript SDK is one global install on every OS, which
-    /// is what a server here without it offers.
+    /// is what a server here without it offers. Pinned to 6: from 7 the
+    /// package is the native compiler and ships no `typescript.js` or
+    /// `tsserver.js`, so an unpinned install is one the fact never finds.
     #[test]
     fn the_typescript_sdk_installs_everywhere() {
         let template = Config(PROGRAMS.parse().expect("the template parses"));
         let sdk = &template.facts()["typescript_sdk"];
+        let servers = template.servers();
         for os in ["macos", "linux", "windows"] {
             assert_eq!(
                 sdk.install.get(os).map(String::as_str),
-                Some("npm install -g typescript")
+                Some("npm install -g typescript@6")
             );
+            for language in ["typescript", "javascript"] {
+                assert_eq!(
+                    servers[language].install.get(os).map(String::as_str),
+                    Some("npm install -g typescript@6 typescript-language-server")
+                );
+            }
         }
     }
 

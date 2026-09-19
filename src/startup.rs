@@ -66,16 +66,16 @@ pub const PROGRAMS: &str = r#"# The compiler a project pins, which is a per-pack
 # directory `--tsdk=` names. `value = "directory"` because the server wants the
 # `lib` holding it, not the file. The global install is where `tsc` points once
 # symlinks are resolved, and it is checked for the same file rather than
-# assumed: the 7.0 native preview is installed, on PATH, and has no
-# `typescript.js` at all.
+# assumed: from 7 the package is the native compiler, on PATH as `tsc`, with no
+# `typescript.js` at all — which is why the install is pinned to 6.
 [facts.typescript_sdk]
 marker = "node_modules/typescript/lib/typescript.js"
 value = "directory"
 command = "tsc"
 command_marker = "../lib/typescript.js"
-install.macos = "npm install -g typescript"
-install.linux = "npm install -g typescript"
-install.windows = "npm install -g typescript"
+install.macos = "npm install -g typescript@6"
+install.linux = "npm install -g typescript@6"
+install.windows = "npm install -g typescript@6"
 
 # What teaches a TypeScript server to answer about a `.vue` file. It needs no
 # install of its own: `@vue/language-server` carries it in its own
@@ -140,9 +140,9 @@ install.macos = "brew install zls"
 command = "typescript-language-server"
 args = ["--stdio"]
 extensions = ["ts", "tsx", "mts", "cts"]
-install.macos = "npm install -g typescript typescript-language-server"
-install.linux = "npm install -g typescript typescript-language-server"
-install.windows = "npm install -g typescript typescript-language-server"
+install.macos = "npm install -g typescript@6 typescript-language-server"
+install.linux = "npm install -g typescript@6 typescript-language-server"
+install.windows = "npm install -g typescript@6 typescript-language-server"
 
 # Sub-tables rather than one inline table, which TOML would want on a single
 # line, and this one is a paragraph long. The plugin is what makes this server
@@ -165,9 +165,9 @@ languages = ["vue"]
 command = "typescript-language-server"
 args = ["--stdio"]
 extensions = ["js", "jsx", "mjs", "cjs"]
-install.macos = "npm install -g typescript typescript-language-server"
-install.linux = "npm install -g typescript typescript-language-server"
-install.windows = "npm install -g typescript typescript-language-server"
+install.macos = "npm install -g typescript@6 typescript-language-server"
+install.linux = "npm install -g typescript@6 typescript-language-server"
+install.windows = "npm install -g typescript@6 typescript-language-server"
 
 [lsp.javascript.initialization_options.tsserver]
 path = "${typescript_sdk}/tsserver.js"
@@ -1907,7 +1907,7 @@ mod tests {
         let brew = |p: &str| Some(format!("brew install {p}"));
         let apt = Some("sudo apt install clangd".to_string());
         let gopls = Some("go install golang.org/x/tools/gopls@latest".to_string());
-        let ts = "typescript typescript-language-server";
+        let ts = "typescript@6 typescript-language-server";
         let pinned = [
             ("lsp", "c", "clangd", None, apt.clone()),
             ("lsp", "cpp", "clangd", None, apt),

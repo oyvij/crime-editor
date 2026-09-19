@@ -116,7 +116,7 @@ marker = "node_modules/typescript/lib/typescript.js"
 value = "directory"                # the server wants the `lib` directory, not the file
 command = "tsc"                    # fall back to the global install…
 command_marker = "../lib/typescript.js"   # …but only if it really has typescript.js in it
-install.linux = "npm install -g typescript"   # what puts `tsc` there
+install.linux = "npm install -g typescript@6" # what puts `tsc` there
 
 [lsp.vue]
 args = ["--stdio", "--tsdk=${typescript_sdk}"]
@@ -163,7 +163,7 @@ Shipped rows:
 | Language | Command | Install (macOS · Linux · Windows) | Notes |
 |---|---|---|---|
 | `rust` | `rust-analyzer` | `rustup component add rust-analyzer` on all three | |
-| `typescript` | `typescript-language-server --stdio` | `npm install -g typescript typescript-language-server` on all three | `initialization_options.tsserver.path = "${typescript_sdk}/tsserver.js"`; a `@vue/typescript-plugin` entry at `${vue_typescript_plugin}` for `vue` files. |
+| `typescript` | `typescript-language-server --stdio` | `npm install -g typescript@6 typescript-language-server` on all three | `initialization_options.tsserver.path = "${typescript_sdk}/tsserver.js"`; a `@vue/typescript-plugin` entry at `${vue_typescript_plugin}` for `vue` files. |
 | `javascript` | `typescript-language-server --stdio` | same | Same `tsserver.path`; no plugin. |
 | `vue` | `vue-language-server --stdio --tsdk=${typescript_sdk}` | `npm install -g @vue/language-server` on all three | `also_served_by = ["typescript"]`; `unanswerable` = `tsserver/request` / `tsserver/response`. |
 | `python` | `pyright-langserver --stdio` | `npm install -g pyright` on all three | |
