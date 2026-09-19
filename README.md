@@ -7,9 +7,11 @@ real shell and an AI CLI, side by side in one terminal — plus a git review you
 and hand back to the AI.
 
 > **Disclaimer:** every line of this editor was written by an LLM. I build it feature by feature and
-> bug by bug using Matt Pocock's skills and workflow. CRIME is my own editor, made for how I like to
-> work. You're welcome to use it, and if you want to contribute, open a PR — I'm happy to look. I'm
-> not trying to convince anyone to switch, though. It's out in the open, that's all.
+> bug by bug using Matt Pocock's skills and workflow. I made the editor for fun, but also as a place
+where I could experiment with ideas I have which can help me work better with code and agents.
+The goal is to have features in the editor which solves code comprehension and steering the design and implementation
+of code. It started with a simple review View, and evolved into a Story view, which has been really helpful
+in understanding the design and control-flow of any implemenation. You're welcome to use it, and if you want to contribute, open a PR — I'm happy to look.
 
 ![CRIME in Edit view](docs/images/edit.svg)
 
