@@ -203,6 +203,283 @@ extensions = ["cpp", "cc", "cxx", "hpp", "hh", "hxx"]
 install.linux = "sudo apt install clangd"
 install.windows = "winget install LLVM.LLVM"
 
+# The long tail (ADR 0018): every language below has a server one command
+# installs somewhere, and an OS nothing packages it for has no key. A language
+# missing from this list is a row you write, exactly like these. PowerShell is
+# missing on purpose: its server ships only as a release bundle, and starting it
+# needs the path that bundle was unpacked to.
+
+[lsp.shellscript]
+command = "bash-language-server"
+args = ["start"]
+extensions = ["sh", "bash"]
+install.macos = "npm install -g bash-language-server"
+install.linux = "npm install -g bash-language-server"
+install.windows = "npm install -g bash-language-server"
+
+[lsp.lua]
+command = "lua-language-server"
+extensions = ["lua"]
+install.macos = "brew install lua-language-server"
+install.windows = "winget install LuaLS.lua-language-server"
+
+[lsp.ruby]
+command = "ruby-lsp"
+extensions = ["rb", "rake", "gemspec", "ru"]
+install.macos = "gem install ruby-lsp"
+install.linux = "gem install ruby-lsp"
+install.windows = "gem install ruby-lsp"
+
+[lsp.php]
+command = "intelephense"
+args = ["--stdio"]
+extensions = ["php"]
+install.macos = "npm install -g intelephense"
+install.linux = "npm install -g intelephense"
+install.windows = "npm install -g intelephense"
+
+[lsp.kotlin]
+command = "kotlin-language-server"
+extensions = ["kt", "kts"]
+install.macos = "brew install kotlin-language-server"
+
+# No install key: the server ships with the Swift toolchain, for the reason
+# `[formatter.go]` has none.
+[lsp.swift]
+command = "sourcekit-lsp"
+extensions = ["swift"]
+
+[lsp.csharp]
+command = "csharp-ls"
+extensions = ["cs"]
+install.macos = "dotnet tool install --global csharp-ls"
+install.linux = "dotnet tool install --global csharp-ls"
+install.windows = "dotnet tool install --global csharp-ls"
+
+[lsp.haskell]
+command = "haskell-language-server-wrapper"
+args = ["--lsp"]
+extensions = ["hs", "lhs"]
+install.macos = "ghcup install hls"
+install.linux = "ghcup install hls"
+
+# No install key: `opam install ocaml-lsp-server` puts the server in the
+# switch's own `bin`, which is on PATH only once the reader's shell has run
+# `opam env`, so it would leave this row reading `missing` — `[lsp.c]`'s
+# macOS reason.
+[lsp.ocaml]
+command = "ocamllsp"
+extensions = ["ml", "mli"]
+
+[lsp.elixir]
+command = "elixir-ls"
+extensions = ["ex", "exs"]
+install.macos = "brew install elixir-ls"
+
+[lsp.erlang]
+command = "elp"
+args = ["server"]
+extensions = ["erl", "hrl"]
+install.macos = "brew install erlang-language-platform"
+
+[lsp.scala]
+command = "metals"
+extensions = ["scala", "sc", "sbt"]
+install.macos = "cs install metals"
+install.linux = "cs install metals"
+install.windows = "cs install metals"
+
+[lsp.clojure]
+command = "clojure-lsp"
+extensions = ["clj", "cljs", "cljc", "edn"]
+install.macos = "brew install clojure-lsp"
+
+# The server is the SDK's own subcommand, so there is nothing to install apart
+# from the language.
+[lsp.dart]
+command = "dart"
+args = ["language-server"]
+extensions = ["dart"]
+
+# The server is a package inside the language, so the probe finds `julia`, not
+# the package: with Julia installed this row reads `installed` before its
+# install has run, and only once a `.jl` file has tried the server and it has
+# read `stopped` is the install offered. `[lsp.r]` is the same.
+[lsp.julia]
+command = "julia"
+args = ["--startup-file=no", "--history-file=no", "-e", "using LanguageServer; runserver()"]
+extensions = ["jl"]
+install.macos = "julia -e 'using Pkg; Pkg.add(\"LanguageServer\")'"
+install.linux = "julia -e 'using Pkg; Pkg.add(\"LanguageServer\")'"
+install.windows = "julia -e 'using Pkg; Pkg.add(\"LanguageServer\")'"
+
+[lsp.r]
+command = "R"
+args = ["--no-echo", "-e", "languageserver::run()"]
+extensions = ["r", "R"]
+install.macos = "R -e 'install.packages(\"languageserver\", repos = \"https://cloud.r-project.org\")'"
+install.linux = "R -e 'install.packages(\"languageserver\", repos = \"https://cloud.r-project.org\")'"
+
+[lsp.nix]
+command = "nil"
+extensions = ["nix"]
+install.macos = "nix --extra-experimental-features 'nix-command flakes' profile install nixpkgs#nil"
+install.linux = "nix --extra-experimental-features 'nix-command flakes' profile install nixpkgs#nil"
+
+[lsp.terraform]
+command = "terraform-ls"
+args = ["serve"]
+extensions = ["tf", "tfvars"]
+install.macos = "brew install hashicorp/tap/terraform-ls"
+
+# A file named `Dockerfile` has no extension to claim, so only the
+# `name.dockerfile` spelling reaches this server.
+[lsp.dockerfile]
+command = "docker-langserver"
+args = ["--stdio"]
+extensions = ["dockerfile"]
+install.macos = "npm install -g dockerfile-language-server-nodejs"
+install.linux = "npm install -g dockerfile-language-server-nodejs"
+install.windows = "npm install -g dockerfile-language-server-nodejs"
+
+[lsp.toml]
+command = "taplo"
+args = ["lsp", "stdio"]
+extensions = ["toml"]
+install.macos = "cargo install --features lsp --locked taplo-cli"
+install.linux = "cargo install --features lsp --locked taplo-cli"
+install.windows = "cargo install --features lsp --locked taplo-cli"
+
+[lsp.sql]
+command = "sqls"
+extensions = ["sql"]
+install.macos = "go install github.com/sqls-server/sqls@latest"
+install.linux = "go install github.com/sqls-server/sqls@latest"
+install.windows = "go install github.com/sqls-server/sqls@latest"
+
+[lsp.svelte]
+command = "svelteserver"
+args = ["--stdio"]
+extensions = ["svelte"]
+install.macos = "npm install -g svelte-language-server"
+install.linux = "npm install -g svelte-language-server"
+install.windows = "npm install -g svelte-language-server"
+
+# Like the Vue server, this one does not start without the TypeScript SDK
+# named, and it is the same fact that names it.
+[lsp.astro]
+command = "astro-ls"
+args = ["--stdio"]
+extensions = ["astro"]
+install.macos = "npm install -g @astrojs/language-server"
+install.linux = "npm install -g @astrojs/language-server"
+install.windows = "npm install -g @astrojs/language-server"
+
+[lsp.astro.initialization_options.typescript]
+tsdk = "${typescript_sdk}"
+
+[lsp.graphql]
+command = "graphql-lsp"
+args = ["server", "-m", "stream"]
+extensions = ["graphql", "gql"]
+install.macos = "npm install -g graphql-language-service-cli"
+install.linux = "npm install -g graphql-language-service-cli"
+install.windows = "npm install -g graphql-language-service-cli"
+
+[lsp.proto]
+command = "protols"
+extensions = ["proto"]
+install.macos = "cargo install protols"
+install.linux = "cargo install protols"
+install.windows = "cargo install protols"
+
+# `CMakeLists.txt` ends in `.txt`, which is every text file's, so only the
+# `.cmake` files reach this server.
+[lsp.cmake]
+command = "cmake-language-server"
+extensions = ["cmake"]
+install.macos = "pipx install cmake-language-server"
+install.linux = "pipx install cmake-language-server"
+install.windows = "pip install cmake-language-server"
+
+[lsp.latex]
+command = "texlab"
+extensions = ["tex"]
+install.macos = "brew install texlab"
+
+[lsp.elm]
+command = "elm-language-server"
+extensions = ["elm"]
+install.macos = "npm install -g @elm-tooling/elm-language-server"
+install.linux = "npm install -g @elm-tooling/elm-language-server"
+install.windows = "npm install -g @elm-tooling/elm-language-server"
+
+[lsp.gleam]
+command = "gleam"
+args = ["lsp"]
+extensions = ["gleam"]
+install.macos = "brew install gleam"
+install.windows = "winget install Gleam.Gleam"
+
+[lsp.nim]
+command = "nimlangserver"
+extensions = ["nim", "nims"]
+install.macos = "nimble install nimlangserver"
+install.linux = "nimble install nimlangserver"
+install.windows = "nimble install nimlangserver"
+
+[lsp.perl]
+command = "perlnavigator"
+args = ["--stdio"]
+extensions = ["pl", "pm"]
+install.macos = "npm install -g perlnavigator-server"
+install.linux = "npm install -g perlnavigator-server"
+install.windows = "npm install -g perlnavigator-server"
+
+[lsp.typst]
+command = "tinymist"
+extensions = ["typ"]
+install.macos = "brew install tinymist"
+
+[lsp.markdown]
+command = "marksman"
+args = ["server"]
+extensions = ["md", "markdown"]
+install.macos = "brew install marksman"
+install.windows = "winget install Artempyanykh.Marksman"
+
+[lsp.yaml]
+command = "yaml-language-server"
+args = ["--stdio"]
+extensions = ["yaml", "yml"]
+install.macos = "npm install -g yaml-language-server"
+install.linux = "npm install -g yaml-language-server"
+install.windows = "npm install -g yaml-language-server"
+
+[lsp.json]
+command = "vscode-json-language-server"
+args = ["--stdio"]
+extensions = ["json", "jsonc"]
+install.macos = "npm install -g vscode-langservers-extracted"
+install.linux = "npm install -g vscode-langservers-extracted"
+install.windows = "npm install -g vscode-langservers-extracted"
+
+[lsp.html]
+command = "vscode-html-language-server"
+args = ["--stdio"]
+extensions = ["html", "htm"]
+install.macos = "npm install -g vscode-langservers-extracted"
+install.linux = "npm install -g vscode-langservers-extracted"
+install.windows = "npm install -g vscode-langservers-extracted"
+
+[lsp.css]
+command = "vscode-css-language-server"
+args = ["--stdio"]
+extensions = ["css", "scss", "less"]
+install.macos = "npm install -g vscode-langservers-extracted"
+install.linux = "npm install -g vscode-langservers-extracted"
+install.windows = "npm install -g vscode-langservers-extracted"
+
 # The `[formatter.*]` tables, which are the `[lsp.*]` tables above in a second
 # shape and are data for the same three reasons: a name in the bottom layer of
 # the merge is beaten by a file, printable as a string, and extensible without a
@@ -1756,7 +2033,15 @@ mod tests {
                     install: if os == "macos" { macos } else { linux }.clone(),
                 })
                 .collect();
-            assert_eq!(table, expected, "{os}");
+            let config = fresh();
+            assert_eq!(
+                table.len(),
+                config.servers().len() + config.formatters().len(),
+                "{os}"
+            );
+            for dep in expected {
+                assert!(table.contains(&dep), "{os}: {dep:?}");
+            }
             let [synth, play] = speech;
             assert_eq!(
                 (synth.kind, synth.name.as_str(), synth.command.as_str()),
@@ -1887,14 +2172,33 @@ mod tests {
         .expect("CRIME started");
     }
 
-    /// The bottom layer held to the same check as the two above it, and named
+    /// The template held to the same check as a file a reader wrote, and named
     /// here so a typo in the data fails as itself rather than as every scenario
-    /// that starts CRIME.
+    /// that starts CRIME. One bad row empties its whole kind, so a count short
+    /// of the tables is any row failing.
     #[test]
-    fn every_default_language_names_a_server() {
+    fn every_template_row_parses_into_a_valid_row() {
         let config = fresh();
-        let named = config.0["lsp"].as_table().expect("lsp tables").len();
-        assert_eq!(config.servers().len(), named);
+        let named = |kind: &str| config.0[kind].as_table().expect(kind).len();
+        assert_eq!(config.servers().len(), named("lsp"));
+        assert_eq!(config.formatters().len(), named("formatter"));
+        assert_eq!(config.facts().len(), named("facts"));
+    }
+
+    /// Read off the template itself rather than through the merge, so the
+    /// template stays held if the merge's own refusal ever stops holding it.
+    #[test]
+    fn no_two_template_servers_claim_one_extension() {
+        let template: toml::Table = PROGRAMS.parse().expect("the template parses");
+        let mut owners = std::collections::BTreeMap::new();
+        for (language, row) in template["lsp"].as_table().expect("lsp tables") {
+            for extension in row["extensions"].as_array().expect("extensions") {
+                let extension = extension.as_str().expect("a string");
+                if let Some(owner) = owners.insert(extension, language) {
+                    assert_eq!(owner, language, ".{extension} is claimed twice");
+                }
+            }
+        }
     }
 
     /// R9.5 again, for the key this ticket adds: an install command that is not

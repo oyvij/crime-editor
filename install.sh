@@ -94,7 +94,7 @@ installer_install() { # installer_install <tool> -> the command that installs it
     pipx:macos) echo 'brew install pipx' ;;
     pipx:linux) echo 'sudo apt install -y pipx' ;;
     uv:*) echo 'curl -LsSf https://astral.sh/uv/install.sh | sh' ;;
-    rustup:*) echo "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" ;;
+    rustup:*|cargo:*) echo "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" ;;
     *) echo "" ;;
   esac
 }
