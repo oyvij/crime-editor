@@ -4892,6 +4892,7 @@ fn pending_command_shows(world: &mut CrimeWorld, expected: String) {
 }
 
 #[when(expr = "I switch to Edit view")]
+#[given(expr = "I open Edit view")]
 #[when(expr = "I open Edit view")]
 fn switch_to_edit(world: &mut CrimeWorld) {
     pick_palette_entry(world, "Edit");
@@ -5041,6 +5042,7 @@ fn diff_shows_no_comment(world: &mut CrimeWorld, line: u32) {
     assert!(review::comments_at(&world.state, &file, line).is_empty());
 }
 
+#[given(expr = "I close the buffer")]
 #[when(expr = "I close the buffer")]
 fn close_buffer(world: &mut CrimeWorld) {
     world.send(Event::CloseBuffer { force: false });
@@ -5067,6 +5069,11 @@ fn force_close_every_buffer(world: &mut CrimeWorld) {
 #[then(expr = "the editor has no file open")]
 fn no_file_open(world: &mut CrimeWorld) {
     assert!(world.state.current_buffer.is_none() && world.state.buffers.is_empty());
+}
+
+#[then(expr = "the editor shows no buffer")]
+fn no_buffer_shown(world: &mut CrimeWorld) {
+    assert_eq!(world.state.current_buffer, None);
 }
 
 /// The command line is a draft the edge holds, not core state, so a scenario
@@ -7786,12 +7793,12 @@ fn editor_refuses_with(world: &mut CrimeWorld, reason: String) {
 /// screen for the scenario to be about anything.
 #[when(expr = "I switch to review view")]
 fn switch_to_review_view(world: &mut CrimeWorld) {
-    world.send(Event::OpenReviewView);
     let path = world
         .state
         .current_buffer
         .clone()
         .expect("a current buffer");
+    world.send(Event::OpenReviewView);
     let file = path
         .strip_prefix(&world.state.root)
         .expect("inside the workspace")

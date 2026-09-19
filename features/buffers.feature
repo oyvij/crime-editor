@@ -106,6 +106,40 @@ Feature: Several files open at once
     When I close the buffer
     Then the editor has no file open
 
+  # One set of open buffers, but each view shows its own: a file opened while
+  # walking a story is not what the editor should hold when you go back to Edit.
+  Scenario: Leaving a view does not carry its buffer into the next
+    Given "src/one.js" is open in the editor
+    And I open Story view
+    And I open "src/two.js"
+    When I open Edit view
+    Then the current buffer is "src/one.js"
+
+  Scenario: Returning to a view shows the buffer it had open
+    Given "src/one.js" is open in the editor
+    And I open Story view
+    And I open "src/two.js"
+    And I open Edit view
+    And I open "src/three.js"
+    When I open Story view
+    Then the current buffer is "src/two.js"
+
+  Scenario: A view that has shown nothing yet shows no buffer
+    Given "src/one.js" is open in the editor
+    When I open Story view
+    Then the editor shows no buffer
+    And the open buffers are:
+      | src/one.js |
+
+  Scenario: A view does not return to a buffer closed elsewhere
+    Given "src/one.js" is open in the editor
+    And I open Story view
+    And I open "src/two.js"
+    And I click buffer dot 1
+    And I close the buffer
+    When I open Edit view
+    Then the editor shows no buffer
+
   # The files you had open are per-user state, so they live in state.json beside
   # the folders the tree had open — reopening a project puts you back in the
   # file you left, not in an empty editor.

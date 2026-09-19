@@ -1471,7 +1471,7 @@ fn editor_widget(
 ) -> Paragraph<'static> {
     // Both of these substitute the whole drawing of the editor's rectangle
     // rather than being a `Pane` of their own. They never coexist:
-    // `clear_diff_outside_review` empties `state.diff` on every way out of
+    // `move_to_view` empties `state.diff` on every way out of
     // Review, and walking only ever happens in Story view.
     if state.walking.is_some() {
         return story_widget(state, command, tokens, width);
@@ -2669,7 +2669,7 @@ fn bar(kind: story::Kind) -> Color {
 /// hidden in Review view until a diff has actually landed — Review's rows
 /// answer to `state.diff`, and one that has not shown up yet claims nothing.
 /// There is no third arm for Edit view with a diff on screen:
-/// `switch_view`'s `clear_diff_outside_review` clears `state.diff` on every
+/// `move_to_view` clears `state.diff` on every
 /// way out of Review, so the two never coexist. The keys themselves live in
 /// `keys::CHEATSHEET`, one row per gesture tagged with the views it applies
 /// to; drawing only filters the table to `state.view` rather than deciding

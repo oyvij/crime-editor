@@ -123,7 +123,7 @@ pub enum Direction {
     Down,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum View {
     Edit,
     Review,
@@ -1549,6 +1549,10 @@ pub struct State {
     pub indexed: Vec<String>,
     pub buffers: BTreeMap<PathBuf, Buffer>,
     pub current_buffer: Option<PathBuf>,
+    /// The buffer each view other than the one on screen was showing when it
+    /// was left. The buffers are shared, the one in front is not: a file a
+    /// story walk opened is not what Edit view was holding.
+    pub view_buffers: BTreeMap<View, PathBuf>,
     /// How many of the files the last session had open are still on their way
     /// in — one per `Effect::OpenBuffer` starting asked for. Counted rather
     /// than assumed, because the openings arrive as the same event a reader's
@@ -2065,6 +2069,7 @@ impl Default for State {
             indexed: Vec::new(),
             buffers: BTreeMap::new(),
             current_buffer: None,
+            view_buffers: BTreeMap::new(),
             restoring: 0,
             preview: None,
             repo: None,
@@ -3503,7 +3508,7 @@ fn on_reload(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
         // You switched here to look at changes, so land on one: first file
         // selected, its diff loading, keyboard on the list.
         Event::OpenReviewView => {
-            next.view = View::Review;
+            move_to_view(&mut next, View::Review);
             next.focus = Pane::Tree;
             // The Scope on screen is now the files under review, so the figure
             // on the border has to be theirs: it is measured on the way in,
@@ -4875,9 +4880,7 @@ fn on_editor_key_2(state: &State, mut next: State, event: Event, wheeled: bool) 
                 },
                 'e' => {
                     let file = state.diff_file.clone().unwrap_or_default();
-                    next.diff = None;
-                    next.diff_file = None;
-                    next.view = View::Edit;
+                    move_to_view(&mut next, View::Edit);
                     return Ok((
                         next,
                         vec![
@@ -6579,14 +6582,12 @@ fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool
             // to re-read whatever is on disk, which could overwrite the
             // refusal the spine has to show with an unrelated set.
             story::Resolution::NoDefaultBranch => {
-                next.view = View::Story;
-                clear_diff_outside_review(&mut next);
+                move_to_view(&mut next, View::Story);
                 next.story_set = story::Set::NoDefaultBranch;
                 vec![Effect::RenderView(View::Story)]
             }
             story::Resolution::BadRange => {
-                next.view = View::Story;
-                clear_diff_outside_review(&mut next);
+                move_to_view(&mut next, View::Story);
                 next.story_set = story::Set::BadRange;
                 vec![Effect::RenderView(View::Story)]
             }
@@ -6603,8 +6604,7 @@ fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool
                 let spelling = spelling.clone();
                 let out = out.clone();
                 next.modal = Modal::None;
-                next.view = View::Story;
-                clear_diff_outside_review(&mut next);
+                move_to_view(&mut next, View::Story);
                 next.story_set = story::Set::Authoring {
                     spelling: spelling.clone(),
                 };
@@ -6777,8 +6777,7 @@ fn resolve_story(state: &State, explicit: Option<String>, force: bool) -> Effect
 /// its `Effect::ReadStories` would re-read whatever is on disk over the
 /// message the reviewer has to read.
 fn say_in_story(next: &mut State, set: story::Set) -> Vec<Effect> {
-    next.view = View::Story;
-    clear_diff_outside_review(next);
+    move_to_view(next, View::Story);
     next.story_set = set;
     vec![Effect::RenderView(View::Story)]
 }
@@ -7864,8 +7863,7 @@ pub(crate) fn enter_view(state: &State, view: View) -> (State, Vec<Effect>) {
         return update(state, Event::OpenReviewView);
     }
     let mut next = state.clone();
-    next.view = view;
-    clear_diff_outside_review(&mut next);
+    move_to_view(&mut next, view);
     let mut effects = vec![Effect::RenderView(view)];
     // A review-scoped figure does not survive the view it was measured for: the
     // number on the border describes the Scope on screen, and counting the
@@ -7918,9 +7916,21 @@ pub fn watched_folders(state: &State) -> BTreeSet<PathBuf> {
     folders
 }
 
-/// A diff belongs to Review view. Leaving it without clearing would leave the
-/// editor showing a read-only diff of a file you are trying to edit.
-fn clear_diff_outside_review(state: &mut State) {
+/// The one place the view changes. Each view gets back the buffer it was
+/// showing, unless it has been closed since. A diff belongs to Review view:
+/// leaving it without clearing would leave the editor showing a read-only diff
+/// of a file you are trying to edit.
+fn move_to_view(state: &mut State, view: View) {
+    if state.view != view {
+        if let Some(path) = state.current_buffer.take() {
+            state.view_buffers.insert(state.view, path);
+        }
+        state.current_buffer = state
+            .view_buffers
+            .remove(&view)
+            .filter(|path| state.buffers.contains_key(path));
+        state.view = view;
+    }
     if state.view != View::Review {
         state.diff = None;
         state.diff_file = None;
@@ -8763,7 +8773,7 @@ fn walk_to_step_file(state: &State, mut next: State) -> (State, Vec<Effect>) {
     };
     let file = step.site.file.clone();
     next.walking = None;
-    next.view = View::Edit;
+    move_to_view(&mut next, View::Edit);
     (
         next,
         vec![
