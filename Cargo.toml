@@ -56,3 +56,9 @@ harness = false
 # No debug info means no object files to strip. Backtraces keep function names, not line numbers.
 [profile.dev]
 debug = 0
+
+# The suite brute-forces the input space (the cheatsheet sweep drives every key code in all 64
+# modifier combinations through `update`), and unoptimised that one test ran for over a minute.
+# Level 1 trades some compile time for it; `cargo build` and `cargo run` are untouched.
+[profile.test]
+opt-level = 1
