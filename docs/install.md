@@ -59,7 +59,10 @@ npm is used to install javascript, python, typescript, vue, and the prettier for
 A row that needs a new manager is asked about with no change to the script. How to install each
 manager is the one table the script still owns (`installer_install`), since a package manager cannot
 install itself; a manager missing from it is named as one the script cannot install on this OS.
-On macOS a manager that comes from `brew` asks about `brew` first.
+On macOS a manager that comes from `brew` asks about `brew` first. An npm whose global prefix only
+root can write — Debian's, which is what `apt` installs — would fail every `npm install -g` row with
+`EACCES`, so the script offers `npm config set prefix ~/.local` rather than a `sudo` in the rows,
+which would be wrong for a Homebrew or nvm npm.
 
 Only what the edge runs *without* configuration is spelled out in `install.sh` itself: the build
 toolchain, git, the default AI CLI (`claude`), the speech player's package (`alsa-utils`, on Linux,
