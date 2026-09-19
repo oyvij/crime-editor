@@ -319,7 +319,9 @@ install.linux = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -
 "#;
 
 /// What starting lays down at `<project>/.crime/config.toml` the first time,
-/// and only when nothing is there (Q38). A key nobody can find is a key nobody
+/// and only when nothing is there (Q38) — and what `install.sh` lays down at
+/// `~/.crime/config.toml` the same way, asked of `crime --default-config`, so
+/// both files hold one text and the test below holds both. A key nobody can find is a key nobody
 /// sets: `editor.tab_width` was layered, merged and read on every start for its
 /// whole life while no `.crime/config.toml` existed anywhere to name it.
 ///
@@ -342,11 +344,12 @@ install.linux = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -
 /// reader who uncomments `tab_width` alone under a commented `[editor]` sets a
 /// top-level key that nothing reads. An empty table merges nothing, so they
 /// cost the effective config exactly what the comments do.
-pub const SEEDED_CONFIG: &str = r#"# CRIME reads this file on every start, and what it names beats
-# ~/.crime/config.toml key by key. It arrives commented out on purpose: it is
-# here so the keys can be found, not so this version's answers can be pinned.
-# Uncomment a line to disagree with the default beside it; delete it again to
-# go back to whatever the version you are running thinks is right.
+pub const SEEDED_CONFIG: &str = r#"# CRIME reads this file on every start. A project's .crime/config.toml beats
+# ~/.crime/config.toml key by key, and both beat the defaults built into CRIME.
+# It arrives commented out on purpose: it is here so the keys can be found,
+# not so this version's answers can be pinned. Uncomment a line to disagree
+# with the default beside it; delete it again to go back to whatever the
+# version you are running thinks is right.
 
 [view]
 

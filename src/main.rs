@@ -52,6 +52,10 @@ struct Args {
     /// each on this OS, one tab-separated line each, and exit.
     #[arg(long, conflicts_with = "folder")]
     deps: bool,
+    /// Print the commented-out config a new `~/.crime/config.toml` starts as,
+    /// and exit.
+    #[arg(long, conflicts_with_all = ["folder", "deps"])]
+    default_config: bool,
 }
 
 fn main() -> Result<()> {
@@ -61,6 +65,10 @@ fn main() -> Result<()> {
             let install = dep.install.unwrap_or_default();
             println!("{}\t{}\t{}\t{install}", dep.kind, dep.name, dep.command);
         }
+        return Ok(());
+    }
+    if args.default_config {
+        print!("{}", startup::SEEDED_CONFIG);
         return Ok(());
     }
     // Optional rather than defaulted to ".", because `crime` and `crime .`

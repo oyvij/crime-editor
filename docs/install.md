@@ -54,6 +54,12 @@ install command being this OS's `install.<os>` or blank. The kinds are `lsp`, `f
 and `player` for the speech row's `player.<os>`. It needs no folder and no terminal, and exits
 before touching either — which is what lets a machine with no checkout learn what to offer.
 
+Every run leaves a `~/.crime/config.toml`: when none is there, the script writes what
+`crime --default-config` prints — the same commented-out file a project is seeded with, so the keys
+can be found without this version's answers being pinned. An existing file is never replaced. The
+one live key the script adds is `speech.voice`, once the voice model is on disk; the voice is
+fetched whenever the model is missing, even with the synthesizer already installed.
+
 Windows is not covered: `DEFAULTS` carries `install.windows` rows for a hand install.
 
 ## From source, by hand

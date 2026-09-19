@@ -159,7 +159,21 @@ voice_path() { # where the speech install command puts its .onnx: `--output-dir`
 }
 
 reading() {
-  install_rows speech
+  local cmd inst model config="$HOME/.crime/config.toml"
+  cmd=$(rows | awk -F'\t' '$1 == "speech" { print $3 }')
+  inst=$(rows | awk -F'\t' '$1 == "speech" { print $4 }')
+  model=$(voice_path) || true
+  # The voice rides on the synthesizer's install line, so a synthesizer already
+  # on PATH is no reason to skip it: the line runs whenever the model is missing.
+  if have "$cmd" && [ -f "$model" ]; then
+    echo "  $cmd (speech) and its voice: installed"
+  elif [ -z "$inst" ]; then
+    echo "  $cmd (speech): missing, and crime --deps names no install command for $OS — install it by hand"
+  elif ask "  $cmd (speech) or its voice is missing. Install with: $inst ?" && ensure_installer "$inst"; then
+    run "$inst" || echo "  $inst failed"
+  else
+    echo "  skipped $cmd"
+  fi
   local p
   p=$(rows | awk -F'\t' '$1 == "player" { print $3 }')
   if [ -n "$p" ] && ! have "$p"; then
@@ -169,10 +183,14 @@ reading() {
       echo "  $p is missing; it ships with macOS, so something is unusual here"
     fi
   fi
-  local model config="$HOME/.crime/config.toml"
-  model=$(voice_path)
-  [ -n "$model" ] && [ -f "$model" ] || return 0
-  grep -qs '^voice = ' "$config" && return 0
+  if [ -z "$model" ] || [ ! -f "$model" ]; then
+    echo "  no voice at ${model:-the path the speech install names}, so speech.voice stays unset in $config"
+    return 0
+  fi
+  if grep -qs '^voice = ' "$config"; then
+    echo "  speech.voice is already set in $config"
+    return 0
+  fi
   mkdir -p "$HOME/.crime"
   if grep -qs '^\[speech\]' "$config"; then
     awk -v v="voice = \"$model\"" '{ print } /^\[speech\]$/ { print v }' "$config" > "$config.tmp" && mv "$config.tmp" "$config"
@@ -180,6 +198,27 @@ reading() {
     printf '\n[speech]\nvoice = "%s"\n' "$model" >> "$config"
   fi
   echo "  set speech.voice = \"$model\" in $config"
+}
+
+# ---- the global config ----------------------------------------------------------
+
+# Every key commented out, as `crime --default-config` prints it: the file is
+# there so the settings can be found, and a live value would pin this version's
+# answer past the release that corrects it. Never written over an existing file.
+seed_config() {
+  local config="$HOME/.crime/config.toml"
+  if [ -f "$config" ]; then
+    echo "  $config: kept"
+    return 0
+  fi
+  mkdir -p "$HOME/.crime"
+  if "$EXE" --default-config > "$config.tmp"; then
+    mv "$config.tmp" "$config"
+    echo "  $config: created"
+  else
+    rm -f "$config.tmp"
+    echo "  $EXE cannot print a default config; $config was not created"
+  fi
 }
 
 # ---- the AI pane --------------------------------------------------------------
@@ -346,6 +385,8 @@ main() {
     fetch_and_build
   fi
   ask_deps
+  say "Config"
+  seed_config
   [ "${ON[0]}" = 1 ] && { say "AI pane"; ai; }
   [ "${ON[1]}" = 1 ] && { say "Language servers"; install_rows lsp; }
   [ "${ON[2]}" = 1 ] && { say "Formatters"; install_rows formatter; }
