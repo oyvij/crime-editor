@@ -4,7 +4,7 @@
 //! child, the player child and the stream file are the edge's, reached only
 //! through [`Effect::Speak`] and [`Effect::StopSpeaking`]. No name of a
 //! synthesizer, a voice or a player appears here — they are `[speech]` rows in
-//! `startup::DEFAULTS` (`docs/adr/0013-a-voice-is-an-installed-binary.md`).
+//! `startup::PROGRAMS` (`docs/adr/0013-a-voice-is-an-installed-binary.md`).
 
 use crate::{preview, Effect, Selection, State};
 use std::path::PathBuf;

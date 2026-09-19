@@ -10,11 +10,42 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use toml::Table;
 
-/// Built-in defaults, the bottom layer of the merge. `risk.threshold` is
-/// `risk::DEFAULT_THRESHOLD` and `editor.tab_width` is
+/// The Settings: numbers CRIME cannot work without, built in and beaten key by
+/// key by `~/.crime/config.toml` and that by the project's own
+/// (`docs/adr/0018-the-global-config-is-the-list-of-programs.md`).
+/// `risk.threshold` is `risk::DEFAULT_THRESHOLD` and `editor.tab_width` is
 /// `editor::DEFAULT_TAB_WIDTH`, spelled as TOML — a test below holds each pair
 /// level, since a default that disagrees with itself is a figure nobody can
 /// predict.
+pub const DEFAULTS: &str = r#"[view]
+double_tap_ms = 300
+
+# What Tab lays down while inserting. Named here rather than measured off the
+# file: a project's own answer beats a scan of whichever lines happen to be
+# open, and four is the width to disagree with in one line of TOML.
+[editor]
+tab_width = 4
+
+# Whether the mirror of the file down the editor's right-hand edge is up in a
+# project nobody has turned it off in. `:minimap` is the same switch from
+# inside, and what it was left at beats this.
+minimap = true
+
+[risk]
+threshold = 15
+max_iterations = 10
+
+# `speed` is a multiplier where higher is faster, which is the convention every
+# player has. The synthesizer's own parameter scales *duration* and runs
+# backwards, so `${scale}` is its reciprocal and the inversion never reaches a
+# file a human writes (R35.7).
+[speech]
+speed = 1.0
+"#;
+
+/// The Program rows the binary carries: the rows [`template`] seeds
+/// `~/.crime/config.toml` with, live. Until they run from files alone they are
+/// also a built-in layer of the merge, under the global config.
 ///
 /// The `[lsp.*]` tables are the only place in the library a language server is
 /// named, and they are data rather than a branch on purpose: the global config
@@ -33,21 +64,7 @@ use toml::Table;
 /// for an OS gets **no key** — `zls` on Linux is a build from source and `jdtls`
 /// is in no distribution — because an invented command that fails looks
 /// configured, while a blank one is fixable in one line of TOML.
-pub const DEFAULTS: &str = r#"[view]
-double_tap_ms = 300
-
-# What Tab lays down while inserting. Named here rather than measured off the
-# file: a project's own answer beats a scan of whichever lines happen to be
-# open, and four is the width to disagree with in one line of TOML.
-[editor]
-tab_width = 4
-
-# Whether the mirror of the file down the editor's right-hand edge is up in a
-# project nobody has turned it off in. `:minimap` is the same switch from
-# inside, and what it was left at beats this.
-minimap = true
-
-# The compiler a project pins, which is a per-package dependency in every
+pub const PROGRAMS: &str = r#"# The compiler a project pins, which is a per-package dependency in every
 # JavaScript workspace and the file `@vue/language-server` resolves out of the
 # directory `--tsdk=` names. `value = "directory"` because the server wants the
 # `lib` holding it, not the file. The global install is where `tsc` points once
@@ -75,10 +92,6 @@ marker = "node_modules/@vue/typescript-plugin"
 optional = true
 command = "vue-language-server"
 command_marker = "../node_modules/@vue/typescript-plugin"
-
-[risk]
-threshold = 15
-max_iterations = 10
 
 [lsp.rust]
 command = "rust-analyzer"
@@ -315,11 +328,6 @@ install.windows = "npm install -g prettier"
 # was chosen by ear from a six-way comparison on the prototype: it is the
 # difference between "static" and a voice worth listening to for a page.
 #
-# `speed` is a multiplier where higher is faster, which is the convention every
-# player has. The synthesizer's own parameter scales *duration* and runs
-# backwards, so `${scale}` is its reciprocal and the inversion never reaches a
-# file a human writes (R35.7).
-#
 # No `player.windows`: nothing ships there that plays a wav from a command line
 # without a shell of its own, and a command that cannot work is worse than a
 # missing row — the same gap `[lsp.zig]` leaves on Linux.
@@ -327,7 +335,11 @@ install.windows = "npm install -g prettier"
 command = "piper"
 args = ["--model", "${voice}", "--length-scale", "${scale}", "--noise-w-scale", "1.0", "--output_dir", "${dir}"]
 voice = ""
-speed = 1.0
+
+# How fast, as a multiplier — higher is faster. It applies to the next Reading,
+# because the pace is baked in when the stream is built.
+# speed = 1.0
+
 player.macos = "afplay"
 player.linux = "aplay"
 install.macos = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -sL --output-dir ~/.crime/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json && echo 'now set speech.voice = \"'$HOME'/.crime/voices/en_US-bryce-medium.onnx\" in ~/.crime/config.toml'"
@@ -412,6 +424,53 @@ pub const SEEDED_CONFIG: &str = r#"# CRIME reads this file on every start. A pro
 # because the pace is baked in when the stream is built.
 # speed = 1.0
 "#;
+
+/// The Settings half of [`template`], commented out for the reason
+/// [`SEEDED_CONFIG`]'s are. `speech.speed` is not here but commented out inside
+/// [`PROGRAMS`]'s `[speech]` row, since TOML allows that table only once.
+const TEMPLATE_SETTINGS: &str = r#"# CRIME reads this file on every start. A project's .crime/config.toml beats
+# it key by key, and both beat the defaults built into CRIME.
+#
+# The settings come first, commented out on purpose: they are here so the keys
+# can be found, not so this version's answers can be pinned. Uncomment a line
+# to disagree with the default beside it.
+#
+# The programs CRIME runs come after them — language servers, formatters, what
+# they need, and the voice — and those rows are live. Edit a row to change what
+# runs, or write one for a language this file does not name.
+
+[view]
+
+# How long after a key is tapped a second tap of the same key still reads as a
+# double-tap, in milliseconds.
+# double_tap_ms = 300
+
+[editor]
+
+# What Tab lays down while inserting, and what Enter reaches for when it opens
+# a block in a file that holds no indentation of its own to copy.
+# tab_width = 4
+
+# Whether the mirror of the file down the editor's right-hand edge is up when a
+# project is opened. `:minimap` is the same switch while you are in there.
+# minimap = true
+
+[risk]
+
+# The cyclomatic complexity a function may reach before Risk names it.
+# threshold = 15
+
+# How many times the Gate may hand a refactor back before it stops.
+# max_iterations = 10
+
+"#;
+
+/// What `~/.crime/config.toml` starts as, when CRIME starts and the edge read
+/// none, and what `crime --default-config` prints for `install.sh` to lay down
+/// the same way: every Setting commented out, every Program row live (ADR 0018).
+pub fn template() -> String {
+    [TEMPLATE_SETTINGS, PROGRAMS].concat()
+}
 
 pub const GLOBAL_LABEL: &str = "~/.crime/config.toml";
 pub const PROJECT_LABEL: &str = ".crime/config.toml";
@@ -944,6 +1003,14 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
             contents: SEEDED_CONFIG.to_string(),
         });
     }
+    // The global file by the same rule, and in a Bare workspace too: it lives
+    // in `~/.crime`, not the workspace, so nothing about the folder decides it.
+    if input.global_config.is_none() {
+        effects.push(Effect::WriteFile {
+            path: input.crime_home.join(CONFIG_FILE),
+            contents: template(),
+        });
+    }
     // The editor comes back to the files it had, which is the only part of the
     // saved state the core cannot simply be started holding: a Buffer needs its
     // contents, and contents are the edge's to read.
@@ -1002,6 +1069,7 @@ fn merged_config(input: &Startup) -> Result<toml::Table, StartupError> {
     let mut origins = BTreeMap::new();
     for (source, label) in [
         (DEFAULTS, "defaults"),
+        (PROGRAMS, "defaults"),
         (
             input.global_config.as_deref().unwrap_or_default(),
             GLOBAL_LABEL,
@@ -1264,13 +1332,13 @@ pub struct Dep {
     pub install: Option<String>,
 }
 
-/// The `[lsp.*]`, `[formatter.*]` and `[speech]` rows of [`DEFAULTS`], read by
+/// The `[lsp.*]`, `[formatter.*]` and `[speech]` rows of [`PROGRAMS`], read by
 /// the same parse startup does, so a machine with no source can ask the binary
 /// what it needs rather than keeping a second table that drifts. The speech
 /// row's player is a row of its own, kind `player`, with no install: the table
 /// names none, since it ships with macOS and comes with alsa-utils on Linux.
 pub fn deps(os: &str) -> Vec<Dep> {
-    let (table, _) = parse(DEFAULTS, "defaults").expect("the shipped defaults parse");
+    let (table, _) = parse(PROGRAMS, "defaults").expect("the shipped rows parse");
     let config = Config(table);
     let row = |kind, name: &str, command: &str, install: Option<&String>| Dep {
         kind,
@@ -1471,14 +1539,35 @@ fn last_view(state_json: Option<&str>) -> Option<View> {
 #[cfg(test)]
 mod tests {
     use super::{
-        asset_name, deps, is_update, parse, release, start, verify, Config, ConfigError,
-        ConfigFault, Dep, Effect, FactValue, ReplaceFailed, Startup, StartupError, DEFAULTS,
-        PROJECT_LABEL, SEEDED_CONFIG,
+        asset_name, deps, is_update, merge, parse, release, start, template, verify, Config,
+        ConfigError, ConfigFault, Dep, Effect, FactValue, ReplaceFailed, Startup, StartupError,
+        DEFAULTS, PROGRAMS, PROJECT_LABEL, SEEDED_CONFIG,
     };
 
-    /// The bottom layer on its own, as several tests below read it.
+    /// The built-in layers on their own, as several tests below read them.
     fn defaults() -> Config {
-        Config(parse(DEFAULTS, "defaults").expect("valid TOML").0)
+        let mut table = parse(DEFAULTS, "defaults").expect("valid TOML").0;
+        merge(
+            &mut table,
+            parse(PROGRAMS, "defaults").expect("valid TOML").0,
+        );
+        Config(table)
+    }
+
+    /// A config text with every `# key = value` line made live, and nothing
+    /// else: prose that happens to hold ` = ` has a space or a backtick in
+    /// what would be its key.
+    fn uncommented(text: &str) -> toml::Table {
+        let is_key = |k: &str| k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        text.lines()
+            .map(|line| match line.strip_prefix("# ") {
+                Some(key) if key.split_once(" = ").is_some_and(|(k, _)| is_key(k)) => key,
+                _ => line,
+            })
+            .collect::<Vec<&str>>()
+            .join("\n")
+            .parse()
+            .expect("valid TOML uncommented")
     }
 
     /// The refusal a project layer earns, so that the tests below assert the
@@ -2021,15 +2110,16 @@ mod tests {
         );
     }
 
-    /// The seed is decided by one fact: `project_config` is `None`. The edge
+    /// Each seed is decided by one fact: its layer is `None`. The edge
     /// hands `Some("")` for a file it found and could not read — not UTF-8, or
     /// write-only — because an empty layer merges nothing and still says "a
     /// file is here". Seeding over it would be a silent delete of settings
     /// CRIME could not parse, which is the one way this feature can destroy
     /// something.
     #[test]
-    fn a_project_config_that_is_there_but_says_nothing_is_not_seeded_over() {
+    fn a_config_that_is_there_but_says_nothing_is_not_seeded_over() {
         let (_state, _config, effects) = start(&Startup {
+            global_config: Some(String::new()),
             project_config: Some(String::new()),
             ..Startup::default()
         })
@@ -2074,16 +2164,8 @@ mod tests {
             "a live key in the seeded config: {seeded:?}"
         );
 
-        let uncommented: String = SEEDED_CONFIG
-            .lines()
-            .map(|line| match line.strip_prefix("# ") {
-                Some(key) if key.split_once(" = ").is_some_and(|(k, _)| !k.contains(' ')) => key,
-                _ => line,
-            })
-            .collect::<Vec<&str>>()
-            .join("\n");
-        let uncommented: toml::Table = uncommented.parse().expect("valid TOML uncommented");
-        let defaults: toml::Table = DEFAULTS.parse().expect("valid TOML");
+        let uncommented = uncommented(SEEDED_CONFIG);
+        let defaults = defaults().0;
         assert!(
             !uncommented.is_empty()
                 && uncommented
@@ -2112,6 +2194,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The template's two halves, held the way the project seed is. Its live
+    /// text is exactly the Program rows — the Settings' tables are there, and
+    /// empty. Made live, it is exactly the built-in layers, so every Setting is
+    /// named, commented, and quoted at its default, and no Program row hides
+    /// behind a `#`.
+    #[test]
+    fn the_template_has_live_program_rows_and_commented_settings() {
+        let mut live: toml::Table = template().parse().expect("valid TOML");
+        let programs: toml::Table = PROGRAMS.parse().expect("valid TOML");
+        let settings: toml::Table = DEFAULTS.parse().expect("valid TOML");
+        for (table, keys) in &settings {
+            for key in keys.as_table().expect("a table").keys() {
+                assert!(
+                    live[table].get(key).is_none(),
+                    "a live Setting in the template: {table}.{key}"
+                );
+            }
+        }
+        assert_eq!(uncommented(&template()), defaults().0);
+        live.retain(|table, keys| {
+            programs.contains_key(table) || !keys.as_table().is_some_and(toml::Table::is_empty)
+        });
+        assert_eq!(live, programs);
     }
 
     /// The reason `semver` is a dependency: `"0.10.0" < "0.9.0"` as strings,

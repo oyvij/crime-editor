@@ -41,7 +41,7 @@ Release the binary comes from are both derived from it.
 
 The language servers, formatters and the voice are not listed in the script. It asks the `crime` it
 just installed, on either path, with `crime --deps` — the same `[lsp.*]`, `[formatter.*]` and
-`[speech]` rows of `DEFAULTS` in `src/startup.rs` that CRIME offers from inside the editor — so a
+`[speech]` rows of `PROGRAMS` in `src/startup.rs` that CRIME offers from inside the editor — so a
 row added there with an `install.<os>` key is installable here with no change to the script (ADR
 0012). Only what the edge runs *without* configuration is spelled out in `install.sh` itself: the
 build toolchain, git, the default AI CLI (`claude`), the speech player's package and the URL opener.
@@ -55,12 +55,13 @@ and `player` for the speech row's `player.<os>`. It needs no folder and no termi
 before touching either — which is what lets a machine with no checkout learn what to offer.
 
 Every run leaves a `~/.crime/config.toml`: when none is there, the script writes what
-`crime --default-config` prints — the same commented-out file a project is seeded with, so the keys
-can be found without this version's answers being pinned. An existing file is never replaced. The
+`crime --default-config` prints — the template CRIME itself seeds the file with on a start that finds
+none, every setting commented out and every program row live (ADR 0018). An existing file is never
+replaced, and a binary too old to print the template is reported rather than leaving a partial file. The
 one live key the script adds is `speech.voice`, once the voice model is on disk; the voice is
 fetched whenever the model is missing, even with the synthesizer already installed.
 
-Windows is not covered: `DEFAULTS` carries `install.windows` rows for a hand install.
+Windows is not covered: `PROGRAMS` carries `install.windows` rows for a hand install.
 
 ## From source, by hand
 

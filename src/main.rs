@@ -52,8 +52,7 @@ struct Args {
     /// each on this OS, one tab-separated line each, and exit.
     #[arg(long, conflicts_with = "folder")]
     deps: bool,
-    /// Print the commented-out config a new `~/.crime/config.toml` starts as,
-    /// and exit.
+    /// Print the template a new `~/.crime/config.toml` starts as, and exit.
     #[arg(long, conflicts_with_all = ["folder", "deps"])]
     default_config: bool,
 }
@@ -68,7 +67,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
     if args.default_config {
-        print!("{}", startup::SEEDED_CONFIG);
+        print!("{}", startup::template());
         return Ok(());
     }
     // Optional rather than defaulted to ".", because `crime` and `crime .`
@@ -97,8 +96,8 @@ fn main() -> Result<()> {
     let crime_home = home().join(crime::CRIME_DIR);
     let input = Startup {
         path_status: path_status(folder),
-        global_config: read(&crime_home.join(startup::CONFIG_FILE)),
-        project_config: project_config(
+        global_config: config_layer(&crime_home.join(startup::CONFIG_FILE)),
+        project_config: config_layer(
             &crime_dir(&root, sidecar.as_deref()).join(startup::CONFIG_FILE),
         ),
         state_json: read(&crime_dir(&root, sidecar.as_deref()).join(STATE_FILE)),
@@ -260,14 +259,14 @@ fn read(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-/// The one layer whose absence starting acts on: `None` is what `start` reads
-/// as "there is no file to lose" before it seeds one (R9.7). `read` answers
-/// `None` for every failure, not only for a file that is not there, so a
-/// `.crime/config.toml` that exists and cannot be read — not UTF-8, or
+/// Either config layer, both of whose absence starting acts on: `None` is what
+/// `start` reads as "there is no file to lose" before it seeds one (R9.7). `read`
+/// answers `None` for every failure, not only for a file that is not there, so a
+/// `config.toml` that exists and cannot be read — not UTF-8, or
 /// write-only — would be overwritten with the seed and the reader's settings
 /// would be gone. An empty layer merges nothing, so the effective config is
 /// what it was either way, and the file survives to be fixed in another editor.
-fn project_config(path: &Path) -> Option<String> {
+fn config_layer(path: &Path) -> Option<String> {
     read(path).or_else(|| path.try_exists().unwrap_or(false).then(String::new))
 }
 
@@ -4146,7 +4145,7 @@ mod tests {
 
     /// The shipped fact, spelled here so these tests search for what CRIME
     /// actually ships without reaching for the whole config merge. The
-    /// `DEFAULTS` unit test in `startup.rs` holds the two spellings level.
+    /// `PROGRAMS` unit test in `startup.rs` holds the two spellings level.
     fn typescript_sdk() -> Fact {
         Fact {
             marker: "node_modules/typescript/lib/typescript.js".to_string(),

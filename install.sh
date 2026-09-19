@@ -9,12 +9,12 @@
 # builds instead. Re-run, it updates whichever kind it finds behind `crime`.
 #
 # What CRIME can be configured to run — language servers, formatters, the voice —
-# is asked of the installed binary with `crime --deps`, so a new row in `DEFAULTS`
+# is asked of the installed binary with `crime --deps`, so a new row in `PROGRAMS`
 # with an `install.<os>` key is installable here with no change to this file. Only
 # what the edge runs *without* configuration is spelled out below: the build
 # toolchain, git, the default AI CLI and the URL opener.
 #
-# Windows is not covered: this is a bash script, and `DEFAULTS` carries its own
+# Windows is not covered: this is a bash script, and `PROGRAMS` carries its own
 # `install.windows` rows for a hand install.
 
 set -euo pipefail
@@ -187,12 +187,20 @@ reading() {
     echo "  no voice at ${model:-the path the speech install names}, so speech.voice stays unset in $config"
     return 0
   fi
-  if grep -qs '^voice = ' "$config"; then
+  if grep -qs '^voice = "[^"]' "$config"; then
     echo "  speech.voice is already set in $config"
     return 0
   fi
-  mkdir -p "$HOME/.crime"
-  if grep -qs '^\[speech\]' "$config"; then
+  # A file holding only the voice would stop CRIME seeding the template into it.
+  if [ ! -f "$config" ]; then
+    echo "  $config is missing, so speech.voice = \"$model\" was not set; CRIME creates the file on its next start"
+    return 0
+  fi
+  # The template's blank `voice = ""` is filled rather than joined by a second
+  # key, which TOML refuses.
+  if grep -qs '^voice = ""' "$config"; then
+    awk -v v="voice = \"$model\"" '/^voice = ""$/ { print v; next } { print }' "$config" > "$config.tmp" && mv "$config.tmp" "$config"
+  elif grep -qs '^\[speech\]' "$config"; then
     awk -v v="voice = \"$model\"" '{ print } /^\[speech\]$/ { print v }' "$config" > "$config.tmp" && mv "$config.tmp" "$config"
   else
     printf '\n[speech]\nvoice = "%s"\n' "$model" >> "$config"
@@ -202,9 +210,9 @@ reading() {
 
 # ---- the global config ----------------------------------------------------------
 
-# Every key commented out, as `crime --default-config` prints it: the file is
-# there so the settings can be found, and a live value would pin this version's
-# answer past the release that corrects it. Never written over an existing file.
+# The template, as `crime --default-config` prints it — the same text CRIME
+# seeds on its own start: every setting commented out, every program row live.
+# Never written over an existing file, and never left half-written.
 seed_config() {
   local config="$HOME/.crime/config.toml"
   if [ -f "$config" ]; then

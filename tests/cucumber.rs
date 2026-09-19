@@ -1184,6 +1184,11 @@ fn global_config_empty(world: &mut CrimeWorld) {
     world.startup.global_config = Some(String::new());
 }
 
+#[given(expr = "there is no global config")]
+fn no_global_config(world: &mut CrimeWorld) {
+    world.startup.global_config = None;
+}
+
 #[given(expr = "the project has no config file")]
 fn no_project_config(world: &mut CrimeWorld) {
     world.startup.project_config = None;
@@ -1496,14 +1501,22 @@ fn told_nothing_to_update(world: &mut CrimeWorld) {
     assert_eq!(world.notices, vec!["nothing-to-update".to_string()]);
 }
 
-/// The write ledger, not the disk model, and minus the one write no gesture
-/// makes: starting seeds the project's config file (R9.7), so a scenario that
-/// starts carries a write it never asked for. Nothing but starting ever writes
-/// that path, so leaving it out costs the promise nothing.
+/// The write ledger, not the disk model, and minus the two writes no gesture
+/// makes: starting seeds the project's config file (R9.7) and the global one,
+/// so a scenario that starts carries writes it never asked for. Nothing but
+/// starting ever writes those paths, so leaving them out costs the promise
+/// nothing.
 #[then(expr = "no file was written")]
 fn nothing_written(world: &mut CrimeWorld) {
-    let seed = world.startup.root.join(".crime/config.toml");
-    let wrote: Vec<&PathBuf> = world.wrote.iter().filter(|path| **path != seed).collect();
+    let seeds = [
+        world.startup.root.join(".crime/config.toml"),
+        world.startup.crime_home.join(startup::CONFIG_FILE),
+    ];
+    let wrote: Vec<&PathBuf> = world
+        .wrote
+        .iter()
+        .filter(|path| !seeds.contains(path))
+        .collect();
     assert!(wrote.is_empty(), "written: {wrote:?}");
 }
 
@@ -1543,6 +1556,19 @@ fn project_file_was_seeded(world: &mut CrimeWorld, name: String) {
         world.files.get(&path).map(String::as_str),
         Some(startup::SEEDED_CONFIG)
     );
+}
+
+#[then(expr = "the global config was seeded from the template")]
+fn global_file_was_seeded(world: &mut CrimeWorld) {
+    let path = world.startup.crime_home.join(startup::CONFIG_FILE);
+    assert!(world.wrote.contains(&path), "written: {:?}", world.wrote);
+    assert_eq!(world.files.get(&path), Some(&startup::template()));
+}
+
+#[then(expr = "the global config is unchanged")]
+fn global_file_unchanged(world: &mut CrimeWorld) {
+    let path = world.startup.crime_home.join(startup::CONFIG_FILE);
+    assert!(!world.wrote.contains(&path), "written: {:?}", world.wrote);
 }
 
 /// The seeded text itself, read back off the modelled disk and handed to a
@@ -1634,9 +1660,9 @@ fn no_language_server_started(world: &mut CrimeWorld) {
                     | Effect::AnalyseRisk { .. }
                     | Effect::CheckRelease { .. }
                     | Effect::RenderView(_)
-            )
-                && !matches!(effect, Effect::DeleteDir(path) if is_scratch(world, path))
-                && !matches!(effect, Effect::WriteFile { contents, .. } if contents == startup::SEEDED_CONFIG)
+            ) && !matches!(effect, Effect::DeleteDir(path) if is_scratch(world, path))
+                && !matches!(effect, Effect::WriteFile { contents, .. }
+                    if *contents == startup::SEEDED_CONFIG || *contents == startup::template())
         })
         .collect();
     assert!(
@@ -1817,13 +1843,14 @@ fn written_into_folder(world: &mut CrimeWorld, name: String) {
 /// The folder is the obvious place a seed could land, and the Sidecar is the
 /// plausible-looking one: writing the file *somewhere* looks like the promise
 /// kept while the key is still in a directory deleted at exit. Held against
-/// every write of a config file, wherever it went.
-#[then(expr = "no config file was seeded anywhere")]
-fn no_config_seeded_anywhere(world: &mut CrimeWorld) {
+/// every write of a config file but the global one, wherever it went.
+#[then(expr = "no config file was seeded in the workspace")]
+fn no_config_seeded_in_workspace(world: &mut CrimeWorld) {
+    let global = world.startup.crime_home.join(startup::CONFIG_FILE);
     let seeded: Vec<&PathBuf> = world
         .wrote
         .iter()
-        .filter(|path| path.file_name() == Some(startup::CONFIG_FILE.as_ref()))
+        .filter(|path| path.file_name() == Some(startup::CONFIG_FILE.as_ref()) && **path != global)
         .collect();
     assert!(seeded.is_empty(), "seeded: {seeded:?}");
 }
@@ -11487,7 +11514,7 @@ fn terminal_is_offered(world: &mut CrimeWorld, expected: String) {
 
 /// The shipped default, asserted on the server it names rather than on the
 /// package manager that installs it: which manager is right for a machine is
-/// data `DEFAULTS` carries and a config file may replace, so a scenario pinning
+/// data `PROGRAMS` carries and a config file may replace, so a scenario pinning
 /// the whole string would be a scenario about the data.
 #[then(expr = "the terminal is offered a command mentioning {string}")]
 fn terminal_offer_mentions(world: &mut CrimeWorld, fragment: String) {
@@ -12249,7 +12276,7 @@ fn history_selection_in_view(world: &mut CrimeWorld) {
 /// Everything a Reading needs, in place. The rows are `[speech]`'s own shape
 /// with the per-OS tables already resolved, which is what `startup` hands the
 /// core — no scenario names a synthesizer, so these are stand-ins with the
-/// right *shape* rather than the commands `DEFAULTS` ships (ADR 0013).
+/// right *shape* rather than the commands `PROGRAMS` ships (ADR 0013).
 #[given("a voice is configured")]
 fn voice_configured(world: &mut CrimeWorld) {
     world.state.speech = reading::Speech {
