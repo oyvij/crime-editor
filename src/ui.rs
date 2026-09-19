@@ -2188,6 +2188,9 @@ fn refusal_spans(state: &State) -> Vec<Span<'static>> {
         crime::preview::Refusal::GuestReadOnly => " read-only — not your repository ".to_string(),
         crime::preview::Refusal::ToolAlreadyInstalled => " already installed ".to_string(),
         crime::preview::Refusal::BrokenConfig(error) => format!(" {error} "),
+        crime::preview::Refusal::NeedsInstaller(installer) => {
+            format!(" {installer} is not installed — install.sh installs package managers ")
+        }
     };
     vec![Span::styled(wording, Style::default().fg(WARNING))]
 }
@@ -3753,21 +3756,23 @@ fn tool_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>>
             | tools::Availability::Stopped
             | tools::Availability::Partial { .. }
             | tools::Availability::Unpackaged
-            | tools::Availability::InstallFailed => WARNING,
+            | tools::Availability::InstallFailed
+            | tools::Availability::NeedsInstaller { .. } => WARNING,
         };
         // The state word says there is a gap; only configuration's own words
         // say what is in it, so the row carries them. A row that differs from
         // the template is said too: a corrected template never reaches it, so
         // this is where the reader learns there is a difference to read.
-        let without = match &row.availability {
+        let says = match &row.availability {
             tools::Availability::Partial { without } => format!("  no {without}"),
+            tools::Availability::NeedsInstaller { installer } => format!("  needs {installer}"),
             _ => String::new(),
         };
         let differs = match row.origin {
             tools::Origin::Differs => "  differs from template",
             tools::Origin::Template | tools::Origin::Own => "",
         };
-        let gap = format!("{without}{differs}");
+        let gap = format!("{says}{differs}");
         // The row the install key acts on, marked where every list in CRIME
         // marks it. Nothing else distinguishes it: a box this narrow spends its
         // columns on the command.

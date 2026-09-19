@@ -31,6 +31,7 @@ Feature: Tools — one list of everything CRIME runs
     And the project has no config file
     And the command "prettier" is on PATH
     And the command "black" is not on PATH
+    And the command "pipx" is on PATH
     When I open Tools
     Then the formatter row for "markdown" is "installed"
     And the formatter row for "python" is "missing"
@@ -44,6 +45,9 @@ Feature: Tools — one list of everything CRIME runs
       """
     And the project has no config file
     And the command "rust-analyzer" is on PATH
+    And the command "go" is on PATH
+    And the command "npm" is on PATH
+    And the command "uv" is on PATH
     When I open Tools
     Then the server row for "rust" is "installed"
     And the server row for "go" is "available"
@@ -89,6 +93,7 @@ Feature: Tools — one list of everything CRIME runs
         """
       And the project has no config file
       And the command "gopls" is not on PATH
+      And the command "go" is on PATH
       When I take the server row for "go"
       Then the global config still holds everything it held
       And the global config names the row "lsp.go"
@@ -102,6 +107,7 @@ Feature: Tools — one list of everything CRIME runs
         extensions = ["rs"]
         """
       And the project has no config file
+      And the command "npm" is on PATH
       When I take the server row for "vue"
       Then the global config names the row "lsp.vue"
       And the global config names the row "facts.typescript_sdk"
@@ -116,6 +122,7 @@ Feature: Tools — one list of everything CRIME runs
         """
       And the project has no config file
       And the command "gopls" is not on PATH
+      And the command "my-own-installer" is on PATH
       When I take the server row for "go"
       Then the global config is unchanged
       And the shell pane runs "my-own-installer gopls" reporting its exit status
@@ -128,6 +135,7 @@ Feature: Tools — one list of everything CRIME runs
         extensions = ["rs"]
         """
       And the project has no config file
+      And the command "go" is on PATH
       And the global config has since been edited to:
         """
         [lsp.rust
@@ -148,6 +156,57 @@ Feature: Tools — one list of everything CRIME runs
         """
       And the project has no config file
       And the command "gopls" is not on PATH
+      And the command "go" is on PATH
       And I took the server row for "go"
       When the install reports the exit status "1"
       Then the server row for "go" is "install-failed"
+
+  Rule: A missing package manager is refused before anything runs
+
+    The program an install command starts with, or the one after `sudo`, is probed on `PATH` like
+    any command. A row whose package manager is missing reads `needs-installer` and names it, and
+    taking it writes nothing and runs nothing: package managers are `install.sh`'s to install.
+
+    Scenario: A row whose install starts with a program not on PATH names it
+      Given the global config is:
+        """
+        [lsp.go]
+        command = "gopls"
+        extensions = ["go"]
+        install.linux = "go install golang.org/x/tools/gopls@latest"
+        """
+      And the project has no config file
+      And the command "gopls" is not on PATH
+      And the command "go" is not on PATH
+      When I open Tools
+      Then the server row for "go" is "needs-installer"
+      And the server row for "go" needs the installer "go"
+
+    Scenario: Taking a row whose package manager is missing writes nothing and runs nothing
+      Given the global config is:
+        """
+        [lsp.rust]
+        command = "rust-analyzer"
+        extensions = ["rs"]
+        """
+      And the project has no config file
+      And the command "gopls" is not on PATH
+      And the command "go" is not on PATH
+      When I take the server row for "go"
+      Then the editor refuses with "needs-installer"
+      And the global config is unchanged
+      And no command has been executed
+
+    Scenario: A row whose command is installed does not ask for its package manager
+      Given the global config is:
+        """
+        [lsp.go]
+        command = "gopls"
+        extensions = ["go"]
+        install.linux = "go install golang.org/x/tools/gopls@latest"
+        """
+      And the project has no config file
+      And the command "gopls" is on PATH
+      And the command "go" is not on PATH
+      When I open Tools
+      Then the server row for "go" is "installed"

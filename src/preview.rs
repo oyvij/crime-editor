@@ -147,6 +147,9 @@ pub enum Refusal {
     /// to start on. Nothing is written and nothing runs, and the fault is
     /// named, since the reader has to fix the file before anything is taken.
     BrokenConfig(crate::startup::ConfigError),
+    /// A Tools row taken whose install starts with a program this machine
+    /// lacks. Nothing is written and nothing runs; the program is named.
+    NeedsInstaller(String),
 }
 
 impl Refusal {
@@ -158,6 +161,7 @@ impl Refusal {
             Refusal::GuestReadOnly => "guest-read-only",
             Refusal::ToolAlreadyInstalled => "tool-already-installed",
             Refusal::BrokenConfig(_) => "broken-config",
+            Refusal::NeedsInstaller(_) => "needs-installer",
         }
     }
 }

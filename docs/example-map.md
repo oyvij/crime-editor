@@ -1920,7 +1920,9 @@ change. **An install is observed, never believed:** nothing reads the terminal's
 ADR-0004 forbids anyway, and what changes CRIME's behaviour is the probe finding the command on a
 later pass. *Amended by ADR 0018: an install taken from Tools reports its exit status through a
 sentinel the watcher sees, a non-zero status reads `install-failed` on its row, and a zero is a
-re-check of that row.*
+re-check of that row. The program an install starts with, or the one after `sudo`, is probed with
+the commands: a row whose command and package manager are both missing reads `needs-installer`,
+names the package manager, and taking it writes nothing and runs nothing.*
 
 **R31.24** **A command that appears is a reason to forget that it was missing, which is why there is
 no restart.** A failed spawn writes a `Gone` conversation and `sync` skips any language that has one,

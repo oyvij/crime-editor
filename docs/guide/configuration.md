@@ -230,6 +230,8 @@ Nothing else is a placeholder. There is no environment-variable expansion and no
 Taking a row in Tools (`i`) is the whole install: the row is appended to `~/.crime/config.toml` if
 the file lacks it, and its `install` key runs in the terminal pane, where you watch it and answer a
 `sudo` prompt. Its exit status comes back to the row, which reads `install-failed` if it failed.
+An install whose first program (or the one after `sudo`) is not on your `PATH` is not run at all:
+the row reads `needs-installer` and names the package manager, which `install.sh` installs.
 Elsewhere — `:format` finding its command missing, reading aloud — the command is still put on the
 terminal pane's input line without Enter pressed. Nothing is installed because a file was opened.
 Which key applies is the operating system the binary was built for. Once the command exists, the next check picks it up

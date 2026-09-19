@@ -1852,6 +1852,7 @@ Feature: Language intelligence
     Scenario: A row says whether its command is on this machine
       Given the command "rust-analyzer" is on PATH
       And the command "zls" is not on PATH
+      And the command "brew" is on PATH
       When I open Tools
       Then the row for "rust" is "installed"
       And the row for "zig" is "missing"
@@ -1868,6 +1869,7 @@ Feature: Language intelligence
     Scenario: Installing a row runs its configured command for this OS in the shell pane
       Given CRIME was built for "macos"
       And the command "zls" is not on PATH
+      And the command "brew" is on PATH
       And the project config is:
         """
         [lsp.zig]
@@ -1883,6 +1885,7 @@ Feature: Language intelligence
     Scenario: The same row on another OS runs that OS's command
       Given CRIME was built for "linux"
       And the command "zls" is not on PATH
+      And the command "zig" is on PATH
       And the project config is:
         """
         [lsp.zig]
@@ -1899,6 +1902,7 @@ Feature: Language intelligence
       And there is no global config
       And the project has no config file
       And the command "gopls" is not on PATH
+      And the command "go" is on PATH
       When I open Tools
       And I install the row for "go"
       Then the shell pane runs a command mentioning "gopls"
@@ -1906,6 +1910,7 @@ Feature: Language intelligence
     Scenario: A global config overrides a shipped install command
       Given CRIME was built for "macos"
       And the command "gopls" is not on PATH
+      And the command "my-own-installer" is on PATH
       And the global config is:
         """
         [lsp.go]
@@ -1993,6 +1998,7 @@ Feature: Language intelligence
 
     Scenario: A re-check that still finds nothing offers a restart
       Given the command "zls" is not on PATH
+      And the command "brew" is on PATH
       And I asked to install the row for "zig"
       When I re-check the row for "zig"
       And the command "zls" is not on PATH
@@ -2011,6 +2017,7 @@ Feature: Language intelligence
 
     Scenario: A re-check that finds the command does not offer a restart
       Given the command "zls" is not on PATH
+      And the command "brew" is on PATH
       And I asked to install the row for "zig"
       When I re-check the row for "zig"
       And the command "zls" is on PATH
@@ -2328,6 +2335,7 @@ Feature: Language intelligence
         install.macos = "npm install -g @elm-tooling/elm-language-server"
         """
       And CRIME was built for "macos"
+      And the command "npm" is on PATH
       When I open Tools
       Then the row for "elm" is "missing"
 

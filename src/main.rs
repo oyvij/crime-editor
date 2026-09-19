@@ -1976,13 +1976,14 @@ fn reap_player(edge: &mut Edge, queue: &mut VecDeque<Event>) {
     }
 }
 
-/// Whether each configured command is on this machine, asked while the list
-/// that shows it is open or a re-check waits on the answer, and at no other
-/// time: the premise of the list is that
-/// what it describes is about to change, so an answer kept from startup would
-/// describe the machine as it was. `which` rather than a walk over `PATH` — an
-/// executable bit, a `PATHEXT` on Windows and a command that is already an
-/// absolute path are the edge cases nobody meets until they hit one.
+/// Whether each configured command, and the program each install starts
+/// with, is on this machine, asked while the list that shows it is open or a
+/// re-check waits on the answer, and at no other time: the premise of the list
+/// is that what it describes is about to change, so an answer kept from
+/// startup would describe the machine as it was. `which` rather than a walk
+/// over `PATH` — an executable bit, a `PATHEXT` on Windows and a command that
+/// is already an absolute path are the edge cases nobody meets until they hit
+/// one.
 fn probe_path(state: &State, edge: &mut Edge) {
     if !matches!(state.modal, Modal::Tools { .. }) && state.recheck.is_none() {
         edge.on_path = None;
@@ -1994,7 +1995,11 @@ fn probe_path(state: &State, edge: &mut Edge) {
     edge.on_path = Some(
         crime::tools::rows(state)
             .into_iter()
-            .map(|row| row.command)
+            .flat_map(|row| {
+                let installer = row.install.as_deref().and_then(crime::tools::installer);
+                [Some(row.command), installer]
+            })
+            .flatten()
             .filter(|command| which::which(command).is_ok())
             .collect(),
     );

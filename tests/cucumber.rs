@@ -11494,6 +11494,16 @@ fn kind_row_reads(world: &mut CrimeWorld, group: String, name: String, expected:
     );
 }
 
+/// The package manager the row's install needs and this machine lacks, named
+/// on the row because `needs-installer` alone does not say which to install.
+#[then(expr = "the {word} row for {string} needs the installer {string}")]
+fn row_needs_installer(world: &mut CrimeWorld, group: String, name: String, expected: String) {
+    match tool_row(world, kind(&group), &name).availability {
+        tools::Availability::NeedsInstaller { installer } => assert_eq!(installer, expected),
+        other => panic!("{name} reads {}", other.as_str()),
+    }
+}
+
 #[then(expr = "the {word} row for {string} differs from its template")]
 fn row_differs(world: &mut CrimeWorld, group: String, name: String) {
     assert_eq!(

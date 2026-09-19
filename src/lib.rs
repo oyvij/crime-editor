@@ -5747,6 +5747,10 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                 // own, so there is no row to append — and an install that
                 // configures nothing leaves the row offering it again forever.
                 (tools::Availability::Available, _) if row.kind == tools::Kind::Speech => vec![],
+                (tools::Availability::NeedsInstaller { installer }, _) => {
+                    next.refusal = Some(preview::Refusal::NeedsInstaller(installer.clone()));
+                    vec![]
+                }
                 // A command that is here and does not work is one an install
                 // would fix, so a stopped row is taken rather than refused.
                 _ => {

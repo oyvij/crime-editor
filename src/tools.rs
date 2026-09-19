@@ -122,6 +122,11 @@ pub enum Availability {
     /// until it is taken again, because an install that failed in a pane the
     /// reader has since scrolled past is otherwise a failure nobody sees.
     InstallFailed,
+    /// Not on this machine, and the program its install starts with is not
+    /// either, so taking it would write a row and run a command that fails on
+    /// its first word. Named, because the fix is installing that program, and
+    /// that is `install.sh`'s job, not a row's.
+    NeedsInstaller { installer: String },
 }
 
 impl Availability {
@@ -135,6 +140,7 @@ impl Availability {
             Availability::Unpackaged => "no-install-command",
             Availability::Available => "available",
             Availability::InstallFailed => "install-failed",
+            Availability::NeedsInstaller { .. } => "needs-installer",
         }
     }
 }
@@ -272,6 +278,25 @@ pub fn rows(state: &State) -> Vec<ToolRow> {
             row.availability = Availability::InstallFailed;
         }
     }
+    // Except a package manager gone missing, which outranks even that: taking
+    // the row again would run an install that fails on its first word. Never
+    // over a command that is here, which needs no installer.
+    for row in &mut rows {
+        if matches!(
+            row.availability,
+            Availability::Missing | Availability::Available | Availability::InstallFailed
+        ) && !on_path(&row.command)
+        {
+            if let Some(installer) = row
+                .install
+                .as_deref()
+                .and_then(installer)
+                .filter(|installer| !on_path(installer))
+            {
+                row.availability = Availability::NeedsInstaller { installer };
+            }
+        }
+    }
     rows
 }
 
@@ -282,6 +307,16 @@ fn absent(install: Option<&String>) -> Availability {
     match install {
         Some(_) => Availability::Missing,
         None => Availability::Unpackaged,
+    }
+}
+
+/// The package manager an install runs: its first word, or the one after
+/// `sudo`, which only borrows another user's rights for it.
+pub fn installer(install: &str) -> Option<String> {
+    let mut words = shlex::Shlex::new(install);
+    match words.next()? {
+        sudo if sudo == "sudo" => words.next(),
+        first => Some(first),
     }
 }
 
@@ -556,6 +591,39 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn the_installer_is_the_first_word_or_the_one_after_sudo() {
+        assert_eq!(installer("sudo apt install clangd").as_deref(), Some("apt"));
+        assert_eq!(installer("npm install -g pyright").as_deref(), Some("npm"));
+        assert_eq!(installer("").as_deref(), None);
+    }
+
+    /// A template row whose command is here reads available whatever its
+    /// install starts with, and one whose install failed still says when
+    /// its package manager has gone.
+    #[test]
+    fn only_a_command_that_is_not_here_needs_its_installer() {
+        let mut state = State {
+            os: "linux".to_string(),
+            ..State::default()
+        };
+        state.commands_on_path.insert("gopls".to_string());
+        assert_eq!(
+            row(&state, Kind::Server, "go").availability,
+            Availability::Available
+        );
+        state.commands_on_path.clear();
+        state
+            .install_failed
+            .insert((Kind::Server, "go".to_string()));
+        assert_eq!(
+            row(&state, Kind::Server, "go").availability,
+            Availability::NeedsInstaller {
+                installer: "go".to_string()
+            }
+        );
     }
 
     /// A row the template has never heard of is the reader's own, which is

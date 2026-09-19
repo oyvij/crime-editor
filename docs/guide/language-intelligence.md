@@ -148,6 +148,7 @@ template never edits a row you already have.
 | `no-install-command` | not installed, and nothing is configured to install it on this OS |
 | `available` | a template row no config file names, so CRIME does not run it |
 | `install-failed` | its install ran and exited with a failure — the output is in the terminal pane |
+| `needs-installer` | not installed, and the program its install starts with (`npm`, `uv`, `go`, …, looking past `sudo`) is not on your `PATH` either; the row names it, and taking it does nothing — `install.sh` installs package managers |
 
 | Key | Does |
 |---|---|
