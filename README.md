@@ -6,6 +6,11 @@ A terminal IDE that opens on a folder and presents it as a workspace: a file tre
 real shell and an AI CLI, side by side in one terminal — plus a git review you can walk, comment on
 and hand back to the AI.
 
+> **Disclaimer:** every line of this editor was written by an LLM. I build it feature by feature and
+> bug by bug using Matt Pocock's skills and workflow. CRIME is my own editor, made for how I like to
+> work. You're welcome to use it, and if you want to contribute, open a PR — I'm happy to look. I'm
+> not trying to convince anyone to switch, though. It's out in the open, that's all.
+
 ![CRIME in Edit view](docs/images/edit.svg)
 
 ## Stack
