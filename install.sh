@@ -9,7 +9,8 @@
 # builds instead. Re-run, it updates whichever kind it finds behind `crime`.
 #
 # What CRIME can be configured to run — language servers, formatters, the voice —
-# is asked of the installed binary with `crime --deps`, so a new row in `PROGRAMS`
+# is asked of the installed binary with `crime --deps`, which lists the rows
+# ~/.crime/config.toml names (the template, before that file exists), so a row
 # with an `install.<os>` key is installable here with no change to this file. Only
 # what the edge runs *without* configuration is spelled out below: the build
 # toolchain, git, the default AI CLI and the URL opener.
@@ -163,6 +164,10 @@ reading() {
   cmd=$(rows | awk -F'\t' '$1 == "speech" { print $3 }')
   inst=$(rows | awk -F'\t' '$1 == "speech" { print $4 }')
   model=$(voice_path) || true
+  if [ -z "$cmd" ]; then
+    echo "  $config names no [speech] command, so nothing reads aloud"
+    return 0
+  fi
   # The voice rides on the synthesizer's install line, so a synthesizer already
   # on PATH is no reason to skip it: the line runs whenever the model is missing.
   if have "$cmd" && [ -f "$model" ]; then

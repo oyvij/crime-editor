@@ -1685,8 +1685,10 @@ forbids — is argued in `docs/adr/0011-a-language-server-is-a-second-hosted-chi
 **R31.1** A server is **named in configuration**, in `[lsp.<language>]` tables carrying a `command`
 and its `args`, and **no branch in `src/` names a server**. The falsifiable form is a grep: search for
 any server's command name and every hit is inside the built-in defaults string or a test fixture.
-**R31.2** **A default is always set.** The defaults ship as TOML data in the bottom layer of F9's
-merge, so a fresh install works with nothing configured, and F9's deep merge means a project
+**R31.2** **A server is a row in a config file, and nowhere else** (ADR 0018). The rows ship as the
+template `~/.crime/config.toml` is seeded with, and a start that finds no global file reads the
+template as that layer, so a fresh install works with nothing configured; a global file naming no
+`[lsp.*]` row starts no server at all. F9's deep merge means a project
 overriding one language leaves the others alone for free — **and a project naming one *key* of a
 shipped language leaves that language's other keys alone too**. A layer is a *patch*, so every key in
 it is optional and completeness is required of the **merged** table instead. Held of a layer, the
@@ -3066,7 +3068,8 @@ checksum list, replace the binary at its resolved path and **Relaunch** — refu
 `unsaved-changes` exactly as quitting is, and a second `:update` after that refusal relaunches
 without fetching. Each failed step is its own notice.
 **R39.5** `crime --deps` prints the dependency table one line per program, with no folder and no
-terminal, so `install.sh` asks the binary rather than reading the source.
+terminal, so `install.sh` asks the binary rather than reading the source. The table is the rows
+`~/.crime/config.toml` names, or the template's when there is no file (ADR 0018).
 **R39.6** The four Asset names are pinned by a unit test that names `.github/workflows/release.yml`,
 and the workflow names the test.
 

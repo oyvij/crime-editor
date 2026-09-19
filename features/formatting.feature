@@ -39,10 +39,10 @@ Feature: Formatting a file
     And the project is a git repository
     And CRIME was built for "macos"
 
-  Rule: A formatter is named in configuration, and a default is always set
+  Rule: A formatter is a row in a config file, and nowhere else
 
     Scenario: A fresh install has a formatter for the languages the ask names
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       When CRIME starts in the project
       Then a formatter is configured for "html"
@@ -52,8 +52,15 @@ Feature: Formatting a file
       And a formatter is configured for "yaml"
       And a formatter is configured for "rust"
 
-    Scenario: The project's own formatter beats the shipped one
+    Scenario: A global config naming no formatter configures none
       Given the global config is empty
+      And the project has no config file
+      When CRIME starts in the project
+      Then there is no formatter configured for "json"
+      And there is no formatter configured for "rust"
+
+    Scenario: The project's own formatter beats the shipped one
+      Given there is no global config
       And the project config is:
         """
         [formatter.json]

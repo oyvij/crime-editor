@@ -40,10 +40,11 @@ with the latest Release. `CRIME_REPO` overrides the repository for a fork — th
 Release the binary comes from are both derived from it.
 
 The language servers, formatters and the voice are not listed in the script. It asks the `crime` it
-just installed, on either path, with `crime --deps` — the same `[lsp.*]`, `[formatter.*]` and
-`[speech]` rows of `PROGRAMS` in `src/startup.rs` that CRIME offers from inside the editor — so a
-row added there with an `install.<os>` key is installable here with no change to the script (ADR
-0012). Only what the edge runs *without* configuration is spelled out in `install.sh` itself: the
+just installed, on either path, with `crime --deps` — the `[lsp.*]`, `[formatter.*]` and
+`[speech]` rows `~/.crime/config.toml` names, which are what CRIME runs, or the template's rows
+(`PROGRAMS` in `src/startup.rs`) when that file does not exist yet — so a row with an
+`install.<os>` key is installable here with no change to the script (ADR 0018). A config file CRIME
+would refuse to start on stops `--deps` with the same file and line. Only what the edge runs *without* configuration is spelled out in `install.sh` itself: the
 build toolchain, git, the default AI CLI (`claude`), the speech player's package and the URL opener.
 **When a feature adds a program CRIME shells out to, it goes in one of those two places, and
 `./install.sh --list` shows whether it is picked up.** `--list` asks whichever `crime` is installed,
@@ -51,7 +52,8 @@ so it needs no source.
 
 `crime --deps` prints one line per row, tab-separated as `kind`, `name`, `command`, `install`, the
 install command being this OS's `install.<os>` or blank. The kinds are `lsp`, `formatter`, `speech`,
-and `player` for the speech row's `player.<os>`. It needs no folder and no terminal, and exits
+and `player` for the speech row's `player.<os>`; a speech command or player no file names is not
+listed. It needs no folder and no terminal, and exits
 before touching either — which is what lets a machine with no checkout learn what to offer.
 
 Every run leaves a `~/.crime/config.toml`: when none is there, the script writes what

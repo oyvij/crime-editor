@@ -59,8 +59,17 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    let crime_home = home().join(crime::CRIME_DIR);
+    let global_config = config_layer(&crime_home.join(startup::CONFIG_FILE));
     if args.deps {
-        for dep in crime::startup::deps(std::env::consts::OS) {
+        let deps = match startup::deps(global_config.as_deref(), std::env::consts::OS) {
+            Ok(deps) => deps,
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        };
+        for dep in deps {
             let install = dep.install.unwrap_or_default();
             println!("{}\t{}\t{}\t{install}", dep.kind, dep.name, dep.command);
         }
@@ -93,10 +102,9 @@ fn main() -> Result<()> {
         .as_ref()
         .and_then(|exe| exe.ancestors().nth(3).map(Path::to_path_buf));
 
-    let crime_home = home().join(crime::CRIME_DIR);
     let input = Startup {
         path_status: path_status(folder),
-        global_config: config_layer(&crime_home.join(startup::CONFIG_FILE)),
+        global_config,
         project_config: config_layer(
             &crime_dir(&root, sidecar.as_deref()).join(startup::CONFIG_FILE),
         ),

@@ -362,8 +362,8 @@ traces or internal details in user-facing output.
 - Comments: default to none — only edge cases, workarounds, cross-cutting contracts, surprising invariants
 - Git: agents may commit — push or branch only when explicitly asked
 - **A program CRIME shells out to is installable by `install.sh`, or the feature is not done.** A
-  configured one is a row in `startup::PROGRAMS` with an `install.<os>` key, which the script learns
-  by asking the installed binary for `crime --deps` and needs no edit for; an unconfigured one (the
+  configured one is a template row in `startup::PROGRAMS` with an `install.<os>` key, which the
+  script learns by asking the installed binary for `crime --deps` and needs no edit for; an unconfigured one (the
   toolchain, git, the default AI CLI, the player, the URL opener) is a line in the script. `./install.sh --list` shows what it sees. A feature that
   works on the machine that wrote it and nowhere else is the failure this closes: `docs/install.md`.
 - Version bump: an agent asked to commit bumps the `version` in `Cargo.toml` in that same commit —

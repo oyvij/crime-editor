@@ -44,23 +44,20 @@ speed = 1.0
 "#;
 
 /// The Program rows the binary carries: the rows [`template`] seeds
-/// `~/.crime/config.toml` with, live. Until they run from files alone they are
-/// also a built-in layer of the merge, under the global config.
+/// `~/.crime/config.toml` with, live. They are not a layer of the merge: a row
+/// no config file names does not run (ADR 0018).
 ///
 /// The `[lsp.*]` tables are the only place in the library a language server is
-/// named, and they are data rather than a branch on purpose: the global config
-/// beats them, and the project's own config beats that, key by key. A match arm
-/// spelling the same strings could only be beaten by a fork —
+/// named, and they are data rather than a branch on purpose: once in the file
+/// they are the reader's to edit, and the project's own config beats them key
+/// by key. A match arm spelling the same strings could only be beaten by a fork —
 /// `docs/adr/0011-a-language-server-is-a-second-hosted-child.md` argues why
 /// where the name lives is the whole of the distinction.
 ///
 /// The `install` keys are the same kind of data for the same reasons, one per
 /// operating system, and this is the only place in the library a package
 /// manager is named at all
-/// (`docs/adr/0012-an-install-command-is-configuration.md`). Shipping them here
-/// is the whole of "the commands arrive with an update": they are the bottom
-/// layer of the merge, so a new binary's corrections are live on first run and
-/// nothing was written to anybody's config file. A language nobody has packaged
+/// (`docs/adr/0012-an-install-command-is-configuration.md`). A language nobody has packaged
 /// for an OS gets **no key** — `zls` on Linux is a build from source and `jdtls`
 /// is in no distribution — because an invented command that fails looks
 /// configured, while a blank one is fixable in one line of TOML.
@@ -968,7 +965,17 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
     if let Some(reason) = path_refusal(input.path_status) {
         return Err(StartupError::Path(reason));
     }
-    let config = Config(merged_config(input)?);
+    // A Bare workspace has no project configuration layer at all, so a
+    // `.crime/config.toml` that happens to sit in the folder — most likely
+    // somebody else's — is not read. Skipped rather than refused: an
+    // unparseable file CRIME never looks at must not stop it starting either.
+    let project = match &input.sidecar {
+        Some(_) => None,
+        None => input.project_config.as_deref(),
+    };
+    let config = Config(
+        merged_config(input.global_config.as_deref(), project).map_err(StartupError::Config)?,
+    );
     let (checkout, update) = checkout(input);
     let binary_install = checkout.is_none();
     let mut state = initial_state(input, &config, checkout, update);
@@ -1057,42 +1064,32 @@ fn path_refusal(status: PathStatus) -> Option<&'static str> {
     }
 }
 
-/// The defaults, under the global config, under the project's own. A layer that
-/// is not there is an empty one, which merges nothing.
+/// The Settings, under the global config, under the project's own. A project
+/// layer that is not there is an empty one, which merges nothing; a global one
+/// that is not there is the [`template`] this same start seeds it with, so a
+/// fresh machine has its servers on the start that writes them. The Program
+/// rows have no layer of their own beneath the files: what the files name is
+/// what runs (ADR 0018).
 ///
 /// Each layer is held to the types as it is parsed, because only the source
 /// text can name a line — but a layer is a *patch*, so completeness is the
 /// merged table's to satisfy and is checked once, at the end. `origins` is what
 /// lets that fault still name a file and a line after the source text is gone.
-fn merged_config(input: &Startup) -> Result<toml::Table, StartupError> {
+fn merged_config(global: Option<&str>, project: Option<&str>) -> Result<Table, ConfigError> {
     let mut table = toml::Table::new();
     let mut origins = BTreeMap::new();
+    let seeded = template();
     for (source, label) in [
         (DEFAULTS, "defaults"),
-        (PROGRAMS, "defaults"),
-        (
-            input.global_config.as_deref().unwrap_or_default(),
-            GLOBAL_LABEL,
-        ),
-        (
-            // A Bare workspace has no project configuration layer at all, so a
-            // `.crime/config.toml` that happens to sit in the folder — most
-            // likely somebody else's — is not read. Skipped rather than
-            // refused: an unparseable file CRIME never looks at must not stop
-            // it starting either.
-            match &input.sidecar {
-                Some(_) => "",
-                None => input.project_config.as_deref().unwrap_or_default(),
-            },
-            PROJECT_LABEL,
-        ),
+        (global.unwrap_or(&seeded), GLOBAL_LABEL),
+        (project.unwrap_or_default(), PROJECT_LABEL),
     ] {
-        let (overlay, mentioned) = parse(source, label).map_err(StartupError::Config)?;
+        let (overlay, mentioned) = parse(source, label)?;
         origins.extend(mentioned);
         merge(&mut table, overlay);
     }
-    refuse_incomplete(&table, &origins).map_err(StartupError::Config)?;
-    refuse_claimed_twice(&table, &origins).map_err(StartupError::Config)?;
+    refuse_incomplete(&table, &origins)?;
+    refuse_claimed_twice(&table, &origins)?;
     Ok(table)
 }
 
@@ -1332,14 +1329,16 @@ pub struct Dep {
     pub install: Option<String>,
 }
 
-/// The `[lsp.*]`, `[formatter.*]` and `[speech]` rows of [`PROGRAMS`], read by
-/// the same parse startup does, so a machine with no source can ask the binary
-/// what it needs rather than keeping a second table that drifts. The speech
-/// row's player is a row of its own, kind `player`, with no install: the table
-/// names none, since it ships with macOS and comes with alsa-utils on Linux.
-pub fn deps(os: &str) -> Vec<Dep> {
-    let (table, _) = parse(PROGRAMS, "defaults").expect("the shipped rows parse");
-    let config = Config(table);
+/// The `[lsp.*]`, `[formatter.*]` and `[speech]` rows `~/.crime/config.toml`
+/// names — or the [`template`], when there is no file, since that is what the
+/// next start runs — read by the same merge startup does, so what `install.sh`
+/// offers is what CRIME would start. A file CRIME would refuse to start on is
+/// refused here too. The speech row's player is a row of its own, kind
+/// `player`, with no install: the table names none, since it ships with macOS
+/// and comes with alsa-utils on Linux. Either is left out when no file names
+/// its command, since `[speech]` is the one table the Settings share.
+pub fn deps(global_config: Option<&str>, os: &str) -> Result<Vec<Dep>, ConfigError> {
+    let config = Config(merged_config(global_config, None)?);
     let row = |kind, name: &str, command: &str, install: Option<&String>| Dep {
         kind,
         name: name.to_string(),
@@ -1348,7 +1347,7 @@ pub fn deps(os: &str) -> Vec<Dep> {
     };
     let speech = speech(&config, os);
     let install = (!speech.install.is_empty()).then_some(&speech.install);
-    config
+    Ok(config
         .servers()
         .iter()
         .map(|(name, s)| row("lsp", name, &s.command, s.install.get(os)))
@@ -1362,7 +1361,8 @@ pub fn deps(os: &str) -> Vec<Dep> {
             row("speech", "speech", &speech.command, install),
             row("player", "speech", &speech.player, None),
         ])
-        .collect()
+        .filter(|dep| !dep.command.is_empty())
+        .collect())
 }
 
 /// The figure on disk, if it describes the commit that is checked out. A folder
@@ -1539,19 +1539,15 @@ fn last_view(state_json: Option<&str>) -> Option<View> {
 #[cfg(test)]
 mod tests {
     use super::{
-        asset_name, deps, is_update, merge, parse, release, start, template, verify, Config,
+        asset_name, deps, is_update, merged_config, release, start, template, verify, Config,
         ConfigError, ConfigFault, Dep, Effect, FactValue, ReplaceFailed, Startup, StartupError,
-        DEFAULTS, PROGRAMS, PROJECT_LABEL, SEEDED_CONFIG,
+        DEFAULTS, GLOBAL_LABEL, PROGRAMS, PROJECT_LABEL, SEEDED_CONFIG,
     };
 
-    /// The built-in layers on their own, as several tests below read them.
-    fn defaults() -> Config {
-        let mut table = parse(DEFAULTS, "defaults").expect("valid TOML").0;
-        merge(
-            &mut table,
-            parse(PROGRAMS, "defaults").expect("valid TOML").0,
-        );
-        Config(table)
+    /// What a fresh machine starts on: the Settings under the template it
+    /// seeds as the global layer, as several tests below read the rows.
+    fn fresh() -> Config {
+        Config(merged_config(None, None).expect("the template parses"))
     }
 
     /// A config text with every `# key = value` line made live, and nothing
@@ -1734,7 +1730,7 @@ mod tests {
             ),
         ];
         for (os, player) in [("macos", "afplay"), ("linux", "aplay")] {
-            let rows = deps(os);
+            let rows = deps(None, os).expect("the template parses");
             let (table, speech) = rows.split_last_chunk::<2>().expect("the speech rows");
             let expected: Vec<Dep> = pinned
                 .iter()
@@ -1768,6 +1764,25 @@ mod tests {
         }
     }
 
+    /// `crime --deps` answers from the file, not the binary: a global config
+    /// naming one server lists that server and nothing the template ships, and
+    /// one CRIME would refuse to start on is refused with its file and line.
+    #[test]
+    fn deps_lists_the_rows_the_global_config_names() {
+        let file = "[lsp.ruby]\ncommand = \"ruby-lsp\"\nextensions = [\"rb\"]\n";
+        assert_eq!(
+            deps(Some(file), "linux").expect("a usable file"),
+            [Dep {
+                kind: "lsp",
+                name: "ruby".into(),
+                command: "ruby-lsp".into(),
+                install: None,
+            }]
+        );
+        let broken = deps(Some("[lsp.ruby]\ncommand = 12\n"), "linux").expect_err("refused");
+        assert_eq!((broken.file.as_str(), broken.line), (GLOBAL_LABEL, 2));
+    }
+
     /// The files each language was served before its rows named their own
     /// extensions — the `match` those rows replaced, kept as the list it was —
     /// are served the same way after, by both tables. A row that dropped one
@@ -1775,8 +1790,8 @@ mod tests {
     #[test]
     fn the_shipped_rows_serve_every_file_the_match_they_replaced_served() {
         let mut state = crate::State {
-            servers: defaults().servers(),
-            formatters: defaults().formatters(),
+            servers: fresh().servers(),
+            formatters: fresh().formatters(),
             ..crate::State::default()
         };
         let served = [
@@ -1820,7 +1835,7 @@ mod tests {
     /// that lays nothing out: data that never fires.
     #[test]
     fn every_shipped_row_claims_an_extension() {
-        let config = defaults();
+        let config = fresh();
         for (language, server) in config.servers() {
             assert!(!server.extensions.is_empty(), "[lsp.{language}]");
         }
@@ -1855,7 +1870,7 @@ mod tests {
     /// that starts CRIME.
     #[test]
     fn every_default_language_names_a_server() {
-        let config = defaults();
+        let config = fresh();
         let named = config.0["lsp"].as_table().expect("lsp tables").len();
         assert_eq!(config.servers().len(), named);
     }
@@ -1879,7 +1894,7 @@ mod tests {
     /// what `main.rs` hands in.
     #[test]
     fn every_default_install_command_is_keyed_by_an_os_that_can_run_crime() {
-        for (language, server) in defaults().servers() {
+        for (language, server) in fresh().servers() {
             for os in server.install.keys() {
                 assert!(
                     ["macos", "linux", "windows"].contains(&os.as_str()),
@@ -1895,7 +1910,7 @@ mod tests {
     /// one line of TOML away from being right.
     #[test]
     fn a_language_nobody_has_packaged_for_an_os_has_no_key_for_it() {
-        let servers = defaults().servers();
+        let servers = fresh().servers();
         for language in ["zig", "java"] {
             assert_eq!(
                 servers[language].install.keys().collect::<Vec<_>>(),
@@ -1924,7 +1939,7 @@ mod tests {
         })
         .expect("CRIME started");
         let patched = &state.servers["vue"];
-        let shipped = &defaults().servers()["vue"];
+        let shipped = &fresh().servers()["vue"];
         assert_eq!(patched.args, ["--from-project"]);
         assert_eq!(
             (
@@ -1955,7 +1970,7 @@ mod tests {
         .expect("CRIME started");
         let patched = &state.facts["typescript_sdk"];
         assert_eq!(patched.value, FactValue::Marker);
-        assert_eq!(patched.marker, defaults().facts()["typescript_sdk"].marker);
+        assert_eq!(patched.marker, fresh().facts()["typescript_sdk"].marker);
     }
 
     /// The `[lsp.*]` half of this is a scenario; the `[facts.*]` half is only
@@ -2035,7 +2050,7 @@ mod tests {
     /// instead, which is what makes the assertion count.
     #[test]
     fn every_name_the_defaults_interpolate_is_one_the_defaults_declare() {
-        let config = defaults();
+        let config = fresh();
         let declared = config.facts();
         let mut seen = 0;
         for (language, server) in config.servers() {
@@ -2075,7 +2090,7 @@ mod tests {
     /// `typescript.js` itself and every Vue server pointed at a file.
     #[test]
     fn the_shipped_fact_names_a_marker_and_the_directory_holding_it() {
-        let facts = defaults().facts();
+        let facts = fresh().facts();
         let sdk = &facts["typescript_sdk"];
         assert_eq!(sdk.marker, "node_modules/typescript/lib/typescript.js");
         assert_eq!(sdk.value, FactValue::Directory);
@@ -2165,7 +2180,7 @@ mod tests {
         );
 
         let uncommented = uncommented(SEEDED_CONFIG);
-        let defaults = defaults().0;
+        let defaults = fresh().0;
         assert!(
             !uncommented.is_empty()
                 && uncommented
@@ -2214,7 +2229,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(uncommented(&template()), defaults().0);
+        assert_eq!(uncommented(&template()), fresh().0);
         live.retain(|table, keys| {
             programs.contains_key(table) || !keys.as_table().is_some_and(toml::Table::is_empty)
         });

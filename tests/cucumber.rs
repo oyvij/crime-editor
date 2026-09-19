@@ -11727,6 +11727,15 @@ fn a_formatter_is_configured(world: &mut CrimeWorld, language: String) {
     );
 }
 
+#[then(expr = "there is no formatter configured for {string}")]
+fn no_formatter_configured(world: &mut CrimeWorld, language: String) {
+    assert_eq!(
+        world.state.formatters.get(&language),
+        None,
+        "a formatter is configured for {language}"
+    );
+}
+
 #[then(expr = "the formatter for {string} is {string}")]
 fn the_formatter_for_is(world: &mut CrimeWorld, language: String, command: String) {
     assert_eq!(configured_formatter(world, &language).command, command);

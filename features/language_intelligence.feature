@@ -30,14 +30,23 @@ Feature: Language intelligence
     Given the workspace root is "/home/me/projects/crime"
     And the project is a git repository
 
-  Rule: A server is named in configuration, and a default is always set
+  Rule: A server is a row in a config file, and nowhere else
 
+    # ADR 0018: the template is what a fresh machine's global config is seeded
+    # with, and it is the global layer of the very start that seeds it.
     Scenario: A common language has a server on a fresh install with nothing configured
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       When CRIME starts in the project
       Then a language server is configured for "rust"
       And a language server is configured for "typescript"
+
+    Scenario: A global config naming no server starts no server for any language
+      Given the global config is empty
+      And the project has no config file
+      When CRIME starts in the project
+      Then there is no language server configured for "rust"
+      And there is no language server configured for "typescript"
 
     Scenario: The configured languages can be enumerated, not only looked up by name
       Given the global config is empty
@@ -71,21 +80,26 @@ Feature: Language intelligence
       Then the configured server command for "rust" is "from-project-rust"
       And the configured server command for "python" is "from-global-python"
 
-    Scenario: A global config overrides a default, and a project config overrides the global
+    Scenario: A server row in the global config is used, and a project row overrides it key by key
       Given the global config is:
         """
         [lsp.rust]
         command = "from-global"
+        args = ["--from-global"]
+        extensions = ["rs"]
         """
       And the project config is:
         """
         [lsp.rust]
-        command = "from-project"
+        args = ["--from-project"]
         """
       When CRIME starts in the project
-      Then the configured server command for "rust" is "from-project"
+      Then the configured server command for "rust" is "from-global"
+      And the configured server arguments for "rust" are:
+        | arg            |
+        | --from-project |
 
-    Scenario: A global config wins over the built-in default when the project says nothing
+    Scenario: A server row in the global config is used when the project says nothing
       Given the global config is:
         """
         [lsp.rust]
@@ -163,7 +177,7 @@ Feature: Language intelligence
       And the fault is "not-toml"
 
     Scenario: A layer names one key of a shipped language and keeps the command it did not name
-      Given the global config is empty
+      Given there is no global config
       And the project config is:
         """
         [lsp.rust]
@@ -222,7 +236,7 @@ Feature: Language intelligence
         """
 
     Scenario: A language with no initialization options says nothing about them
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       When I open "src/lib.rs"
@@ -233,6 +247,7 @@ Feature: Language intelligence
         """
         [lsp.rust]
         command = "rust-analyzer"
+        extensions = ["rs"]
         initialization_options = { cargo = { features = ["from-global"] } }
         """
       And the project config is:
@@ -1823,7 +1838,7 @@ Feature: Language intelligence
     nothing is spawned to find out what a row says.
 
     Scenario: The palette offers the server list, and the list is what configuration names
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       When I open the palette
       And I press "v" in the palette
@@ -1880,9 +1895,9 @@ Feature: Language intelligence
       Then the terminal is offered "zig build -Doptimize=ReleaseSafe"
       And no command has been executed
 
-    Scenario: A default install command needs no config file at all
+    Scenario: A template install command needs no row written by hand
       Given CRIME was built for "macos"
-      And the global config is empty
+      And there is no global config
       And the project has no config file
       And the command "gopls" is not on PATH
       When I open the language server list
@@ -2053,7 +2068,7 @@ Feature: Language intelligence
     missing.
 
     Scenario: A shipped default names the SDK, and the edge's answer reaches the spawn
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
@@ -2065,7 +2080,7 @@ Feature: Language intelligence
         | --tsdk=/home/me/project/node_modules/typescript/lib |
 
     Scenario: An SDK the edge could not find starts no server at all
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the command "vue-language-server" is on PATH
@@ -2075,7 +2090,7 @@ Feature: Language intelligence
       And the row for "vue" is "missing-requirement"
 
     Scenario: The SDK appearing starts the server on the next pass, with no restart
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the edge resolved no "typescript_sdk"
@@ -2240,7 +2255,7 @@ Feature: Language intelligence
       And the row for "zig" is "missing-requirement"
 
     Scenario Outline: A shipped default names the SDK the TypeScript server will not start without
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
@@ -2257,7 +2272,7 @@ Feature: Language intelligence
         | javascript | js        |
 
     Scenario: A workspace with no TypeScript of its own starts no TypeScript server
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the command "typescript-language-server" is on PATH
@@ -2411,7 +2426,7 @@ Feature: Language intelligence
       Then the language server for "rust" was sent no "elsewhere/response" notification
 
     Scenario: A fresh install serves a Vue file with the TypeScript server too
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
@@ -2420,7 +2435,7 @@ Feature: Language intelligence
       And a language server was started with "typescript-language-server"
 
     Scenario: A fresh install tells the TypeScript server where the Vue plugin is
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
@@ -2432,7 +2447,7 @@ Feature: Language intelligence
         """
 
     Scenario: A machine with no Vue server still starts TypeScript for a TypeScript project
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
@@ -2445,7 +2460,7 @@ Feature: Language intelligence
         """
 
     Scenario: A fresh install refuses the question the shipped Vue server asks
-      Given the global config is empty
+      Given there is no global config
       And the project has no config file
       And CRIME started in the project
       And a language server for "vue" is ready
