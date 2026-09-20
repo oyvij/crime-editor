@@ -24,7 +24,7 @@ use pulldown_cmark::{
 };
 use std::collections::HashMap;
 use std::path::Path;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 /// What a rendered row is, so `ui` can style it and a scenario can assert it
 /// without naming a character. `Heading` carries the level a `#` run named and
@@ -1186,7 +1186,7 @@ fn diagram_fallback(line: usize, source: &str, reason: DiagramRefusal) -> Vec<Ro
 fn laid_out(kind: RowKind, line: usize, segments: &[Vec<Piece>], columns: usize) -> Vec<Row> {
     segments
         .iter()
-        .flat_map(|pieces| wrapped(pieces, columns))
+        .flat_map(|pieces| wrapped(pieces, textwrap::Options::new(columns)))
         .map(|pieces| Row {
             kind,
             line,
@@ -1201,8 +1201,12 @@ fn laid_out(kind: RowKind, line: usize, segments: &[Vec<Piece>], columns: usize)
 /// boundary, so the break is found in the flattened text first and then
 /// walked back onto the pieces that produced it — splitting one where a break
 /// falls inside it, and carrying its emphasis into both halves.
-pub(crate) fn wrapped(pieces: &[Piece], columns: usize) -> Vec<Vec<Piece>> {
-    if columns == 0 {
+///
+/// The caller passes `textwrap`'s own options rather than a width, because a
+/// table cell wants one of them different: it declines to break a word too
+/// long for its column, overflowing instead — see [`table_rows`].
+pub(crate) fn wrapped(pieces: &[Piece], options: textwrap::Options<'_>) -> Vec<Vec<Piece>> {
+    if options.width == 0 {
         return vec![pieces.to_vec()];
     }
     let flat: String = pieces.iter().map(|piece| piece.text.as_str()).collect();
@@ -1223,7 +1227,7 @@ pub(crate) fn wrapped(pieces: &[Piece], columns: usize) -> Vec<Vec<Piece>> {
         .collect();
     let mut rows = Vec::new();
     let mut cursor = 0;
-    for line in textwrap::wrap(&flat, columns) {
+    for line in textwrap::wrap(&flat, options) {
         // `textwrap` may trim whitespace at a break rather than returning an
         // exact substring, so the break is located by searching forward
         // rather than assumed to start where the last one ended. A miss is
@@ -1261,15 +1265,21 @@ pub(crate) fn wrapped(pieces: &[Piece], columns: usize) -> Vec<Vec<Piece>> {
 /// exists to catch. Every row shares the table's own opening line, the same
 /// way a fenced code block's rows all carry the fence's line.
 ///
-/// A column too wide for `columns` shrinks — never wraps, since a wrapped
-/// cell would destroy the alignment a table exists to show — down to one
-/// column of room per cell, the same floor a fenced code block's own
-/// unwrapped rows already settle for: a table with more columns than the
-/// pane has room for a gap between each can still render wider than
-/// `columns` and be clipped at render, exactly as an unwrapped long code
-/// line already can be. `columns` of zero means the terminal has not
+/// A column too wide for `columns` shrinks, and a cell too wide for the
+/// column it lands in wraps *inside* that column — one source row becoming as
+/// many display rows as its tallest cell needs, its shorter cells padded down
+/// the whole height so no column shifts. Wrapping within a fixed column width
+/// is what preserves the alignment a table exists to show; reflowing a
+/// laid-out row would destroy it, and this code once refused the first because
+/// it had rejected the second — see
+/// `docs/adr/0019-a-table-cell-wraps-inside-its-column.md`.
+///
+/// A word too long for its column is not broken: it overflows, the row renders
+/// wider than `columns` and is clipped, exactly as an unwrapped long code line
+/// already is. That is recoverable by scrolling sideways; a cut cell is gone
+/// from [`Row::text`] altogether. `columns` of zero means the terminal has not
 /// reported a size yet, the same convention [`rows`] itself uses, so nothing
-/// shrinks before then.
+/// shrinks and nothing wraps before then.
 fn table_rows(build: TableBuild, columns: usize) -> Vec<Row> {
     let column_count = build
         .alignments
@@ -1304,34 +1314,43 @@ fn table_rows(build: TableBuild, columns: usize) -> Vec<Row> {
     };
     let mut rows = Vec::new();
     if !build.header.is_empty() {
-        let mut pieces = row_pieces(&build.header, &widths, column_count, GAP, alignment);
-        for piece in &mut pieces {
-            piece.emphasis.strong = true;
+        for mut pieces in row_pieces(&build.header, &widths, column_count, GAP, alignment) {
+            for piece in &mut pieces {
+                piece.emphasis.strong = true;
+            }
+            rows.push(Row {
+                kind: RowKind::Table,
+                line: build.line,
+                pieces,
+                refused: None,
+            });
         }
-        rows.push(Row {
-            kind: RowKind::Table,
-            line: build.line,
-            pieces,
-            refused: None,
-        });
     }
     for row in &build.body {
-        rows.push(Row {
-            kind: RowKind::Table,
-            line: build.line,
-            pieces: row_pieces(row, &widths, column_count, GAP, alignment),
-            refused: None,
-        });
+        for pieces in row_pieces(row, &widths, column_count, GAP, alignment) {
+            rows.push(Row {
+                kind: RowKind::Table,
+                line: build.line,
+                pieces,
+                refused: None,
+            });
+        }
     }
     rows
 }
 
+/// The narrowest a column is shrunk to — below this a column is a stack of
+/// fragments rather than a column, and shrinking further buys nothing anyway;
+/// the argument is in `docs/adr/0019-a-table-cell-wraps-inside-its-column.md`.
+const MIN_COLUMN: usize = 4;
+
 /// The widths a table's columns actually draw at: `natural` unless the whole
 /// row — every column plus the gaps between them — would not fit `columns`,
 /// in which case the currently-widest column gives up one column at a time
-/// until it does, or until every column has shrunk to one. Shrinking the
-/// widest column first is what keeps a table of mostly-short cells and one
-/// very long one legible instead of squeezing every column equally.
+/// until it does, or until every column has reached [`MIN_COLUMN`] — or its
+/// own natural width, if that is narrower still. Shrinking the widest column
+/// first is what keeps a table of mostly-short cells and one very long one
+/// legible instead of squeezing every column equally.
 fn shrink_to_fit(natural: &[usize], columns: usize, gap: usize) -> Vec<usize> {
     let mut widths = natural.to_vec();
     if columns == 0 {
@@ -1340,21 +1359,27 @@ fn shrink_to_fit(natural: &[usize], columns: usize, gap: usize) -> Vec<usize> {
     let total = |widths: &[usize]| -> usize {
         widths.iter().sum::<usize>() + gap * widths.len().saturating_sub(1)
     };
+    let floor = |column: usize| natural[column].min(MIN_COLUMN);
     while total(&widths) > columns {
-        let Some((index, width)) = widths.iter().copied().enumerate().max_by_key(|(_, w)| *w)
+        let Some((index, width)) = widths
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(column, width)| *width > floor(*column))
+            .max_by_key(|(_, width)| *width)
         else {
             break;
         };
-        if width <= 1 {
-            break;
-        }
-        widths[index] -= 1;
+        widths[index] = width - 1;
     }
     widths
 }
 
-/// One row's pieces: each column's cell fitted to its width, in source
-/// order, with a plain gap between columns. A row shorter than
+/// One source row as the display rows it takes: each column's cell wrapped to
+/// its width, in source order, with a plain gap between columns. The row is as
+/// tall as its tallest cell, and a cell with fewer rows than that is padded to
+/// the full width on the rows it has nothing on — otherwise every column after
+/// a wrapped one would shift left on all but its first row. A row shorter than
 /// `column_count` — a ragged table row GFM still permits — reads its missing
 /// columns as empty cells rather than shifting the ones it has.
 fn row_pieces(
@@ -1363,41 +1388,47 @@ fn row_pieces(
     column_count: usize,
     gap: usize,
     alignment: impl Fn(usize) -> Alignment,
-) -> Vec<Piece> {
+) -> Vec<Vec<Piece>> {
     let empty = Vec::new();
-    let mut pieces = Vec::new();
-    for (column, width) in widths.iter().enumerate().take(column_count) {
-        let cell = row.get(column).unwrap_or(&empty);
-        pieces.extend(fit_cell(cell, *width, alignment(column)));
-        if column + 1 < column_count {
-            pieces.push(plain_spaces(gap));
-        }
-    }
-    pieces
+    let cells: Vec<Vec<Vec<Piece>>> = widths
+        .iter()
+        .enumerate()
+        .take(column_count)
+        .map(|(column, width)| {
+            let cell = row.get(column).unwrap_or(&empty);
+            wrapped(cell, textwrap::Options::new(*width).break_words(false))
+        })
+        .collect();
+    let height = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
+    (0..height)
+        .map(|display| {
+            let mut pieces = Vec::new();
+            for (column, cell) in cells.iter().enumerate() {
+                let line = cell.get(display).map_or(&empty[..], Vec::as_slice);
+                pieces.extend(pad_cell(line, widths[column], alignment(column)));
+                if column + 1 < column_count {
+                    pieces.push(plain_spaces(gap));
+                }
+            }
+            pieces
+        })
+        .collect()
 }
 
-/// A cell's pieces padded to `width` by its declared alignment, or truncated
-/// to it when the cell itself is wider — the two are mutually exclusive, so
-/// this never both pads and cuts. Padding is a plain [`Piece`] with no
-/// modifier, appended or prepended around the cell's own pieces, which is
-/// what keeps a padded **bold** cell's padding unbold.
+/// One display row of a cell padded to `width` by its declared alignment.
+/// Padding is a plain [`Piece`] with no modifier, appended or prepended around
+/// the cell's own pieces, which is what keeps a padded **bold** cell's padding
+/// unbold. The alignment applies to every display row a wrapped cell occupies,
+/// since it is a property of the column rather than of the first row.
 ///
-/// A cut can itself fall short of `width`: a display-column budget does not
-/// divide evenly by a double-width glyph, so [`truncate_pieces`] can stop one
-/// column early rather than split a glyph in half. That shortfall is padded
-/// away here too — otherwise every column after it would drift left by
-/// exactly the width a truncated CJK or emoji cell fell short by.
-fn fit_cell(cell: &[Piece], width: usize, alignment: Alignment) -> Vec<Piece> {
+/// A row can be wider than `width` — an unbreakable word [`wrapped`] declined
+/// to split — in which case it overflows rather than being cut; and it can
+/// fall short by more than its text, since a display-column budget does not
+/// divide evenly by a double-width glyph. Both are the same arithmetic: pad by
+/// whatever is left over, which for the overflowing row is nothing.
+fn pad_cell(cell: &[Piece], width: usize, alignment: Alignment) -> Vec<Piece> {
     let natural: usize = cell.iter().map(|piece| piece.text.width()).sum();
-    if natural > width {
-        let mut pieces = truncate_pieces(cell, width);
-        let achieved: usize = pieces.iter().map(|piece| piece.text.width()).sum();
-        if achieved < width {
-            pieces.push(plain_spaces(width - achieved));
-        }
-        return pieces;
-    }
-    let pad = width - natural;
+    let pad = width.saturating_sub(natural);
     let (left, right) = match alignment {
         Alignment::Right => (pad, 0),
         Alignment::Center => (pad / 2, pad - pad / 2),
@@ -1422,39 +1453,6 @@ fn plain_spaces(count: usize) -> Piece {
         emphasis: Emphasis::default(),
         token: None,
     }
-}
-
-/// A row's or a cell's pieces cut to `width` display columns, each piece's emphasis
-/// carried into the kept portion exactly as a wrapped paragraph's does in
-/// [`wrapped`] — a **bold** cell truncated mid-word must still read bold.
-/// Cut per character rather than per byte, via [`UnicodeWidthChar`]: a
-/// multi-byte glyph split on a byte boundary would corrupt the string
-/// instead of merely shortening it.
-fn truncate_pieces(cell: &[Piece], width: usize) -> Vec<Piece> {
-    let mut remaining = width;
-    let mut pieces = Vec::new();
-    for piece in cell {
-        if remaining == 0 {
-            break;
-        }
-        let mut text = String::new();
-        for ch in piece.text.chars() {
-            let w = ch.width().unwrap_or(0);
-            if w > remaining {
-                break;
-            }
-            text.push(ch);
-            remaining -= w;
-        }
-        if !text.is_empty() {
-            pieces.push(Piece {
-                text,
-                emphasis: piece.emphasis,
-                token: piece.token,
-            });
-        }
-    }
-    pieces
 }
 
 /// A footnote's display number: assigned the first time its label is seen,
@@ -2288,35 +2286,157 @@ mod tests {
         );
     }
 
-    /// A cell wide enough to overflow the pane truncates rather than wraps —
-    /// one `Table` row per source row, never two.
+    /// The whole of every cell survives a pane too narrow for the table: the
+    /// text moves onto further display rows instead of being cut away, which
+    /// is what makes it reachable at all — a truncated cell is gone from
+    /// `Row::text()` and no scroll can bring it back.
     #[test]
-    fn a_table_wider_than_the_pane_truncates_cells_rather_than_wrapping() {
-        let rows = rows("| aaaaaaaaaa | b |\n|---|---|\n| c | d |\n", 8);
+    fn a_table_wider_than_the_pane_wraps_its_cells_rather_than_dropping_text() {
+        let rows = rows("| alpha beta | gamma delta |\n|---|---|\n| c | d |\n", 16);
+        let table: String = rows
+            .iter()
+            .filter(|row| row.kind == RowKind::Table)
+            .map(Row::text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for word in ["alpha", "beta", "gamma", "delta", "c", "d"] {
+            assert!(table.contains(word), "{word:?} lost in {table:?}");
+        }
+    }
+
+    /// A source row is as tall as its tallest cell, and its shorter cells are
+    /// padded down that whole height — otherwise the column after a wrapped
+    /// one would shift left on every row but the first.
+    #[test]
+    fn a_wrapped_source_rows_columns_stay_aligned_down_its_whole_height() {
+        let rows = rows("| one two three | x |\n|---|---|\n| a | b |\n", 12);
+        let table: Vec<String> = rows
+            .iter()
+            .filter(|row| row.kind == RowKind::Table)
+            .map(Row::text)
+            .collect();
+        assert!(table.len() > 2, "nothing wrapped: {table:?}");
+        let width = table[0].width();
+        assert!(
+            table.iter().all(|row| row.width() == width),
+            "ragged: {table:?}"
+        );
+        let column = table[0].find('x').unwrap_or_else(|| panic!("{table:?}"));
+        assert_eq!(
+            table[1].char_indices().nth(column).map(|(_, ch)| ch),
+            Some(' '),
+            "second column moved: {table:?}"
+        );
+    }
+
+    /// Alignment is a property of the column, so it applies to a wrapped
+    /// cell's continuation rows exactly as it does to its first.
+    #[test]
+    fn a_wrapped_cells_alignment_is_honoured_on_every_display_row() {
+        let rows = rows("| h |\n|--:|\n| one two |\n", 5);
+        let table: Vec<String> = rows
+            .iter()
+            .filter(|row| row.kind == RowKind::Table)
+            .map(Row::text)
+            .collect();
+        assert!(table.len() > 2, "nothing wrapped: {table:?}");
+        for row in &table[1..] {
+            assert!(row.starts_with(' '), "not right-aligned: {row:?}");
+            assert!(!row.ends_with(' '), "not right-aligned: {row:?}");
+        }
+    }
+
+    /// The regression this change is likeliest to cause: a table the pane has
+    /// room for is laid out exactly as it was before wrapping existed.
+    #[test]
+    fn a_table_that_fits_the_pane_is_one_display_row_per_source_row() {
+        let rows = rows("| a | bb |\n|---|---|\n| ccc | d |\n| e | ff |\n", 80);
+        let table: Vec<String> = rows
+            .iter()
+            .filter(|row| row.kind == RowKind::Table)
+            .map(Row::text)
+            .collect();
+        assert_eq!(
+            table,
+            vec![
+                "a    bb".to_string(),
+                "ccc  d ".to_string(),
+                "e    ff".to_string()
+            ]
+        );
+    }
+
+    /// `columns` of zero is a size the terminal has not reported yet, so
+    /// nothing shrinks and nothing wraps — the same convention [`rows`] uses.
+    #[test]
+    fn a_table_laid_out_against_no_reported_size_wraps_nothing() {
+        let rows = rows("| alpha beta | gamma |\n|---|---|\n| c | d |\n", 0);
+        let table: Vec<String> = rows
+            .iter()
+            .filter(|row| row.kind == RowKind::Table)
+            .map(Row::text)
+            .collect();
+        assert_eq!(
+            table,
+            vec![
+                "alpha beta  gamma".to_string(),
+                "c           d    ".to_string()
+            ]
+        );
+    }
+
+    /// A token with nowhere to break is the one case wrapping cannot help.
+    /// It overflows its column rather than being cut: an overflowing row is
+    /// clipped at render and recoverable by scrolling sideways, where a cut
+    /// one is gone for good.
+    #[test]
+    fn an_unbreakable_token_wider_than_its_column_overflows_rather_than_truncating() {
+        let rows = rows("| aaaaaaaaaaaaaaaaaaaa |\n|---|\n| b |\n", 6);
+        let table: Vec<String> = rows
+            .iter()
+            .filter(|row| row.kind == RowKind::Table)
+            .map(Row::text)
+            .collect();
+        assert!(
+            table.iter().any(|row| row.contains("aaaaaaaaaaaaaaaaaaaa")),
+            "{table:?}"
+        );
+    }
+
+    /// A pane too narrow for even the floor stops shrinking there rather than
+    /// squeezing on down to a column of single letters: the cell wraps at four
+    /// and the row overflows, which is the trade [`MIN_COLUMN`] names.
+    #[test]
+    fn a_column_stops_shrinking_at_the_narrowest_width_still_worth_wrapping_to() {
+        let rows = rows("| ab cd efg | cc |\n|---|---|\n| x | y |\n", 3);
+        let table: Vec<String> = rows
+            .iter()
+            .filter(|row| row.kind == RowKind::Table)
+            .map(Row::text)
+            .collect();
+        assert_eq!(table[0], "ab    cc", "{table:?}");
+        assert!(
+            table.iter().all(|row| row.width() == 8),
+            "ragged: {table:?}"
+        );
+    }
+
+    /// A wrapped cell keeps its emphasis on every row it occupies, exactly as
+    /// a wrapped paragraph's split piece does.
+    #[test]
+    fn a_wrapped_cell_carries_its_emphasis_onto_its_continuation_rows() {
+        let rows = rows("| **one two** |\n|---|\n| x |\n", 5);
         let table: Vec<&Row> = rows
             .iter()
             .filter(|row| row.kind == RowKind::Table)
             .collect();
-        assert_eq!(table.len(), 2, "{rows:?}");
-        assert!(table[0].text().len() <= 8, "{:?}", table[0].text());
-        assert!(!table[0].text().contains('\n'), "{:?}", table[0].text());
-    }
-
-    /// A truncated cell keeps its emphasis on the portion that survives,
-    /// exactly as a wrapped paragraph's split piece does.
-    #[test]
-    fn a_truncated_cell_carries_its_emphasis_into_the_kept_portion() {
-        let rows = rows("| **aaaaaaaaaa** |\n|---|\n| x |\n", 4);
-        let header = rows
-            .iter()
-            .find(|row| row.kind == RowKind::Table)
-            .unwrap_or_else(|| panic!("{rows:?}"));
-        let kept = header
+        assert!(table.len() > 2, "nothing wrapped: {rows:?}");
+        let carried = table[1]
             .pieces
             .iter()
-            .find(|piece| piece.text.starts_with('a'))
-            .unwrap_or_else(|| panic!("{:?}", header.pieces));
-        assert!(kept.emphasis.strong, "{:?}", header.pieces);
+            .find(|piece| piece.text.trim() == "two")
+            .unwrap_or_else(|| panic!("{:?}", table[1].pieces));
+        assert!(carried.emphasis.strong, "{:?}", table[1].pieces);
     }
 
     /// Two CJK glyphs are two display columns wide each — four total — same
@@ -2335,25 +2455,23 @@ mod tests {
     }
 
     /// A display-column budget does not always divide evenly by a
-    /// double-width glyph, so a truncated CJK cell can land one column short
-    /// of its column's width. Left unpadded, that shortfall drags every
-    /// column after it one to the left on just that row — comparing the
-    /// header's total width against a body row that never truncates is what
-    /// catches the drift.
+    /// double-width glyph, so a wrapped CJK cell's row can land one column
+    /// short of its column's width. Left unpadded, that shortfall drags every
+    /// column after it one to the left on just that row — comparing every
+    /// display row's total width against the others is what catches the drift.
     #[test]
-    fn a_truncated_wide_glyph_cell_is_padded_back_up_to_its_column_width() {
+    fn a_wrapped_wide_glyph_cells_rows_are_padded_back_up_to_its_column_width() {
         let rows = rows("| 中文文 | b |\n|---|---|\n| x | y |\n", 8);
-        let table: Vec<&Row> = rows
+        let table: Vec<String> = rows
             .iter()
             .filter(|row| row.kind == RowKind::Table)
+            .map(Row::text)
             .collect();
-        assert_eq!(table.len(), 2, "{rows:?}");
-        assert_eq!(
-            table[0].text().width(),
-            table[1].text().width(),
-            "header: {:?}, body: {:?}",
-            table[0].text(),
-            table[1].text()
+        assert!(table.len() > 2, "nothing wrapped: {table:?}");
+        let width = table[0].width();
+        assert!(
+            table.iter().all(|row| row.width() == width),
+            "ragged: {table:?}"
         );
     }
 

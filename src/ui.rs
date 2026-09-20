@@ -1405,9 +1405,9 @@ fn step_menu_widget(state: &State, width: u16) -> Paragraph<'static> {
 
 /// A name that fits `width` display columns unchanged, or one truncated with
 /// a trailing ellipsis so it never wraps onto a second row. Cut by display
-/// width via [`UnicodeWidthChar`], not by `chars().count()` — the same
-/// reasoning `preview::truncate_pieces` documents: a wide glyph split on a
-/// character boundary would still overrun the column it was cut to fit.
+/// width via [`UnicodeWidthChar`], not by `chars().count()` — a wide glyph
+/// split on a character boundary would still overrun the column it was cut to
+/// fit.
 fn truncate(name: &str, width: usize) -> String {
     if name.width() <= width {
         return name.to_string();
