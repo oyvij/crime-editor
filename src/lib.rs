@@ -8168,7 +8168,15 @@ fn search_rows(state: &State) -> usize {
 /// [`corner_rows`] is, because "the whole Site is in view" is a claim about the
 /// second of these numbers.
 pub fn fits(state: &State) -> (usize, usize, usize) {
-    let panes = panes_of(state);
+    fits_in(state, &panes_of(state))
+}
+
+/// The same three counts against a layout the caller already has. `mouse` is
+/// handed the rectangles the renderer drew and hit-tests against those and
+/// never a second layout of its own — the one-layout rule — so a drag asks how
+/// many rows it can run out of through here. Both entry points share the
+/// arithmetic: two derivations of a row count is a drag that stops one row off.
+pub fn fits_in(state: &State, panes: &layout::Layout) -> (usize, usize, usize) {
     let filter = tree::filter_rows(state.view) as u16 + story::title_rows(state) as u16;
     (
         panes.tree.height.saturating_sub(2 + filter) as usize,

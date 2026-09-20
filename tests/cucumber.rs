@@ -35,6 +35,10 @@ const POINTER: Place = Place { line: 3, column: 7 };
 #[derive(Debug, Default, World)]
 pub struct CrimeWorld {
     state: State,
+    /// The edge's own pointer, kept across steps rather than made fresh per
+    /// gesture: a drag held against a pane's edge is remembered there, and the
+    /// steps that hold it and release it are steps of their own.
+    pointer: mouse::Pointer,
     terminal_input: String,
     executed: Vec<String>,
     target: Option<Target>,
@@ -485,30 +489,37 @@ impl CrimeWorld {
     /// span, and the world reads the characters — out of the buffer, or out of
     /// the grid the scenario gave the terminal.
     fn drag(&mut self, pane: Pane, from: (usize, usize), to: (usize, usize)) {
-        let panes = self.panes();
-        let mut pointer = mouse::Pointer::default();
-        let mut select = None;
+        self.pointer = mouse::Pointer::default();
         for place in [from, to] {
-            let (column, row) = pointer_at(&self.state, &panes, pane, place);
-            let outcome = mouse::on_mouse(
-                &self.state,
-                &panes,
-                &mut pointer,
-                mouse::Input {
-                    kind: mouse::Kind::LeftDrag,
-                    column,
-                    row,
-                    modifiers: terminput::KeyModifiers::NONE,
-                },
-            );
-            select = outcome.select;
-            for event in outcome.events {
-                self.send(event);
-            }
+            let (column, row) = pointer_at(&self.state, &self.panes(), pane, place);
+            self.report(mouse::Kind::LeftDrag, column, row);
         }
-        // Only a pty's drag comes back unfinished: the edge reads the grid of
-        // the pane the span names.
-        let Some(selection) = select else { return };
+    }
+
+    /// One mouse report, routed the way the edge routes it: the library says
+    /// which pane and which span, and only a pty's drag comes back unfinished
+    /// — the edge reads the grid of the pane the span names.
+    fn report(&mut self, kind: mouse::Kind, column: u16, row: u16) {
+        let panes = self.panes();
+        let mut pointer = self.pointer;
+        let outcome = mouse::on_mouse(
+            &self.state,
+            &panes,
+            &mut pointer,
+            mouse::Input {
+                kind,
+                column,
+                row,
+                modifiers: terminput::KeyModifiers::NONE,
+            },
+        );
+        self.pointer = pointer;
+        for event in outcome.events {
+            self.send(event);
+        }
+        let Some(selection) = outcome.select else {
+            return;
+        };
         let lines = self.pane_lines(selection.pane);
         self.send(Event::SelectIn {
             pane: selection.pane,
@@ -3697,6 +3708,12 @@ fn open_with_lines(world: &mut CrimeWorld, path: String, lines: usize) {
     open_buffer(world, &path, &contents.join("\n"));
 }
 
+#[given(expr = "{string} is open in the editor with {int} lines of {int} characters")]
+fn open_with_wide_lines(world: &mut CrimeWorld, path: String, lines: usize, width: usize) {
+    let contents: Vec<String> = (0..lines).map(|_| "x".repeat(width)).collect();
+    open_buffer(world, &path, &contents.join("\n"));
+}
+
 #[given(expr = "{string} is open in the editor holding a {int}-character line above a short one")]
 fn open_with_long_line(world: &mut CrimeWorld, path: String, width: usize) {
     let contents = format!("{}\nend", "x".repeat(width));
@@ -4611,6 +4628,95 @@ fn drag_span(
 ) {
     let pane = parse_pane(&pane);
     world.drag(pane, (from_line, from_column), (to_line, to_column));
+}
+
+/// The button going down where a scenario names a place, which is what starts
+/// a drag: the pane the press lands in is the pane the drag belongs to for as
+/// long as it is held.
+// Spelled out because `{word}` is one word and the tree's name is two — the
+// same reason "the file tree pane has focus" has a step of its own above.
+#[when(expr = "I press at line {int} column {int} in the file tree pane")]
+fn press_at_in_tree(world: &mut CrimeWorld, line: usize, column: usize) {
+    press_at(world, line, column, "file tree".to_string());
+}
+
+#[when(expr = "I drag past the {word} of the file tree pane")]
+fn drag_past_tree(world: &mut CrimeWorld, side: String) {
+    drag_past(world, side, "file tree".to_string());
+}
+
+#[when(expr = "I press at line {int} column {int} in the {word} pane")]
+fn press_at(world: &mut CrimeWorld, line: usize, column: usize, pane: String) {
+    let pane = parse_pane(&pane);
+    world.pointer = mouse::Pointer::default();
+    let (at_column, at_row) = pointer_at(&world.state, &world.panes(), pane, (line, column));
+    world.report(mouse::Kind::LeftDown, at_column, at_row);
+}
+
+#[when(expr = "I drag to line {int} column {int} in the {word} pane")]
+fn drag_to(world: &mut CrimeWorld, line: usize, column: usize, pane: String) {
+    let pane = parse_pane(&pane);
+    let (at_column, at_row) = pointer_at(&world.state, &world.panes(), pane, (line, column));
+    world.report(mouse::Kind::LeftDrag, at_column, at_row);
+}
+
+/// The pointer taken off the pane entirely, one cell past the border on the
+/// side named — which is where a neighbouring pane begins, so this is also what
+/// proves the drag stays with the pane it started in.
+#[when(expr = "I drag past the {word} of the {word} pane")]
+fn drag_past(world: &mut CrimeWorld, side: String, pane: String) {
+    let area = match parse_pane(&pane) {
+        Pane::Tree => world.panes().tree,
+        Pane::Editor => world.panes().editor,
+        Pane::Ai => world.panes().ai,
+        Pane::Terminal => world.panes().terminal,
+        Pane::Risk | Pane::Buffers | Pane::History => world.panes().corner,
+    };
+    // Straight out from where the button went down, which is the gesture a
+    // person makes: aiming at the middle of the pane instead would move the
+    // other axis too and hide which edge the scroll answered.
+    let (at_column, at_row) = world.pointer.drag_from.expect("a button is down");
+    let (column, row) = match side.as_str() {
+        "bottom" => (at_column, area.bottom()),
+        "top" => (at_column, area.y.saturating_sub(1)),
+        "left" => (area.x.saturating_sub(1), at_row),
+        "right" => (area.right(), at_row),
+        "bottom-right" => (area.right(), area.bottom()),
+        other => panic!("no {other:?} side of a pane"),
+    };
+    world.report(mouse::Kind::LeftDrag, column, row);
+}
+
+/// The cadence the edge replays a held drag on, fired by hand: no clock, and
+/// nothing moves in between, which is the case the feature exists for.
+#[when(expr = "I hold the drag still for {int} ticks")]
+fn hold_drag(world: &mut CrimeWorld, ticks: usize) {
+    for _ in 0..ticks {
+        let held = world.pointer.held.expect("a drag is held");
+        world.report(held.kind, held.column, held.row);
+    }
+}
+
+#[when("I release the mouse")]
+fn release_mouse(world: &mut CrimeWorld) {
+    let held = world
+        .pointer
+        .held
+        .or_else(|| {
+            world.pointer.drag_from.map(|(column, row)| mouse::Input {
+                kind: mouse::Kind::LeftUp,
+                column,
+                row,
+                modifiers: terminput::KeyModifiers::NONE,
+            })
+        })
+        .expect("a button is down");
+    world.report(mouse::Kind::LeftUp, held.column, held.row);
+}
+
+#[then("no drag is held")]
+fn no_drag_is_held(world: &mut CrimeWorld) {
+    assert_eq!(world.pointer.held, None);
 }
 
 #[when(expr = "I drag across the row {string} in the file tree pane")]

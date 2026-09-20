@@ -387,3 +387,158 @@ Feature: The whole TUI is usable with the mouse
       Given the terminal program asked for "no" mouse reporting
       When I scroll right with the pointer over the terminal pane
       Then nothing reached the terminal program
+
+  Rule: A drag held past a pane's edge keeps selecting
+
+    A selection belongs to the pane its button went down in, for as long as the
+    button is held, wherever the pointer wanders — the rule the minimap already
+    follows for its own gesture, generalised to text. Without it the pane was
+    resolved against where the pointer is now, so a drag out of the editor was
+    handed to whichever pane it crossed and the selection stopped growing.
+
+    Held at or past that pane's first or last row of text, or its first or last
+    column, the view moves one step that way and the selection follows, for as
+    long as it is held there — a pointer held still sends no further reports, so
+    nothing else could move it. A corner moves both axes. It stops when the
+    pointer comes back inside the pane, when the button is released, and at the
+    ends of the text rather than running on into nothing.
+
+    Scenario: A drag that leaves the editor keeps selecting in the editor
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor with 12 lines
+      When I press at line 1 column 1 in the editor pane
+      And I drag past the bottom of the editor pane
+      Then the editor view starts at line 2
+      And the terminal pane did not scroll
+      And the editor pane has focus
+      And the selection holds:
+        """
+        line 1
+        line 2
+        line 3
+        line 4
+        line 5
+        line 6
+        l
+        """
+
+    Scenario: A drag held below the editor keeps scrolling while nothing moves
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor with 12 lines
+      When I press at line 1 column 1 in the editor pane
+      And I drag past the bottom of the editor pane
+      And I hold the drag still for 2 ticks
+      Then the editor view starts at line 4
+
+    Scenario: A drag held above the editor scrolls it back
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor with 12 lines
+      And I scroll down 4 times with the pointer over the editor pane
+      When I press at line 6 column 1 in the editor pane
+      And I drag past the top of the editor pane
+      And I hold the drag still for 1 ticks
+      Then the editor view starts at line 3
+
+    Scenario: A drag held past the right edge slides the view sideways
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor holding a 40-character line above a short one
+      When I press at line 1 column 1 in the editor pane
+      And I drag past the right of the editor pane
+      And I hold the drag still for 1 ticks
+      Then the editor view starts at column 3
+
+    Scenario: A drag held into a corner moves both ways
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/wide.js" is open in the editor with 12 lines of 40 characters
+      When I press at line 2 column 2 in the editor pane
+      And I drag past the bottom-right of the editor pane
+      Then the editor view starts at line 2
+      And the editor view starts at column 2
+
+    Scenario: A drag brought back inside the pane stops moving the view
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor with 12 lines
+      When I press at line 1 column 1 in the editor pane
+      And I drag past the bottom of the editor pane
+      And I drag to line 3 column 4 in the editor pane
+      Then no drag is held
+      And the editor view starts at line 2
+
+    Scenario: A released drag stops moving the view and keeps what it selected
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor with 12 lines
+      When I press at line 1 column 1 in the editor pane
+      And I drag past the bottom of the editor pane
+      And I release the mouse
+      Then no drag is held
+      And the selection holds:
+        """
+        line 1
+        line 2
+        line 3
+        line 4
+        line 5
+        line 6
+        l
+        """
+
+    Scenario: A drag held past the last line stops at the end of the text
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor with 12 lines
+      When I press at line 1 column 1 in the editor pane
+      And I drag past the bottom of the editor pane
+      And I hold the drag still for 6 ticks
+      Then the editor view starts at line 7
+      And the cursor is at line 12 column 1
+      And no drag is held
+
+    Scenario: Copying after a held drag yields everything it covered
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor with 12 lines
+      When I press at line 1 column 1 in the editor pane
+      And I drag past the bottom-right of the editor pane
+      And I hold the drag still for 6 ticks
+      And I release the mouse
+      And I copy the selection
+      Then the clipboard holds:
+        """
+        line 1
+        line 2
+        line 3
+        line 4
+        line 5
+        line 6
+        line 7
+        line 8
+        line 9
+        line 10
+        line 11
+        line 12
+        """
+
+    Scenario: A drag held at the tree's edge scrolls the tree
+      Given the screen is 12 rows by 80 columns
+      And the workspace folder holds 12 files
+      When I press at line 1 column 1 in the file tree pane
+      And I drag past the bottom of the file tree pane
+      And I hold the drag still for 1 ticks
+      Then the tree selection is "file-06.js"
+      And the file tree view starts at row 3
+
+    Scenario: A drag that stays inside the pane holds nothing
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor with 12 lines
+      When I press at line 2 column 3 in the editor pane
+      And I drag to line 4 column 5 in the editor pane
+      Then no drag is held
+      And the editor view starts at line 1

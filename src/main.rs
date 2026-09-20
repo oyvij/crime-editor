@@ -828,6 +828,7 @@ fn run(
     let started = Instant::now();
     let mut last_git = Instant::now();
     let mut last_tick = Instant::now();
+    let mut last_drag = Instant::now();
     let mut last_position = Instant::now();
     let mut last_shape = (0usize, 0usize);
     // Polling stays at 16ms so input latency is unchanged; it is the *draw* —
@@ -861,6 +862,7 @@ fn run(
         dirty |= resize_panes(&mut terminal, &state, &mut edge, &mut queue);
 
         queue_tick(&state, &mut last_tick, &mut queue);
+        dirty |= queue_held_drag(&state, &mut edge, &mut last_drag, &mut queue);
         dirty |= queue_settled_search(&state, &root, &mut edge, &mut queue);
         dirty |= queue_due_windows(&mut edge, &mut queue);
         dirty |= drain_panes(&state, &mut edge, &mut queue);
@@ -924,6 +926,32 @@ fn queue_tick(state: &State, last_tick: &mut Instant, queue: &mut VecDeque<Event
         *last_tick = Instant::now();
         queue.push_back(Event::Tick);
     }
+}
+
+/// The drag the pointer is holding against a pane's edge, reported again. A
+/// terminal sends nothing while nothing moves, so a pointer held just past the
+/// border would otherwise scroll one step and stop — and the step is the
+/// library's to decide, which is why this replays the report it already routed
+/// rather than working a row out here. Bounded exactly as the spinner above is:
+/// `mouse::dragged` clears `held` on every drag that is not against an edge and
+/// on the release, so with nothing held this fires nothing and idle CPU is
+/// unchanged.
+fn queue_held_drag(
+    state: &State,
+    edge: &mut Edge,
+    last_drag: &mut Instant,
+    queue: &mut VecDeque<Event>,
+) -> bool {
+    let Some(input) = edge.pointer.held else {
+        return false;
+    };
+    if last_drag.elapsed() < SPIN {
+        return false;
+    }
+    *last_drag = Instant::now();
+    let before = queue.len();
+    route_mouse(state, edge, input, queue);
+    queue.len() != before
 }
 
 /// A query whose typing has stopped long enough to be worth searching for.
@@ -2178,6 +2206,26 @@ fn translate_mouse(
         | MouseEventKind::Up(MouseButton::Right)
         | MouseEventKind::Drag(MouseButton::Right) => return,
     };
+    route_mouse(
+        state,
+        edge,
+        mouse::Input {
+            kind,
+            column: mouse.column,
+            row: mouse.row,
+            // Through `terminput`, for the reason a key goes through it: the
+            // modifiers a mouse report carries are the terminal library's to
+            // decode, and which of them means something is `mouse`'s to say.
+            modifiers: to_terminput_mouse(mouse).modifiers,
+        },
+        queue,
+    );
+}
+
+/// Hands one decoded report to the library and fulfils what comes back. Split
+/// from the decoding above because a held drag is replayed through here on a
+/// cadence with no crossterm event behind it.
+fn route_mouse(state: &State, edge: &mut Edge, input: mouse::Input, queue: &mut VecDeque<Event>) {
     let panes = layout::panes(
         edge.area.width,
         edge.area.height,
@@ -2190,20 +2238,7 @@ fn translate_mouse(
             corner: state.corner,
         },
     );
-    let outcome = mouse::on_mouse(
-        state,
-        &panes,
-        &mut edge.pointer,
-        mouse::Input {
-            kind,
-            column: mouse.column,
-            row: mouse.row,
-            // Through `terminput`, for the reason a key goes through it: the
-            // modifiers a mouse report carries are the terminal library's to
-            // decode, and which of them means something is `mouse`'s to say.
-            modifiers: to_terminput_mouse(mouse).modifiers,
-        },
-    );
+    let outcome = mouse::on_mouse(state, &panes, &mut edge.pointer, input);
     queue.extend(outcome.events);
     if let Some(selection) = outcome.select {
         if let Some(lines) = grid_lines(edge, selection.pane, state.split(), selection.to.line) {
