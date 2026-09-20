@@ -61,6 +61,17 @@ different child: bounded by construction rather than by discipline, on the same 
 gone the moment the sound is. It is named here rather than left implicit because the rule reads "a
 job in flight" and a player is not a job — the shape is what generalises, not the word.
 
+**A held drag is the same exception a third time, and the widening is the same shape.** A drag held
+at or past a pane's edge has to keep scrolling while the pointer stays still, and a pointer that is
+not moving is a pointer the terminal reports nothing about — so without a cadence there is nothing to
+move it, and a drag parked one row past the border sits there doing nothing. The edge reports the
+held drag again while, and only while, it is holding one: `mouse::Pointer::held` names the report,
+`mouse::dragged` clears it on every drag that is not pushing and on the release, and the core decides
+what the step is. Bounded twice over, in fact — the button ends it, and so does the text, because the
+step at the end of a buffer lands where the drag already is and nothing is held for a view that
+cannot move. Named here for the reason the Reading is: the rule reads "a job in flight", and a drag
+is no more a job than a player is.
+
 **Never parse per frame still holds too, and harder.** The analysis is cached against the commit it
 was computed at, and a save marks the figure stale rather than starting a job. Re-analysing a
 workspace per keystroke-batch is the failure mode this rule was written for, and a figure that churns

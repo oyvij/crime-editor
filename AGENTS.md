@@ -182,8 +182,10 @@ its modes — comes back in as an `Event` or is answered as data the library dec
   only the last: the editor's top border is row 0 of the screen, so there is nothing above it to
   drag onto. The edge remembers the report and plays it again on the cadence above rather than
   working a row out itself — a pointer held still sends nothing, and arithmetic in `main.rs` is
-  arithmetic without a test. How many rows and columns a pane's text has is
-  `crate::fits_in` against the very rectangles the renderer drew, never a count of its own.
+  arithmetic without a test. Where a pane's text starts and how much of it there is, is
+  `mouse::text_area` — the one rectangle `place_in` reads a screen cell against and a drag runs out
+  of, counted by `crate::fits_in` off the very rectangles the renderer drew. Two derivations of where
+  text begins is a click landing a column off the row it copies.
 - **A mouse report is bytes, so it is the library's to build.** `mouse::report` encodes it and the
   core returns it as the same `SendKeys` effect keystrokes use, which is what puts the encoding
   under a test that watches bytes reach a pane. The encoding is the child's choice, never ours:

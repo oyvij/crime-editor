@@ -451,6 +451,16 @@ Feature: The whole TUI is usable with the mouse
       And I hold the drag still for 1 ticks
       Then the editor view starts at column 3
 
+    Scenario: A drag held past the left edge brings a slid view back
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor holding a 40-character line above a short one
+      And I scroll right 2 times with the pointer over the editor pane
+      When I press at line 1 column 5 in the editor pane
+      And I drag past the left of the editor pane
+      And I hold the drag still for 1 ticks
+      Then the editor view starts at column 15
+
     Scenario: A drag held into a corner moves both ways
       Given the screen is 12 rows by 80 columns
       And the minimap is turned off
@@ -469,6 +479,31 @@ Feature: The whole TUI is usable with the mouse
       And I drag to line 3 column 4 in the editor pane
       Then no drag is held
       And the editor view starts at line 2
+
+    Scenario: A drag that leaves the pane again picks the motion back up
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor with 12 lines
+      When I press at line 1 column 1 in the editor pane
+      And I drag past the bottom of the editor pane
+      And I drag to line 3 column 4 in the editor pane
+      And I drag past the bottom of the editor pane
+      Then the editor view starts at line 3
+
+    # The other reading of "the last row of text is the trigger, not the border
+    # row": the *first* row of text is a trigger too, so a drag along the top
+    # visible line of a buffer that has somewhere to go scrolls it back. Pinned
+    # rather than left to chance — it is the one place this Rule is visible
+    # inside the pane, and the editor's top border is row 0 of the screen, so
+    # there is nothing above it to drag onto instead.
+    Scenario: A drag along the top visible line of a scrolled buffer scrolls it back
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor with 12 lines
+      And I scroll down 4 times with the pointer over the editor pane
+      When I press at line 5 column 2 in the editor pane
+      And I drag to line 5 column 4 in the editor pane
+      Then the editor view starts at line 4
 
     Scenario: A released drag stops moving the view and keeps what it selected
       Given the screen is 12 rows by 80 columns
