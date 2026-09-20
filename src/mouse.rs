@@ -166,6 +166,27 @@ pub struct Pointer {
     /// Where and when the last press landed, so a second press on the same cell
     /// inside the double-tap window is one gesture rather than two.
     last_press: Option<(u16, u16, u64)>,
+    /// Which pane the button went down in. A drag belongs to it for as long as
+    /// the button is held, wherever the pointer wanders — the rule the minimap
+    /// arm in [`dragged`] already applies to its own gesture. Without it the
+    /// pane was resolved against where the pointer is *now*, so a selection
+    /// dragged out of the editor was handed to whatever pane it crossed, or to
+    /// no pane at all, and stopped growing.
+    pane: Option<Pane>,
+    /// Where in the pane's own text the drag started, resolved once. Not
+    /// `drag_from`, which is a screen cell: the two agree only while the view
+    /// stands still, and the whole point of a held drag is that it does not —
+    /// an anchor re-read off row three of a pane that has scrolled four lines
+    /// names a different character every tick, so the selection eats itself
+    /// from the top.
+    anchor: Option<Place>,
+    /// The last drag report while the button is held at or past its pane's
+    /// edge. The edge replays it on a cadence, which is the only thing that can
+    /// move a drag held *still*: a terminal reports nothing while nothing
+    /// moves. Bounded by the button the way the spinner is bounded by its job
+    /// (`docs/adr/0009-a-spinner-is-bounded-by-its-job.md`) — no drag, no
+    /// `held`, and idle CPU is unchanged.
+    pub held: Option<Input>,
 }
 
 // No `Eq`: an `Event` carries a speed, which is a float.
@@ -194,6 +215,13 @@ pub fn on_mouse(state: &State, panes: &Layout, pointer: &mut Pointer, input: Inp
     // in a pane: a move over anything but the editor's text is the pointer
     // leaving, which is what takes a box it rested for down.
     if input.kind == Kind::Moved {
+        // Nothing is held any more: motion with no button down is what the
+        // terminal reports, and it is the one end condition a drag has that
+        // does not depend on seeing the release. A pointer dragged off the
+        // window keeps scrolling — which is what every editor does — but a
+        // terminal that never reported the release outside its own window
+        // would otherwise leave it scrolling for good.
+        pointer.held = None;
         let mut events = vec![Event::PointerMoved(resting(state, panes, input))];
         events.extend(hovered(state, panes, input));
         let icon = action_under(state, panes, input);
@@ -228,8 +256,16 @@ pub fn on_mouse(state: &State, panes: &Layout, pointer: &mut Pointer, input: Inp
     if let Some(outcome) = divider_drag(panes, pointer, input) {
         return outcome;
     }
-    let Some(pane) = layout::pane_at(panes, input.column, input.row) else {
-        return Outcome::default();
+    // A drag belongs to the pane its button went down in, for as long as the
+    // button is held. Resolved once at the press rather than per report: past
+    // the pane's border the pointer is over a neighbour, or over the gap
+    // between them, and either answer ends the gesture the person is making.
+    let pane = match (input.kind, pointer.pane) {
+        (Kind::LeftDrag | Kind::LeftUp, Some(pane)) => pane,
+        _ => match layout::pane_at(panes, input.column, input.row) {
+            Some(pane) => pane,
+            None => return Outcome::default(),
+        },
     };
     in_pane(state, panes, pointer, pane, input)
 }
@@ -327,6 +363,9 @@ fn in_pane(
             // Where the button went down is where a selection starts. Waiting
             // for the first drag report anchors it a character late.
             pointer.drag_from = Some((input.column, input.row));
+            pointer.pane = Some(pane);
+            pointer.anchor = None;
+            pointer.held = None;
             pointer.dragged = false;
             let doubled = pointer.last_press.is_some_and(|(column, row, ms)| {
                 (column, row) == (input.column, input.row)
@@ -371,6 +410,9 @@ fn in_pane(
             // whatever a text selection started on.
             let tapped = !pointer.dragged;
             pointer.drag_from = None;
+            pointer.pane = None;
+            pointer.anchor = None;
+            pointer.held = None;
             pointer.dragged = false;
             let at = place_in(state, panes, pane, (input.column, input.row));
             // The jump modifier's click on a pty is a question about the text
@@ -563,6 +605,10 @@ fn dragged(
     input: Input,
 ) -> Outcome {
     let from = *pointer.drag_from.get_or_insert((input.column, input.row));
+    // Nothing is held until an arm below says it is: the two surfaces that
+    // scroll under a drag set this, and every other one leaving it clear is
+    // what bounds the edge's cadence by construction.
+    pointer.held = None;
     // By pane, exhaustively: a fall-through arm here handed every pane nobody
     // had thought about a span of characters to read, which is how the Buffers
     // pane arrived copying the shell's grid.
@@ -570,8 +616,26 @@ fn dragged(
         // A filename is not text you copy character by character, so a drag in
         // the tree moves the row selection.
         Pane::Tree => {
-            let index = row_index(state, panes, input.row);
-            Outcome::of(match tree::visible_rows(state).get(index) {
+            let rows = tree::visible_rows(state);
+            let text = text_area(state, panes, pane);
+            let (vertical, _) = push(text, input);
+            // The row under the pointer, bounded by the rows on screen, and
+            // one past that while the drag is held at either end. No
+            // scrolling of its own: the clamp in `settle` keeps the tree
+            // selection visible, so moving the selection *is* the scroll —
+            // the same rule that makes the Down arrow scroll the tree.
+            let at = row_index(state, panes, clamped(input.row, text.y, text.bottom()));
+            let stepped = match vertical {
+                Some(Direction::Up) => at.saturating_sub(1),
+                Some(Direction::Down) => (at + 1).min(rows.len().saturating_sub(1)),
+                Some(Direction::Left) | Some(Direction::Right) | None => at,
+            };
+            // Held only while the next step is a row somewhere else: at either
+            // end of the list it is the row the drag is already on, so the
+            // cadence stops with the list rather than turning for as long as a
+            // button is down.
+            pointer.held = (stepped != at).then_some(input);
+            Outcome::of(match rows.get(stepped) {
                 Some(row) => vec![Event::DragRow(row.path.clone())],
                 None => vec![],
             })
@@ -606,18 +670,77 @@ fn dragged(
             // The editor needs nothing read off a screen: the span names lines
             // and columns of a buffer this crate already holds, so the drag
             // finishes here.
-            match state.current_buffer {
-                Some(_) => {
-                    let (from, to) = span(state, panes, pane, from, input);
-                    Outcome::of(vec![Event::DragText { from, to }])
-                }
-                None => Outcome::default(),
+            if state.current_buffer.is_none() {
+                return Outcome::default();
             }
+            let text = text_area(state, panes, pane);
+            // A diff has no cursor to place, so there is nothing for the clamp
+            // in `settle` to follow and nothing here can scroll it.
+            let (vertical, horizontal) = match state.diff.is_some() {
+                true => (None, None),
+                false => push(text, input),
+            };
+            let (at, end) = match vertical.is_some() || horizontal.is_some() {
+                // The pointer brought back onto the text before it is read as
+                // a place, and then one step past it: a drag ten rows below
+                // the pane is still one step, because the rate is fixed and
+                // the view has to keep up with whatever the selection names.
+                true => {
+                    let at = bounded(
+                        state,
+                        place_in(
+                            state,
+                            panes,
+                            pane,
+                            (
+                                clamped(input.column, text.x, text.right()),
+                                clamped(input.row, text.y, text.bottom()),
+                            ),
+                        ),
+                    );
+                    (at, bounded(state, nudge(at, vertical, horizontal)))
+                }
+                // A drag inside the pane is the drag it always was: neither
+                // clamped nor bounded, because both would change where it
+                // lands, and this is the arm that has to behave exactly as it
+                // did. It is also the one place a drag can be outside the text
+                // without pushing, which is a diff.
+                false => {
+                    let at = place_in(state, panes, pane, (input.column, input.row));
+                    (at, at)
+                }
+            };
+            // Held only while the step lands somewhere new. At the end of the
+            // text it lands where the drag already is, so the selection stops
+            // growing, no caret is moved to where it already sits, and the
+            // cadence stops with it: bounded by the text and not only by the
+            // button. It is also what keeps a drag on the first visible row of
+            // an unscrolled buffer the ordinary drag it looks like.
+            pointer.held = (end != at).then_some(input);
+            let anchor = *pointer
+                .anchor
+                .get_or_insert_with(|| place_in(state, panes, pane, from));
+            let mut events = Vec::new();
+            // The caret goes where the drag has got to, but only while it is
+            // pushing — that is the whole of the scrolling. `settle` pulls the
+            // view back over the caret on every event a person caused, so a
+            // caret one place past the edge is a view one step further on. A
+            // drag that stays inside the pane moves no caret and behaves
+            // exactly as it did.
+            if pointer.held.is_some() {
+                events.push(Event::ClickText(end));
+            }
+            let (from, to) = order(anchor, end);
+            events.push(Event::DragText { from, to });
+            Outcome::of(events)
         }
         // A pty's cells are the child's, so this half of the drag is the edge's
         // to finish.
         Pane::Terminal | Pane::Ai => {
-            let (from, to) = span(state, panes, pane, from, input);
+            let (from, to) = order(
+                place_in(state, panes, pane, from),
+                place_in(state, panes, pane, (input.column, input.row)),
+            );
             Outcome {
                 events: Vec::new(),
                 select: Some(Selection { pane, from, to }),
@@ -643,20 +766,92 @@ fn minimap_row(strip: Area, row: u16) -> u32 {
 /// The span a drag covers, ordered so `from` is the earlier place however the
 /// pointer travelled — a drag upwards names the same characters as the drag
 /// back down over them.
-fn span(
-    state: &State,
-    panes: &Layout,
-    pane: Pane,
-    from: (u16, u16),
-    input: Input,
-) -> (Place, Place) {
-    let (start, end) = (
-        place_in(state, panes, pane, from),
-        place_in(state, panes, pane, (input.column, input.row)),
-    );
+fn order(start: Place, end: Place) -> (Place, Place) {
     match (start.line, start.column) <= (end.line, end.column) {
         true => (start, end),
         false => (end, start),
+    }
+}
+
+/// A coordinate brought back inside a half-open range, whose last value is
+/// `past - 1`. Not `clamp`, which panics when the two bounds cross: a pane
+/// narrower than its own gutter has no text columns at all, and a window eight
+/// rows tall with an occupied Corner is exactly that shape.
+fn clamped(at: u16, first: u16, past: u16) -> u16 {
+    at.clamp(first, past.saturating_sub(1).max(first))
+}
+
+/// Which way a drag is pushing the view, one answer per axis: nothing while the
+/// pointer is inside the pane's text, and the direction it has run out of once
+/// it reaches the first or last row or column. The last row of *text*, not the
+/// border under it — a drag on the final visible line already means "I want
+/// what is below this". Two answers rather than one direction, because a drag
+/// into a corner moves both axes.
+fn push(text: Area, input: Input) -> (Option<Direction>, Option<Direction>) {
+    let vertical = match (input.row <= text.y, input.row + 1 >= text.bottom()) {
+        (true, _) => Some(Direction::Up),
+        (false, true) => Some(Direction::Down),
+        (false, false) => None,
+    };
+    let horizontal = match (input.column <= text.x, input.column + 1 >= text.right()) {
+        (true, _) => Some(Direction::Left),
+        (false, true) => Some(Direction::Right),
+        (false, false) => None,
+    };
+    (vertical, horizontal)
+}
+
+/// A held drag's place, bounded by the text there is: below the last row, or
+/// past the end of the row it lands on, it asks for that same place every tick
+/// rather than running off into text nobody can see while the caret and the
+/// view have both already stopped. That equality is what ends the cadence, so
+/// a surface left unbounded here is a surface a held drag scrolls for ever.
+///
+/// A Preview is bounded against its *rows*, which costs the markdown parse ADR
+/// 0007 warns about paying twice in an event. Paid anyway, and only on a report
+/// that is actually pushing: a `Place` in a Preview is a rendered row and not a
+/// source line, so the buffer's lines are the wrong ruler — and unbounded is
+/// not a cheaper answer, it is a drag that nothing stops.
+fn bounded(state: &State, at: Place) -> Place {
+    let lines: Vec<String> = match crate::previewing(state) {
+        true => crate::preview_rows(state)
+            .iter()
+            .map(crate::preview::Row::text)
+            .collect(),
+        false => match crate::current_buffer(state) {
+            Some(buffer) => buffer.shown().split('\n').map(str::to_string).collect(),
+            None => return at,
+        },
+    };
+    let line = at.line.clamp(1, lines.len().max(1));
+    Place {
+        line,
+        // One past the last character, which is where a caret at the end of a
+        // row sits and where a span that takes the whole row ends.
+        column: at.column.min(
+            lines
+                .get(line - 1)
+                .map_or(1, |text| text.chars().count() + 1),
+        ),
+    }
+}
+
+/// The place a drag held against an edge names: one step past the last one on
+/// screen, which is the character the reader is asking to see. One step per
+/// report and per tick whatever the pointer's distance — a fixed rate, so the
+/// selection and the view move together.
+fn nudge(at: Place, vertical: Option<Direction>, horizontal: Option<Direction>) -> Place {
+    Place {
+        line: match vertical {
+            Some(Direction::Up) => at.line.saturating_sub(1).max(1),
+            Some(Direction::Down) => at.line + 1,
+            Some(Direction::Left) | Some(Direction::Right) | None => at.line,
+        },
+        column: match horizontal {
+            Some(Direction::Left) => at.column.saturating_sub(1).max(1),
+            Some(Direction::Right) => at.column + 1,
+            Some(Direction::Up) | Some(Direction::Down) | None => at.column,
+        },
     }
 }
 
@@ -692,43 +887,68 @@ fn resting(state: &State, panes: &Layout, input: Input) -> Option<Place> {
 /// Exhaustive on purpose: the AI pane used to fall into the terminal's arm, so
 /// every drag in it asked for a span of the wrong rectangle.
 fn place_in(state: &State, panes: &Layout, pane: Pane, (column, row): (u16, u16)) -> Place {
-    let (area, gutter, scroll, sideways) = match pane {
-        Pane::Editor => (
-            panes.editor,
-            // A Preview draws no line-number gutter, so its rows start five
-            // columns to the left of Source's — the same reason `ui` and this
-            // hit-test both ask `layout::gutter` rather than each assuming
-            // `GUTTER`.
-            crate::gutter(state),
-            state.editor_scroll,
-            state.editor_hscroll,
-        ),
-        Pane::Ai => (panes.ai, 0, 0, 0),
-        // The split with the keyboard, which the press that began any drag
-        // here has already chosen.
-        Pane::Terminal => (
-            crate::layout::split(panes.terminal, state.terminals.len(), state.split()),
-            0,
-            0,
-            0,
-        ),
-        // A pane holding rows reaches this only for the wheel's `at`, which
-        // nothing but a pty reads: `dragged` answers by pane before a span is
-        // ever built out of one. Each still answers in its own rectangle —
-        // pointing the corner's panes at the shell's is what made a drag in
-        // them a span of characters nobody had pointed at.
-        Pane::Tree => (panes.tree, 0, 0, 0),
-        Pane::Risk | Pane::Buffers | Pane::History => (panes.corner, 0, 0, 0),
+    let text = text_area(state, panes, pane);
+    let (scroll, sideways) = match pane {
+        Pane::Editor => (state.editor_scroll, state.editor_hscroll),
+        Pane::Tree | Pane::Ai | Pane::Terminal | Pane::Risk | Pane::Buffers | Pane::History => {
+            (0, 0)
+        }
     };
     Place {
         // Through `line_at_row`, not straight off the row: Story view draws
         // comment rows between the lines, so the inverse of what the caret and
         // the scroll clamp use. The identity in every other view.
-        line: crate::story::line_at_row(
-            state,
-            row.saturating_sub(area.y + 1) as usize + 1 + scroll,
-        ),
-        column: column.saturating_sub(area.x + 1 + gutter) as usize + 1 + sideways,
+        line: crate::story::line_at_row(state, row.saturating_sub(text.y) as usize + 1 + scroll),
+        column: column.saturating_sub(text.x) as usize + 1 + sideways,
+    }
+}
+
+/// Where a pane's text sits on screen: the interior of its rectangle, past
+/// whatever chrome is drawn inside the borders. One answer, because the two
+/// questions asked of it are the same question — where a screen cell falls in
+/// the text, and which cell is the last one there is — and deriving the origin
+/// twice is how a click comes to land a column off the row it extracts. The
+/// one-layout rule, one pane in.
+///
+/// Every pane answers, in its own rectangle: pointing the corner's panes at the
+/// shell's is what made a drag in them a span of characters nobody had pointed
+/// at. Only the two that scroll under a drag count their rows off
+/// [`crate::fits_in`] — the counts the scroll clamp and the renderer read —
+/// because only those two have chrome inside the borders that is not text: the
+/// editor's line-number gutter and the mirror down its right-hand side, and
+/// the filter box at the foot of the tree.
+fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
+    let (tree_rows, editor_rows, editor_columns) = crate::fits_in(state, panes);
+    let interior = |area: Area| Area {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+    match pane {
+        Pane::Editor => Area {
+            // A Preview draws no line-number gutter, so its rows start five
+            // columns to the left of Source's — the same reason `ui` and this
+            // hit-test both ask `layout::gutter` rather than each assuming
+            // `GUTTER`.
+            x: panes.editor.x + 1 + crate::gutter(state),
+            y: panes.editor.y + 1,
+            width: editor_columns as u16,
+            height: editor_rows as u16,
+        },
+        Pane::Tree => Area {
+            height: tree_rows as u16,
+            ..interior(panes.tree)
+        },
+        Pane::Ai => interior(panes.ai),
+        // The split with the keyboard, which the press that began any drag
+        // here has already chosen.
+        Pane::Terminal => interior(crate::layout::split(
+            panes.terminal,
+            state.terminals.len(),
+            state.split(),
+        )),
+        Pane::Risk | Pane::Buffers | Pane::History => interior(panes.corner),
     }
 }
 
@@ -955,10 +1175,11 @@ pub fn gutter_range(
 #[cfg(test)]
 mod tests {
     use super::{
-        on_mouse, palette_entry_at, place_in, report, Divider, Encoding, Gesture, Input,
+        on_mouse, palette_entry_at, place_in, push, report, Divider, Encoding, Gesture, Input,
         KeyModifiers, Kind, Outcome, Pointer,
     };
     use crate::layout::panes;
+    use crate::layout::Area;
     use crate::layout::{AiPane, Shapes};
     use crate::tree::Entry;
     use crate::Direction;
@@ -2345,12 +2566,15 @@ mod tests {
         assert!(outcome.select.is_none(), "no pty to read");
     }
 
+    /// Both drags well inside the pane, because the first row and the first
+    /// column of text are the edges a held drag pushes against — the span is
+    /// what this is about, and a drag that autoscrolls also places a caret.
     #[test]
     fn dragging_upward_covers_what_dragging_downward_covers() {
         let state = editing();
         assert_eq!(
-            drag(&state, (40, 3), (36, 1)).events,
-            drag(&state, (36, 1), (40, 3)).events
+            drag(&state, (44, 3), (40, 2)).events,
+            drag(&state, (40, 2), (44, 3)).events
         );
     }
 
@@ -2361,10 +2585,10 @@ mod tests {
         let mut scrolled = editing();
         scrolled.editor_scroll = 4;
         assert_eq!(
-            drag(&scrolled, (36, 1), (36, 1)).events,
+            drag(&scrolled, (40, 2), (40, 2)).events,
             vec![Event::DragText {
-                from: Place { line: 5, column: 1 },
-                to: Place { line: 5, column: 1 },
+                from: Place { line: 6, column: 2 },
+                to: Place { line: 6, column: 2 },
             }]
         );
     }
@@ -2377,15 +2601,15 @@ mod tests {
         let mut scrolled = editing();
         scrolled.editor_hscroll = 12;
         assert_eq!(
-            drag(&scrolled, (36, 1), (36, 1)).events,
+            drag(&scrolled, (40, 2), (40, 2)).events,
             vec![Event::DragText {
                 from: Place {
-                    line: 1,
-                    column: 13
+                    line: 2,
+                    column: 14
                 },
                 to: Place {
-                    line: 1,
-                    column: 13
+                    line: 2,
+                    column: 14
                 },
             }]
         );
@@ -2675,5 +2899,39 @@ mod tests {
     #[test]
     fn a_click_outside_every_pane_does_nothing() {
         assert!(click(&workspace(), 200, 5).is_empty());
+    }
+
+    /// The four edges and the inside, on one rectangle: the sideways pair has
+    /// no scenario of its own on the left, and a corner has to answer twice.
+    #[test]
+    fn a_drag_pushes_at_the_edges_of_the_text_and_nowhere_inside() {
+        let text = Area {
+            x: 10,
+            y: 4,
+            width: 6,
+            height: 5,
+        };
+        let at = |column, row| {
+            push(
+                text,
+                Input {
+                    kind: Kind::LeftDrag,
+                    column,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                },
+            )
+        };
+        assert_eq!(at(12, 6), (None, None), "inside");
+        assert_eq!(at(12, 4), (Some(Direction::Up), None), "the first row");
+        assert_eq!(at(12, 8), (Some(Direction::Down), None), "the last row");
+        assert_eq!(at(12, 40), (Some(Direction::Down), None), "far below");
+        assert_eq!(at(10, 6), (None, Some(Direction::Left)), "the first column");
+        assert_eq!(at(15, 6), (None, Some(Direction::Right)), "the last column");
+        assert_eq!(
+            at(15, 8),
+            (Some(Direction::Down), Some(Direction::Right)),
+            "a corner moves both"
+        );
     }
 }

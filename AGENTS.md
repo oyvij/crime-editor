@@ -172,6 +172,20 @@ its modes — comes back in as an `Event` or is answered as data the library dec
   whatever the selection started on, because a drag begins with a press. `Pointer::dragged` tells the
   two apart, and the report carries press and release together, since a child left holding a button
   reads the next move as a drag of its own.
+- **A drag belongs to the pane its button went down in, and the edge tells it where it is held.**
+  `mouse::Pointer::pane` is resolved once, at the press; resolving it per report handed a selection
+  dragged out of the editor to whatever pane it crossed, or to no pane at all, and it stopped
+  growing. Held at or past that pane's first or last row or column of text, the drag names the place
+  one step further on and moves the *caret* there — nothing scrolls a view directly, because
+  `settle` already pulls both offsets back over the caret and the tree's selection, and a second
+  author for an offset is a click landing a row off. The first row of text is a trigger and not
+  only the last: the editor's top border is row 0 of the screen, so there is nothing above it to
+  drag onto. The edge remembers the report and plays it again on the cadence above rather than
+  working a row out itself — a pointer held still sends nothing, and arithmetic in `main.rs` is
+  arithmetic without a test. Where a pane's text starts and how much of it there is, is
+  `mouse::text_area` — the one rectangle `place_in` reads a screen cell against and a drag runs out
+  of, counted by `crate::fits_in` off the very rectangles the renderer drew. Two derivations of where
+  text begins is a click landing a column off the row it copies.
 - **A mouse report is bytes, so it is the library's to build.** `mouse::report` encodes it and the
   core returns it as the same `SendKeys` effect keystrokes use, which is what puts the encoding
   under a test that watches bytes reach a pane. The encoding is the child's choice, never ours:
@@ -220,10 +234,12 @@ its modes — comes back in as an `Event` or is answered as data the library dec
   other redraw source**, so a spinner can turn while an analysis runs and a Reading's place can
   follow the voice while a passage plays
   (`docs/adr/0009-a-spinner-is-bounded-by-its-job.md`): the edge queues `Event::Tick` while — and
-  only while — it holds work, and `Event::Speaking` while — and only while — it holds a player, so
-  the exception is bounded by construction rather than by discipline, and with nothing in flight the
-  rule above is the whole of it. Both are on the same 80ms cadence: a spinner's blade and a mark
-  that moves once a sentence are neither of them worth sixty frames a second. A tick is an event like any other, so
+  only while — it holds work, and `Event::Speaking` while — and only while — it holds a player, and
+  it reports a held drag again while — and only while — `mouse::Pointer::held` names one, so the
+  exception is bounded by construction rather than by discipline, and with nothing in flight the
+  rule above is the whole of it. All three are on the same 80ms cadence: a spinner's blade, a mark
+  that moves once a sentence and a selection creeping a line at a time are none of them worth sixty
+  frames a second. A tick is an event like any other, so
   it is batched, not drawn on its own.
 - **One frame per batch of input, never one per event.** `pump` drains everything crossterm already
   has (up to `INPUT_BATCH`) before drawing. A trackpad flick arrives as hundreds of wheel events and
