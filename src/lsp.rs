@@ -2168,7 +2168,7 @@ fn broken(row: preview::Row, measure: usize) -> Vec<preview::Row> {
     {
         return vec![row];
     }
-    preview::wrapped(&row.pieces, measure)
+    preview::wrapped(&row.pieces, textwrap::Options::new(measure))
         .into_iter()
         .map(|pieces| preview::Row {
             pieces,

@@ -100,7 +100,7 @@ in either direction still starts at column one**: the row map carries no source 
 nothing to carry across, and an offset taken while reading a fence must not survive the toggle as a
 sideways jump nobody asked for. And the columns are counted in **characters**, not display width,
 because everything a column meets here counts characters — `search::occurrences`, `editor::span_text`,
-`ui::shift` and the drag that reads them all do. `preview::truncate_pieces` and `fit_cell` use
+`ui::shift` and the drag that reads them all do. `preview`'s table layout uses
 unicode-width, and that is a different question about how wide a cell *draws*, not about which
 character a column names.
 
