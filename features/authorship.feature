@@ -1,11 +1,11 @@
-Feature: Git blame
+Feature: Authorship
 
   The editor's top border says who last committed the line the cursor is on, and the date they
   wrote it, so reading unfamiliar code answers "who do I ask about this" without leaving the file.
-  Which authorship the border reports is what is asserted; the wording and where it is cut are the
+  Which Authorship the border reports is what is asserted; the wording and where it is cut are the
   edge's, pinned in a unit test.
 
-  It is the *committed* file's blame, so a buffer line has to be traced back through the diff before
+  It is the *committed* file's answer, so a buffer line has to be traced back through the diff before
   it names anybody: a line inserted above the cursor would otherwise hand the cursor's line the
   author of the line above it. A line the working tree has changed, and a line in a file the commit
   has no copy of, are nobody's yet. Outside a repository, and without git, the border says nothing
@@ -38,8 +38,9 @@ Feature: Git blame
     Then the editor pane reports the line as authored by "Ada Lovelace" on "2026-01-05"
 
   Scenario: Moving to a line another hand wrote changes what the border says
-    Given the cursor is at line 1 column 1
-    When the cursor is at line 2 column 1
+    Given the editor pane has focus
+    And the cursor is at line 1 column 1
+    When I press "j" in the editor
     Then the editor pane reports the line as authored by "Grace Hopper" on "2026-02-11"
 
   Scenario: A line the working tree has changed is nobody's yet
@@ -84,6 +85,11 @@ Feature: Git blame
   Scenario: Review view's title is not the editor's
     Given the cursor is at line 1 column 1
     When I switch to review view
+    Then the editor pane reports no authorship
+
+  Scenario: Story view's title is not the editor's either
+    Given the cursor is at line 1 column 1
+    When I open Story view
     Then the editor pane reports no authorship
 
   Scenario: A Preview reports the source line its row came from

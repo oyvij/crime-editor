@@ -7,7 +7,7 @@ mod ui;
 
 use anyhow::Result;
 use clap::Parser as ClapParser;
-use crime::blame;
+use crime::authorship;
 use crime::editor;
 use crime::format;
 use crime::keys::{self, Drafts};
@@ -679,12 +679,12 @@ struct Edge {
     /// not installed mid-Reading, and the refusal that says it is missing
     /// carries the install line that fixes it for good.
     player: Option<bool>,
-    /// Each open buffer's blame and the commit it was read at. Cached here
-    /// rather than read on every git poll: a blame walks a file's history, and
-    /// only a new commit can change what it answers — which is why
+    /// Each open buffer's Authorship and the commit it was read at. Cached here
+    /// rather than read on every git poll: reading it walks a file's history,
+    /// and only a new commit can change what it answers — which is why
     /// `Buffer::revision` is nowhere in this key, and why typing starts no walk
     /// (F40).
-    blamed: BTreeMap<PathBuf, (String, Vec<blame::Authored>)>,
+    authored: BTreeMap<PathBuf, (String, Vec<authorship::Authored>)>,
 }
 
 /// A Reading as audio, and everything a position report needs about it. The
@@ -795,7 +795,7 @@ fn run(
         playing: None,
         stream: None,
         player: None,
-        blamed: BTreeMap::new(),
+        authored: BTreeMap::new(),
         area: ratatui::layout::Rect::new(0, 0, size.width, size.height),
         analysed: analysed_tx,
         tested: tested_tx,
@@ -880,7 +880,7 @@ fn run(
         queue_position(&edge, &mut last_position, &mut queue);
         tell_core(&mut state, &mut edge);
         dirty |= refresh_ignored(&root, &mut state, &mut last_shape);
-        dirty |= refresh_git(&root, &mut state, &mut edge.blamed, &mut last_git);
+        dirty |= refresh_git(&root, &mut state, &mut edge.authored, &mut last_git);
         set_cursor_style(&state, &mut edge);
         cache_highlight(&state, &mut edge);
         cache_preview(&state, &mut edge);
@@ -1253,7 +1253,7 @@ fn refresh_ignored(root: &Path, state: &mut State, last_shape: &mut (usize, usiz
 fn refresh_git(
     root: &Path,
     state: &mut State,
-    blamed: &mut BTreeMap<PathBuf, (String, Vec<blame::Authored>)>,
+    authored: &mut BTreeMap<PathBuf, (String, Vec<authorship::Authored>)>,
     last_git: &mut Instant,
 ) -> bool {
     // A buffer opened since the last poll is not made to wait two seconds for
@@ -1283,22 +1283,23 @@ fn refresh_git(
     let fresh_ignored = ignored(root, &state.contents);
     let fresh_branch = head_branch(&repo);
     let fresh_committed = committed(root, state.buffers.keys());
-    // Read before the assignment below, because this poll's blame is keyed on
-    // the commit this poll found: keying it on the one the last poll left would
-    // hand back the previous commit's authors for a whole poll after a commit.
+    // Read before the assignment below, because this poll's Authorship is keyed
+    // on the commit this poll found: keying it on the one the last poll left
+    // would hand back the previous commit's authors for a whole poll after a
+    // commit.
     let head = head_commit(root);
-    let fresh_blame = blame(root, state.buffers.keys(), head.as_deref(), blamed);
+    let fresh_authorship = authorship(root, state.buffers.keys(), head.as_deref(), authored);
     let dirty = fresh != state.repo
         || fresh_hunks != state.file_hunks
         || fresh_ignored != state.ignored
         || fresh_branch != state.branch
         || fresh_committed != state.committed
-        || fresh_blame != state.blame;
+        || fresh_authorship != state.authorship;
     state.repo = fresh;
     state.file_hunks = fresh_hunks;
     state.ignored = fresh_ignored;
     state.committed = fresh_committed;
-    state.blame = fresh_blame;
+    state.authorship = fresh_authorship;
     // A commit that moved is what makes the figure worth recomputing, so the
     // core is told on the same poll rather than remembering the commit it
     // started at. The workspace's commit, not the repository under review's:
@@ -1349,12 +1350,12 @@ fn committed<'a>(
 /// buffer's edits cannot change what the commit holds, which is what keeps a
 /// keystroke off git's history. A buffer that has closed takes its entry with
 /// it, and a commit that moved drops the lot.
-fn blame<'a>(
+fn authorship<'a>(
     root: &Path,
     buffers: impl Iterator<Item = &'a PathBuf>,
     head: Option<&str>,
-    cached: &mut BTreeMap<PathBuf, (String, Vec<blame::Authored>)>,
-) -> BTreeMap<PathBuf, Vec<blame::Authored>> {
+    cached: &mut BTreeMap<PathBuf, (String, Vec<authorship::Authored>)>,
+) -> BTreeMap<PathBuf, Vec<authorship::Authored>> {
     let open: BTreeSet<&PathBuf> = buffers.collect();
     cached.retain(|path, (at, _)| Some(at.as_str()) == head && open.contains(path));
     let Some(head) = head else {
@@ -1375,7 +1376,7 @@ fn blame<'a>(
         };
         cached.insert(
             path.clone(),
-            (head.to_string(), authored(&repository, relative)),
+            (head.to_string(), authored_lines(&repository, relative)),
         );
     }
     cached
@@ -1384,24 +1385,25 @@ fn blame<'a>(
         .collect()
 }
 
-/// One file's blame, a row per line of the file as the commit holds it. Every
-/// hunk contributes exactly the lines it covers, so a commit the repository
-/// cannot read leaves those lines nobody's rather than sliding every line after
-/// them onto the wrong hand.
-fn authored(repository: &git2::Repository, relative: &Path) -> Vec<blame::Authored> {
+/// One file's Authorship, a row per line of the file as the commit holds it —
+/// git's `blame`, which is the one place that word belongs. Every hunk
+/// contributes exactly the lines it covers, so nothing can slide a line onto the
+/// wrong hand.
+fn authored_lines(repository: &git2::Repository, relative: &Path) -> Vec<authorship::Authored> {
     let Ok(blamed) = repository.blame_file(relative, None) else {
         return Vec::new();
     };
     let mut lines = Vec::new();
     for hunk in blamed.iter() {
         // A commit the blame names and the repository cannot find leaves the
-        // whole file unattributed rather than every line after it on the wrong
-        // hand: the border then says nothing, which is what it already says for
-        // a file no commit holds.
+        // whole file with no rows, so the border reads "Not committed yet" —
+        // the same thing it reads for a file no commit holds. A repository this
+        // broken is not a state worth a third wording, and the alternative is
+        // every line after the bad hunk credited to the wrong hand.
         let Ok(commit) = repository.find_commit(hunk.final_commit_id()) else {
             return Vec::new();
         };
-        let who = blame::Authored {
+        let who = authorship::Authored {
             author: commit.author().name().unwrap_or_default().to_string(),
             date: short_date(commit.author().when()),
         };
@@ -4235,7 +4237,7 @@ fn queue_story_file(path: &Path, state: &State, queue: &mut VecDeque<Event>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        alive, blame, checkout, committed, flatten, found, notice_text, pid_of, range_ends,
+        alive, authorship, checkout, committed, flatten, found, notice_text, pid_of, range_ends,
         read_branches, rewrite, samples, short_date, sidecar, space, stitch, watched_path,
     };
     use crime::risk;
@@ -4667,18 +4669,18 @@ mod tests {
         assert_eq!(found.get(&buffers[1]), Some(&None));
     }
 
-    /// F40's two reads no scenario can make, in one repository: that the blame
-    /// comes back as the hand and the day the commit names, line by line and
-    /// under the buffer's own path, and that a file the commit has no copy of
-    /// comes back empty rather than unanswered.
+    /// F40's two reads no scenario can make, in one repository: that the
+    /// Authorship comes back as the hand and the day the commit names, line by
+    /// line and under the buffer's own path, and that a file the commit has no
+    /// copy of comes back empty rather than unanswered.
     ///
     /// And the cache, which is the whole point of it: the entry is poisoned and
     /// asked for again at the same commit, so a second walk would show. That is
-    /// what "editing the buffer does not recompute the blame" comes to — the key
-    /// holds a commit and nothing about the Buffer — and a commit that moved
-    /// drops the lot.
+    /// what "editing the buffer does not recompute it" comes to — the key holds
+    /// a commit and nothing about the Buffer — and a commit that moved drops the
+    /// lot.
     #[test]
-    fn the_blame_is_read_per_commit_and_not_again_until_it_moves() {
+    fn the_authorship_is_read_per_commit_and_not_again_until_it_moves() {
         let dir = tempfile::tempdir().expect("a temp directory");
         let root = std::fs::canonicalize(dir.path()).expect("a canonical root");
         let repository = git2::Repository::init(&root).expect("a repository");
@@ -4701,19 +4703,19 @@ mod tests {
             .expect("a commit");
 
         let buffers = [root.join("a.rs"), root.join("new.rs")];
-        let ada = crime::blame::Authored {
+        let ada = crime::authorship::Authored {
             author: "Ada Lovelace".to_string(),
             date: "2026-01-05".to_string(),
         };
         let mut cached = BTreeMap::new();
-        let found = blame(&root, buffers.iter(), Some("head"), &mut cached);
+        let found = authorship(&root, buffers.iter(), Some("head"), &mut cached);
         assert_eq!(
             found.get(&buffers[0]),
             Some(&vec![ada.clone(), ada.clone()])
         );
         assert_eq!(found.get(&buffers[1]), Some(&Vec::new()));
 
-        let poison = crime::blame::Authored {
+        let poison = crime::authorship::Authored {
             author: "nobody walked this".to_string(),
             date: String::new(),
         };
@@ -4721,17 +4723,17 @@ mod tests {
             buffers[0].clone(),
             ("head".to_string(), vec![poison.clone()]),
         );
-        let again = blame(&root, buffers.iter(), Some("head"), &mut cached);
+        let again = authorship(&root, buffers.iter(), Some("head"), &mut cached);
         assert_eq!(again.get(&buffers[0]), Some(&vec![poison]), "walked twice");
 
-        let moved = blame(&root, buffers.iter(), Some("another"), &mut cached);
+        let moved = authorship(&root, buffers.iter(), Some("another"), &mut cached);
         assert_eq!(moved.get(&buffers[0]), Some(&vec![ada.clone(), ada]));
 
         // Nothing at all outside a repository, which is what makes the border
         // silent there rather than reporting an absence on every file.
         let bare = tempfile::tempdir().expect("a temp directory");
         assert_eq!(
-            blame(bare.path(), buffers.iter(), Some("head"), &mut cached),
+            authorship(bare.path(), buffers.iter(), Some("head"), &mut cached),
             BTreeMap::new()
         );
     }

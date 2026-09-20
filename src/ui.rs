@@ -2238,17 +2238,23 @@ fn buffer_title(
     Line::from(spans)
 }
 
-/// R35.8's Transport: the reading controls, right-aligned on the editor's top
-/// border, one space apart and the last of them hard against the corner —
-/// `layout::strip_at` hit-tests exactly those columns, and a test below pins
-/// ratatui's placement of a right-aligned title so the two cannot drift.
+/// Everything the editor's top border says at its right-hand end: F40's
+/// Authorship, then R35.8's Transport — the reading controls, one space apart
+/// and the last of them hard against the corner. `layout::strip_at` hit-tests
+/// exactly those columns, and a test below pins ratatui's placement of a
+/// right-aligned title so the two cannot drift; the Authorship goes to the left
+/// of them for that reason, and `room` is what the filename left it.
 ///
-/// Nothing at all for a buffer that cannot be read: `reading::transport` is
-/// empty then, and an empty `Line` draws no title.
-fn transport_title(state: &State, room: usize) -> Line<'static> {
-    let mut spans = match blame_label(state, room) {
-        label if label.is_empty() => Vec::new(),
-        label => vec![Span::styled(label, Style::default().fg(Color::DarkGray))],
+/// One `Line` rather than two titles: ratatui lays two right-aligned titles out
+/// in an order nothing here would pin, and a clause drawn into the Transport's
+/// columns is a control that can be clicked and not seen.
+///
+/// Nothing at all for a buffer that cannot be read and no Authorship to report:
+/// both are empty then, and an empty `Line` draws no title.
+fn right_title(state: &State, room: usize) -> Line<'static> {
+    let mut spans = match authorship_clause(state, room) {
+        clause if clause.is_empty() => Vec::new(),
+        clause => vec![Span::styled(clause, Style::default().fg(Color::DarkGray))],
     };
     spans.extend(
         crime::reading::transport(state)
@@ -2270,21 +2276,21 @@ fn transport_title(state: &State, room: usize) -> Line<'static> {
 
 /// F40. Who last committed the line the cursor is on, and the day they wrote
 /// it, drawn dimmed on the top border to the left of the Transport — or that
-/// nobody has committed it yet. Empty whenever [`crime::blame::at_cursor`] has
-/// nothing to say, and an empty `Line` draws no title.
+/// nobody has committed it yet. Empty whenever
+/// [`crime::authorship::at_cursor`] has nothing to say.
 ///
 /// The name is what gives when the border runs out of room: the date is ten
 /// columns whatever the commit, and a name cut short still says which hand,
 /// while a date cut short says the wrong day.
-fn blame_label(state: &State, room: usize) -> String {
-    let Some(authorship) = crime::blame::at_cursor(state) else {
+fn authorship_clause(state: &State, room: usize) -> String {
+    let Some(authorship) = crime::authorship::at_cursor(state) else {
         return String::new();
     };
     let (who, when) = match &authorship {
-        crime::blame::Authorship::Committed(authored) => {
+        crime::authorship::Authorship::Committed(authored) => {
             (authored.author.as_str(), format!("  {}", authored.date))
         }
-        crime::blame::Authorship::NotCommittedYet => ("Not committed yet", String::new()),
+        crime::authorship::Authorship::NotCommittedYet => ("Not committed yet", String::new()),
     };
     // One space each side, so the clause is not against a corner or against the
     // first control — the reason the Transport keeps a column of air too.
@@ -2922,7 +2928,7 @@ fn editor_block(
     // Transport leaves.
     let room = title_room(state, width).saturating_sub(title.width());
     pane_block(title, state, Pane::Editor)
-        .title(transport_title(state, room))
+        .title(right_title(state, room))
         .title_bottom(Line::from(footer).right_aligned())
         .title_bottom(
             Line::from(Span::styled(
@@ -3991,12 +3997,12 @@ fn overlay(frame: &mut Frame, title: &str, lines: Vec<Line<'static>>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        action_icon, blame_label, branch_lines, buffer_title, cheatsheet_rows, code_lines, colour,
-        diff_rows, folded, guided, highlight, icon_colour, layout, paint_drag, pane_actions_title,
-        preview_line, risk_lines, risk_title, shift, status_line, story_title, title_room,
-        transport_title, tree_lines, truncate, with_caret, Block, Borders, Color, Kind, Line,
-        Modifier, Place, Selection, Span, State, Style, Tone, UnicodeWidthStr, DIRTY, DOTS,
-        WARNING,
+        action_icon, authorship_clause, branch_lines, buffer_title, cheatsheet_rows, code_lines,
+        colour, diff_rows, editor_block, folded, guided, highlight, icon_colour, layout,
+        paint_drag, pane_actions_title, preview_line, right_title, risk_lines, risk_title, shift,
+        status_line, story_title, title_room, tree_lines, truncate, with_caret, Block, Borders,
+        Color, Kind, Line, Modifier, Place, Selection, Span, State, Style, Tone, UnicodeWidthStr,
+        DIRTY, DOTS, WARNING,
     };
     use crime::risk::{Figure, Figures, Function, Metrics};
 
@@ -4019,24 +4025,24 @@ mod tests {
         state
             .committed
             .insert(path.clone(), Some("fn main() {}\n".to_string()));
-        state.blame.insert(
+        state.authorship.insert(
             path.clone(),
-            vec![crime::blame::Authored {
+            vec![crime::authorship::Authored {
                 author: "Ada Lovelace".to_string(),
                 date: "2026-01-05".to_string(),
             }],
         );
 
-        assert_eq!(blame_label(&state, 40), " Ada Lovelace  2026-01-05 ");
-        assert_eq!(blame_label(&state, 20), " Ada L\u{2026}  2026-01-05 ");
+        assert_eq!(authorship_clause(&state, 40), " Ada Lovelace  2026-01-05 ");
+        assert_eq!(authorship_clause(&state, 20), " Ada L\u{2026}  2026-01-05 ");
         // A border with no room for the date says nothing rather than half of one.
-        assert_eq!(blame_label(&state, 12), "");
+        assert_eq!(authorship_clause(&state, 12), "");
 
         // And the one clause with no date to keep, so nothing is cut against it.
         state
             .committed
             .insert(path, Some("fn main() { run() }\n".to_string()));
-        assert_eq!(blame_label(&state, 40), " Not committed yet ");
+        assert_eq!(authorship_clause(&state, 40), " Not committed yet ");
     }
 
     /// The two sentences an empty picker can say are different findings, and
@@ -4263,7 +4269,9 @@ mod tests {
         let mut buffer = ratatui::buffer::Buffer::empty(area);
         Block::default()
             .borders(Borders::ALL)
-            .title(transport_title(&state, 40 - 2))
+            // No Authorship on a default State — nothing told the core git is
+            // installed — so there is no clause to leave room for.
+            .title(right_title(&state, 0))
             .render(area, &mut buffer);
         let top: Vec<String> = (0..40)
             .map(|column| buffer[(column, 0)].symbol().to_string())
@@ -4316,14 +4324,17 @@ mod tests {
         state
             .committed
             .insert(path.clone(), Some("# Guide\n".to_string()));
-        state.blame.insert(
+        state.authorship.insert(
             path,
-            vec![crime::blame::Authored {
+            vec![crime::authorship::Authored {
                 author: "Ada Lovelace".to_string(),
                 date: "2026-01-05".to_string(),
             }],
         );
 
+        // Through `editor_block`, so what is pinned is the border the editor
+        // actually draws: sharing out the room is its arithmetic, and a test
+        // that restated it would pass while the border went wrong.
         let area = ratatui::layout::Rect::new(0, 0, 80, 4);
         let drawn = |state: &State, name: &str| {
             let mut buffer = ratatui::buffer::Buffer::empty(area);
@@ -4333,12 +4344,7 @@ mod tests {
                 "normal",
                 title_room(state, 80),
             );
-            let room = title_room(state, 80).saturating_sub(title.width());
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .title(transport_title(state, room))
-                .render(area, &mut buffer);
+            editor_block(state, title, Vec::new(), None, 80).render(area, &mut buffer);
             (0..80)
                 .map(|column| buffer[(column, 0)].symbol().to_string())
                 .collect::<String>()
@@ -4386,7 +4392,9 @@ mod tests {
                 "normal",
                 title_room(&state, 40),
             ))
-            .title(transport_title(&state, 40 - 2))
+            // No Authorship on a default State — nothing told the core git is
+            // installed — so there is no clause to leave room for.
+            .title(right_title(&state, 0))
             .render(area, &mut buffer);
         let top: String = (0..40)
             .map(|column| buffer[(column, 0)].symbol().to_string())
