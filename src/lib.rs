@@ -2380,7 +2380,7 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
             Sideways::Read if next.editor_hscroll == 0 => 0,
             Sideways::Read => next
                 .editor_hscroll
-                .min(slid_width(&next).saturating_sub(editor_columns)),
+                .min(slid_width(&next, &rows).saturating_sub(editor_columns)),
         };
     }
 
@@ -3730,6 +3730,58 @@ fn travel_editor(
     }
 }
 
+/// Where the editor's sideways offset goes, and the caret with it on a surface
+/// that has one the offset follows — the sideways half of [`travel_editor`], and
+/// the same reason: a caret off the edge of the screen is a caret you have lost,
+/// and the next thing you type lands out of sight.
+///
+/// Bounded by the widest line the whole surface holds rather than by the rows in
+/// view, exactly as [`slid_width`] bounds the keyboard slide, so a swipe past the
+/// end stops instead of running on into empty space.
+fn slide_editor(state: &State, next: &mut State, direction: Direction) {
+    let columns = fits(state).2;
+    // The one parse, handed to both the width and the cursor — the reason
+    // `sideways` and `slid_width` are given rows rather than taking them.
+    let rows = preview_rows(state);
+    next.editor_hscroll = match direction {
+        Direction::Left => state.editor_hscroll.saturating_sub(SLIDE_COLUMNS),
+        Direction::Right => (state.editor_hscroll + SLIDE_COLUMNS)
+            .min(slid_width(state, &rows).saturating_sub(columns)),
+        // The caller settles the axis, and reaches this function only for a
+        // sideways wheel. Spelled out rather than swallowed by a `_`: the
+        // catch-all is the exact shape this issue existed to remove from the
+        // edge, and a `Direction` that grows a variant should fail the build
+        // here rather than quietly slide right.
+        Direction::Up | Direction::Down => return,
+    };
+    let Sideways::Cursor { column, .. } = sideways(state, &rows) else {
+        return;
+    };
+    // Onto the nearest column the new window shows: the clamp in `settle` reads
+    // this column back on the very next event, so a caret left outside the
+    // window would pull the swipe straight home again. Nothing keeps it on the
+    // text here — `go_to_place` and `settle` each clamp their own surface's
+    // cursor to the row it is on, and a second clamp would be a third opinion.
+    let last = next.editor_hscroll + columns.max(1) - 1;
+    let landed = column.clamp(next.editor_hscroll, last) + 1;
+    let Some(path) = next.current_buffer.clone() else {
+        return;
+    };
+    let Some(buffer) = next.buffers.get_mut(&path) else {
+        return;
+    };
+    match buffer.previewing {
+        // A Preview's cursor is a column of the *rendered* row (ADR 0007, as
+        // amended), which is the column `sideways` reported and the one the
+        // offset is measured against.
+        true => buffer.row_column = landed,
+        false => buffer.go_to_place(Place {
+            line: buffer.line,
+            column: landed,
+        }),
+    }
+}
+
 /// Scroll
 fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
@@ -3741,6 +3793,40 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
             direction,
             at,
         } => {
+            // Sideways is its own axis, and only two kinds of surface have an
+            // offset on it: the editor pane, and a child that asked for mouse
+            // events. Ahead of everything below because the lists there have no
+            // sideways offset at all — a swipe reaching `wheeled_to` would take
+            // its catch-all arm and scroll the tree *down*, which is a gesture
+            // answering with a different gesture.
+            if matches!(direction, Direction::Left | Direction::Right) {
+                // The results box is covering the panes, and has nothing
+                // sideways of its own — the same reason it claims the vertical
+                // wheel rather than letting it through.
+                if next.search.is_some() {
+                    return Ok(settle(next, vec![], wheeled));
+                }
+                let effects = match pane {
+                    Pane::Editor => {
+                        slide_editor(state, &mut next, direction);
+                        vec![]
+                    }
+                    // The same rule the vertical wheel follows, one axis over.
+                    // No `Effect::Scrolled` when the child cannot be told: a
+                    // pty's scrollback is rows, so there is no sideways history
+                    // for the edge to answer with.
+                    Pane::Terminal | Pane::Ai => match mouse::report(
+                        mouse_encoding(state, pane),
+                        mouse::Gesture::Wheel(direction),
+                        at,
+                    ) {
+                        Some(bytes) => vec![Effect::SendKeys { pane, bytes }],
+                        None => vec![],
+                    },
+                    Pane::Tree | Pane::Risk | Pane::Buffers | Pane::History => vec![],
+                };
+                return Ok(settle(next, effects, wheeled));
+            }
             // The results box covers every pane, so while it is up the wheel is
             // its own however the pointer got there — and the pane underneath
             // must not move, because a wheel over a modal that scrolls what it
@@ -8189,14 +8275,16 @@ fn sideways(state: &State, rows: &[preview::Row]) -> Sideways {
 }
 
 /// How far right the surface has text, in characters and without the gutter —
-/// what stops a slide rather than letting it run on into empty space. The
-/// surfaces are the ones [`sideways`] answers `Read` for.
+/// what stops a slide rather than letting it run on into empty space. Every
+/// surface with an offset, not only the ones [`sideways`] answers `Read` for:
+/// the wheel moves the offset on a Source buffer and a Preview too, and it is
+/// bounded by the same width the keyboard slide is.
 ///
 /// The whole surface, not the rows in view. A slide clamped to what is on
 /// screen would be pulled home by a `j` off the end of a wide hunk, which is
 /// the offset moving on its own — and the vertical clamp bounds
 /// `editor_scroll` against the whole row count for the same reason.
-fn slid_width(state: &State) -> usize {
+fn slid_width(state: &State, rows: &[preview::Row]) -> usize {
     // An old-side Step draws a notice where its code would be, and there is
     // nothing past the edge of a sentence. Excluded for the reason
     // [`editor_focus`] excludes it: the buffer behind that pane is open and
@@ -8209,6 +8297,18 @@ fn slid_width(state: &State) -> usize {
         return diff
             .iter()
             .map(|line| line.text.chars().count())
+            .max()
+            .unwrap_or(0);
+    }
+    // A Preview's rows are not its lines — the markdown behind a reflowed
+    // paragraph, a link that hides its URL or a table is a different width from
+    // what is drawn, and the offset is measured against what is drawn. The rows
+    // are the caller's, already laid out: a markdown parse per call is what
+    // ADR 0007 says is visible rather than merely wasteful.
+    if previewing(state) {
+        return rows
+            .iter()
+            .map(|row| row.text().chars().count())
             .max()
             .unwrap_or(0);
     }
@@ -11430,5 +11530,27 @@ mod tests {
             0,
             "the first hit is on row one, under the heading the clamp keeps above it"
         );
+
+        // Sideways, the box has no offset of its own — and the pane it covers
+        // must not take the swipe instead, for the reason the vertical wheel
+        // does not reach through it either. The buffer behind it is wide enough
+        // to slide, or the assertion could not fail.
+        let path = std::path::PathBuf::from("/w/wide.rs");
+        let mut behind = state.clone();
+        behind.current_buffer = Some(path.clone());
+        behind
+            .buffers
+            .insert(path, editor::Buffer::open(&"x".repeat(200), false, 4));
+        let swiped = update(
+            &behind,
+            Event::Scroll {
+                pane: Pane::Editor,
+                direction: Direction::Right,
+                at: Place { line: 1, column: 1 },
+            },
+        )
+        .0;
+        assert_eq!(swiped.editor_hscroll, 0);
+        assert_eq!(swiped.search.as_ref().unwrap().scroll, 0);
     }
 }

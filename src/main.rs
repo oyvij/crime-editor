@@ -2166,7 +2166,17 @@ fn translate_mouse(
         MouseEventKind::Down(MouseButton::Right) => mouse::Kind::RightDown,
         MouseEventKind::ScrollUp => mouse::Kind::ScrollUp,
         MouseEventKind::ScrollDown => mouse::Kind::ScrollDown,
-        _ => return,
+        MouseEventKind::ScrollLeft => mouse::Kind::ScrollLeft,
+        MouseEventKind::ScrollRight => mouse::Kind::ScrollRight,
+        // Exhaustive over the buttons, and deliberately: the catch-all that
+        // stood here swallowed every sideways wheel report for CRIME's whole
+        // life, so a sideways swipe did nothing anywhere and said nothing
+        // either. A kind crossterm grows now fails the build instead.
+        MouseEventKind::Down(MouseButton::Middle)
+        | MouseEventKind::Up(MouseButton::Middle)
+        | MouseEventKind::Drag(MouseButton::Middle)
+        | MouseEventKind::Up(MouseButton::Right)
+        | MouseEventKind::Drag(MouseButton::Right) => return,
     };
     let panes = layout::panes(
         edge.area.width,

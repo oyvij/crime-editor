@@ -3517,6 +3517,8 @@ fn parse_direction(name: &str) -> Direction {
     match name {
         "up" => Direction::Up,
         "down" => Direction::Down,
+        "left" => Direction::Left,
+        "right" => Direction::Right,
         other => panic!("unknown direction {other:?}"),
     }
 }
