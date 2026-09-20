@@ -42,10 +42,15 @@ const LEGACY_LIMIT: usize = 223;
 /// deliberate — a wrapped coordinate names a different cell, and a child acting
 /// on the wrong cell is worse than one that heard nothing.
 pub fn report(encoding: Encoding, gesture: Gesture, at: Place) -> Option<Vec<u8>> {
+    // xterm's wheel buttons, exhaustive over the directions rather than
+    // catch-all: a sideways swipe answered with 65 is a child told to scroll
+    // down, which is the substitution this function exists to refuse.
     let button: u8 = match gesture {
         Gesture::Click => 0,
         Gesture::Wheel(Direction::Up) => 64,
-        Gesture::Wheel(_) => 65,
+        Gesture::Wheel(Direction::Down) => 65,
+        Gesture::Wheel(Direction::Left) => 66,
+        Gesture::Wheel(Direction::Right) => 67,
     };
     let released = matches!(gesture, Gesture::Click);
     match encoding {
@@ -85,6 +90,13 @@ pub enum Kind {
     RightDown,
     ScrollUp,
     ScrollDown,
+    /// A trackpad swipe or a tilt wheel. Named rather than folded into the two
+    /// above: the surfaces that answer it have an offset of their own, and the
+    /// conversion in `main.rs` used to drop every sideways report on a
+    /// catch-all arm, which is the shape AGENTS.md forbids for keys and forbids
+    /// here for the same reason.
+    ScrollLeft,
+    ScrollRight,
     /// The pointer moving with nothing held down, reported only because the
     /// edge asks the terminal for motion. It presses nothing: it is where the
     /// pointer comes to rest — the one gesture nobody makes — and it is what
@@ -205,7 +217,10 @@ pub fn on_mouse(state: &State, panes: &Layout, pointer: &mut Pointer, input: Inp
     // box, for the same reason the box has the keyboard. Nothing is left
     // holding a divider or a half-finished drag either.
     if let Some(search) = state.search.as_ref() {
-        if !matches!(input.kind, Kind::ScrollUp | Kind::ScrollDown) {
+        if !matches!(
+            input.kind,
+            Kind::ScrollUp | Kind::ScrollDown | Kind::ScrollLeft | Kind::ScrollRight
+        ) {
             *pointer = Pointer::default();
             return Outcome::of(result_click(state, search, input));
         }
@@ -337,6 +352,16 @@ fn in_pane(
         Kind::ScrollDown => Outcome::of(vec![Event::Scroll {
             pane,
             direction: Direction::Down,
+            at: place_in(state, panes, pane, (input.column, input.row)),
+        }]),
+        Kind::ScrollLeft => Outcome::of(vec![Event::Scroll {
+            pane,
+            direction: Direction::Left,
+            at: place_in(state, panes, pane, (input.column, input.row)),
+        }]),
+        Kind::ScrollRight => Outcome::of(vec![Event::Scroll {
+            pane,
+            direction: Direction::Right,
             at: place_in(state, panes, pane, (input.column, input.row)),
         }]),
         Kind::LeftUp => {
@@ -994,6 +1019,29 @@ mod tests {
         assert_eq!(
             report(Encoding::Sgr, Gesture::Wheel(Direction::Down), CELL),
             Some(b"\x1b[<65;9;5M".to_vec())
+        );
+    }
+
+    // Four buttons, four numbers. A sideways swipe answered with 65 is a child
+    // scrolled down by a gesture nobody made sideways, which is the
+    // substitution `report` refuses on coordinates and must refuse on buttons.
+    #[test]
+    fn a_sideways_wheel_is_its_own_button() {
+        assert_eq!(
+            report(Encoding::Sgr, Gesture::Wheel(Direction::Left), CELL),
+            Some(b"\x1b[<66;9;5M".to_vec())
+        );
+        assert_eq!(
+            report(Encoding::Sgr, Gesture::Wheel(Direction::Right), CELL),
+            Some(b"\x1b[<67;9;5M".to_vec())
+        );
+        assert_eq!(
+            report(Encoding::Legacy, Gesture::Wheel(Direction::Left), CELL),
+            Some(vec![0x1b, b'[', b'M', 32 + 66, 32 + 9, 32 + 5])
+        );
+        assert_eq!(
+            report(Encoding::Legacy, Gesture::Wheel(Direction::Right), CELL),
+            Some(vec![0x1b, b'[', b'M', 32 + 67, 32 + 9, 32 + 5])
         );
     }
 

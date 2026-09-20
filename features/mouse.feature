@@ -263,3 +263,127 @@ Feature: The whole TUI is usable with the mouse
     And I hold shift and press the Right arrow in the editor
     When I click at line 2 column 1 in the editor
     Then the selection holds nothing
+
+  Rule: The wheel scrolls sideways as well as up and down
+
+    A trackpad swipe sideways is a wheel report like any other, and every surface
+    that has a horizontal offset answers it: a Source buffer, a Preview, a diff
+    and the code a Story walk is showing. It is the same promise the vertical
+    wheel makes one axis over — a pane whose text runs past its right border is a
+    pane you can read to the end of without moving the caret onto that line.
+
+    Where the surface has a cursor the offset follows, the swipe takes the cursor
+    with it, exactly as scrolling down does: a caret off the left of the screen is
+    a caret you have lost. Which is also what bounds it — on a Source buffer or a
+    Preview the caret cannot leave the line it is on, so a swipe over a short line
+    lasts until the next event and no longer, while the read-only surfaces, having
+    no caret to be pulled back to, keep it. Sliding right stops at the widest line
+    the surface holds rather than running on into empty space, and a pty pane
+    whose child asked for mouse events is handed the report instead, in its own
+    encoding.
+
+    Scenario: Swiping right slides a Source buffer sideways
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor holding a 40-character line above a short one
+      When I scroll right with the pointer over the editor pane
+      Then the editor view starts at column 9
+
+    Scenario: Swiping right takes the cursor with it
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor holding a 40-character line above a short one
+      When I scroll right with the pointer over the editor pane
+      Then the cursor is at line 1 column 9
+
+    Scenario: Swiping left brings a slid buffer back
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor holding a 40-character line above a short one
+      And I scroll right 2 times with the pointer over the editor pane
+      When I scroll left with the pointer over the editor pane
+      Then the editor view starts at column 9
+
+    Scenario: A swipe leaves the caret on the text of the line it is on
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor holding a 40-character line above a short one
+      And the cursor is on line 2
+      When I scroll right with the pointer over the editor pane
+      Then the editor view starts at column 9
+      And the cursor is at line 2 column 3
+
+    Scenario: The next keypress pulls a swiped Source buffer back to its caret
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor holding a 40-character line above a short one
+      And the cursor is on line 2
+      And I scroll right with the pointer over the editor pane
+      When I press "j" in the editor
+      Then the editor view starts at column 1
+
+    Scenario: A swipe leaves the view where the vertical wheel put it
+      Given the screen is 12 rows by 80 columns
+      And the minimap is turned off
+      And "src/long.js" is open in the editor holding:
+        """
+        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        two
+        three
+        four
+        five
+        six
+        seven
+        eight
+        nine
+        ten
+        eleven
+        twelve
+        """
+      And I scroll down 3 times with the pointer over the editor pane
+      When I scroll right with the pointer over the editor pane
+      Then the editor view starts at line 4
+      And the editor view starts at column 9
+
+    Scenario: Swiping right slides a diff
+      Given the screen is 12 rows by 80 columns
+      And the diff for "src/tree.js" is shown holding a 60-character line
+      When I scroll right with the pointer over the editor pane
+      Then the editor view starts at column 9
+
+    Scenario: Swiping right past the widest line stops there
+      Given the screen is 12 rows by 80 columns
+      And the diff for "src/tree.js" is shown holding a 24-character line
+      When I scroll right 4 times with the pointer over the editor pane
+      Then the editor view starts at column 11
+
+    Scenario: Swiping left at the home column stays home
+      Given the screen is 12 rows by 80 columns
+      And the diff for "src/tree.js" is shown holding a 60-character line
+      When I scroll left with the pointer over the editor pane
+      Then the editor view starts at column 1
+
+    Scenario: A swipe over the file tree slides nothing
+      Given the screen is 12 rows by 80 columns
+      And the workspace folder holds 12 files
+      When I scroll right with the pointer over the file tree pane
+      Then the file tree view starts at row 1
+      And the editor view starts at column 1
+
+    Scenario Outline: A sideways swipe reaches a program in the encoding it asked for
+      Given the <pane> program asked for "<encoding>" mouse reporting
+      When I scroll right with the pointer over the <pane> pane
+      Then the scroll reached the <pane> program in "<encoding>" encoding
+      And the <pane> pane did not scroll
+
+      Examples:
+        | pane     | encoding |
+        | terminal | SGR      |
+        | terminal | legacy   |
+        | AI       | SGR      |
+        | AI       | legacy   |
+
+    Scenario: A sideways swipe at a shell prompt reaches nobody
+      Given the terminal program asked for "no" mouse reporting
+      When I scroll right with the pointer over the terminal pane
+      Then nothing reached the terminal program

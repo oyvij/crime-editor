@@ -572,6 +572,22 @@ Feature: Markdown preview
     Then the cursor is on row 1 column 60
     And the editor view starts at column 37
 
+  Scenario: A sideways swipe slides a preview and takes its cursor with it
+    Given the screen is 12 rows by 80 columns
+    And "README.md" is open in the editor holding a code fence 60 characters wide
+    When I scroll right with the pointer over the editor pane
+    Then the editor view starts at column 9
+    And the cursor is on row 1 column 9
+
+  Scenario: A swipe stops at the widest row drawn, not the widest line behind it
+    Given the screen is 12 rows by 80 columns
+    And "README.md" is open in the editor holding:
+      """
+      [x](https://example.com/a/very/long/url/that/is/never/drawn/on/the/screen)
+      """
+    When I scroll right 4 times with the pointer over the editor pane
+    Then the editor view starts at column 1
+
   Scenario: Zero is the start-of-row motion, and the view comes home with it
     Given the screen is 12 rows by 80 columns
     And "README.md" is open in the editor holding a code fence 60 characters wide

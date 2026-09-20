@@ -409,6 +409,12 @@ Feature: Walking a story step by step
     When I press "l" in the editor
     Then the editor view starts at column 9
 
+  Scenario: A sideways swipe slides the code surface the same way the gesture does
+    Given the screen is 24 rows by 100 columns
+    And I am walking "Keys reach the child"
+    When I scroll right with the pointer over the editor pane
+    Then the editor view starts at column 9
+
   Scenario: Zero brings a slid code surface home
     Given the screen is 24 rows by 100 columns
     And I am walking "Keys reach the child"
