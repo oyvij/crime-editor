@@ -7,6 +7,7 @@ mod ui;
 
 use anyhow::Result;
 use clap::Parser as ClapParser;
+use crime::blame;
 use crime::editor;
 use crime::format;
 use crime::keys::{self, Drafts};
@@ -678,6 +679,12 @@ struct Edge {
     /// not installed mid-Reading, and the refusal that says it is missing
     /// carries the install line that fixes it for good.
     player: Option<bool>,
+    /// Each open buffer's blame and the commit it was read at. Cached here
+    /// rather than read on every git poll: a blame walks a file's history, and
+    /// only a new commit can change what it answers — which is why
+    /// `Buffer::revision` is nowhere in this key, and why typing starts no walk
+    /// (F40).
+    blamed: BTreeMap<PathBuf, (String, Vec<blame::Authored>)>,
 }
 
 /// A Reading as audio, and everything a position report needs about it. The
@@ -788,6 +795,7 @@ fn run(
         playing: None,
         stream: None,
         player: None,
+        blamed: BTreeMap::new(),
         area: ratatui::layout::Rect::new(0, 0, size.width, size.height),
         analysed: analysed_tx,
         tested: tested_tx,
@@ -872,7 +880,7 @@ fn run(
         queue_position(&edge, &mut last_position, &mut queue);
         tell_core(&mut state, &mut edge);
         dirty |= refresh_ignored(&root, &mut state, &mut last_shape);
-        dirty |= refresh_git(&root, &mut state, &mut last_git);
+        dirty |= refresh_git(&root, &mut state, &mut edge.blamed, &mut last_git);
         set_cursor_style(&state, &mut edge);
         cache_highlight(&state, &mut edge);
         cache_preview(&state, &mut edge);
@@ -1242,7 +1250,12 @@ fn refresh_ignored(root: &Path, state: &mut State, last_shape: &mut (usize, usiz
     dirty
 }
 
-fn refresh_git(root: &Path, state: &mut State, last_git: &mut Instant) -> bool {
+fn refresh_git(
+    root: &Path,
+    state: &mut State,
+    blamed: &mut BTreeMap<PathBuf, (String, Vec<blame::Authored>)>,
+    last_git: &mut Instant,
+) -> bool {
     // A buffer opened since the last poll is not made to wait two seconds for
     // its change marks: a file nobody has asked the commit about yet is asked
     // now. `None` counts as asked, so an untracked file does not ask per pump.
@@ -1270,21 +1283,28 @@ fn refresh_git(root: &Path, state: &mut State, last_git: &mut Instant) -> bool {
     let fresh_ignored = ignored(root, &state.contents);
     let fresh_branch = head_branch(&repo);
     let fresh_committed = committed(root, state.buffers.keys());
+    // Read before the assignment below, because this poll's blame is keyed on
+    // the commit this poll found: keying it on the one the last poll left would
+    // hand back the previous commit's authors for a whole poll after a commit.
+    let head = head_commit(root);
+    let fresh_blame = blame(root, state.buffers.keys(), head.as_deref(), blamed);
     let dirty = fresh != state.repo
         || fresh_hunks != state.file_hunks
         || fresh_ignored != state.ignored
         || fresh_branch != state.branch
-        || fresh_committed != state.committed;
+        || fresh_committed != state.committed
+        || fresh_blame != state.blame;
     state.repo = fresh;
     state.file_hunks = fresh_hunks;
     state.ignored = fresh_ignored;
     state.committed = fresh_committed;
+    state.blame = fresh_blame;
     // A commit that moved is what makes the figure worth recomputing, so the
     // core is told on the same poll rather than remembering the commit it
     // started at. The workspace's commit, not the repository under review's:
     // `head` is Review view's base and the Risk delta's revision, and both of
     // those are about the folder on screen.
-    state.head = head_commit(root);
+    state.head = head;
     // Which branch that commit is on, told on the same poll and for the same
     // reason: only the edge can read it, and a `git switch` in the terminal
     // pane is a branch change CRIME did not make.
@@ -1318,6 +1338,88 @@ fn committed<'a>(
             (path.clone(), text)
         })
         .collect()
+}
+
+/// Who last committed each line of each open buffer, in the commit `HEAD`
+/// names. Nothing at all outside a repository, and an empty list for a file the
+/// commit has no copy of — the core reads both as nobody's, the way it reads
+/// [`committed`]'s two answers.
+///
+/// Cached against that commit, so the walk happens once per file per commit: the
+/// buffer's edits cannot change what the commit holds, which is what keeps a
+/// keystroke off git's history. A buffer that has closed takes its entry with
+/// it, and a commit that moved drops the lot.
+fn blame<'a>(
+    root: &Path,
+    buffers: impl Iterator<Item = &'a PathBuf>,
+    head: Option<&str>,
+    cached: &mut BTreeMap<PathBuf, (String, Vec<blame::Authored>)>,
+) -> BTreeMap<PathBuf, Vec<blame::Authored>> {
+    let open: BTreeSet<&PathBuf> = buffers.collect();
+    cached.retain(|path, (at, _)| Some(at.as_str()) == head && open.contains(path));
+    let Some(head) = head else {
+        return BTreeMap::new();
+    };
+    let Ok(repository) = git2::Repository::discover(root) else {
+        return BTreeMap::new();
+    };
+    let Some(workdir) = repository.workdir().map(Path::to_path_buf) else {
+        return BTreeMap::new();
+    };
+    for path in open {
+        if cached.contains_key(path) {
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(&workdir) else {
+            continue;
+        };
+        cached.insert(
+            path.clone(),
+            (head.to_string(), authored(&repository, relative)),
+        );
+    }
+    cached
+        .iter()
+        .map(|(path, (_, lines))| (path.clone(), lines.clone()))
+        .collect()
+}
+
+/// One file's blame, a row per line of the file as the commit holds it. Every
+/// hunk contributes exactly the lines it covers, so a commit the repository
+/// cannot read leaves those lines nobody's rather than sliding every line after
+/// them onto the wrong hand.
+fn authored(repository: &git2::Repository, relative: &Path) -> Vec<blame::Authored> {
+    let Ok(blamed) = repository.blame_file(relative, None) else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    for hunk in blamed.iter() {
+        // A commit the blame names and the repository cannot find leaves the
+        // whole file unattributed rather than every line after it on the wrong
+        // hand: the border then says nothing, which is what it already says for
+        // a file no commit holds.
+        let Ok(commit) = repository.find_commit(hunk.final_commit_id()) else {
+            return Vec::new();
+        };
+        let who = blame::Authored {
+            author: commit.author().name().unwrap_or_default().to_string(),
+            date: short_date(commit.author().when()),
+        };
+        lines.extend(std::iter::repeat_n(who, hunk.lines_in_hunk()));
+    }
+    lines
+}
+
+/// A commit's authored date as `YYYY-MM-DD`, in the offset its author was at —
+/// git's own `--date=short`. The day they wrote it, not the day it was wherever
+/// the reader happens to be.
+fn short_date(when: git2::Time) -> String {
+    let stamp = chrono::DateTime::from_timestamp(when.seconds(), 0);
+    let zone = chrono::FixedOffset::east_opt(when.offset_minutes() * 60);
+    match (stamp, zone) {
+        (Some(stamp), Some(zone)) => stamp.with_timezone(&zone).format("%Y-%m-%d").to_string(),
+        _ => String::new(),
+    }
 }
 
 /// The cursor's shape is how vim tells you which mode you are in.
@@ -4133,14 +4235,15 @@ fn queue_story_file(path: &Path, state: &State, queue: &mut VecDeque<Event>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        alive, checkout, committed, flatten, found, notice_text, pid_of, range_ends, read_branches,
-        rewrite, samples, sidecar, space, stitch, watched_path,
+        alive, blame, checkout, committed, flatten, found, notice_text, pid_of, range_ends,
+        read_branches, rewrite, samples, short_date, sidecar, space, stitch, watched_path,
     };
     use crime::risk;
     use crime::startup::{Fact, FactValue};
     use crime::story;
     use crime::{tree, Event, State};
     use notify::event::{CreateKind, DataChange, ModifyKind, RenameMode};
+    use std::collections::BTreeMap;
     use std::collections::BTreeSet;
     use std::collections::VecDeque;
     use std::fs;
@@ -4562,6 +4665,84 @@ mod tests {
             Some(&Some("fn main() {}\n".to_string()))
         );
         assert_eq!(found.get(&buffers[1]), Some(&None));
+    }
+
+    /// F40's two reads no scenario can make, in one repository: that the blame
+    /// comes back as the hand and the day the commit names, line by line and
+    /// under the buffer's own path, and that a file the commit has no copy of
+    /// comes back empty rather than unanswered.
+    ///
+    /// And the cache, which is the whole point of it: the entry is poisoned and
+    /// asked for again at the same commit, so a second walk would show. That is
+    /// what "editing the buffer does not recompute the blame" comes to — the key
+    /// holds a commit and nothing about the Buffer — and a commit that moved
+    /// drops the lot.
+    #[test]
+    fn the_blame_is_read_per_commit_and_not_again_until_it_moves() {
+        let dir = tempfile::tempdir().expect("a temp directory");
+        let root = std::fs::canonicalize(dir.path()).expect("a canonical root");
+        let repository = git2::Repository::init(&root).expect("a repository");
+        // A fixed instant, so the date is the commit's and never today's:
+        // 2026-01-05 in UTC, which is the offset this signature is at.
+        let who = git2::Signature::new(
+            "Ada Lovelace",
+            "ada@example.com",
+            &git2::Time::new(1_767_571_200, 0),
+        )
+        .expect("a signature");
+        std::fs::write(root.join("a.rs"), "fn main() {}\nfn run() {}\n").expect("the file");
+        let mut index = repository.index().expect("the index");
+        index.add_path(Path::new("a.rs")).expect("staged");
+        let tree = repository
+            .find_tree(index.write_tree().expect("a tree"))
+            .expect("the tree");
+        repository
+            .commit(Some("HEAD"), &who, &who, "init", &tree, &[])
+            .expect("a commit");
+
+        let buffers = [root.join("a.rs"), root.join("new.rs")];
+        let ada = crime::blame::Authored {
+            author: "Ada Lovelace".to_string(),
+            date: "2026-01-05".to_string(),
+        };
+        let mut cached = BTreeMap::new();
+        let found = blame(&root, buffers.iter(), Some("head"), &mut cached);
+        assert_eq!(
+            found.get(&buffers[0]),
+            Some(&vec![ada.clone(), ada.clone()])
+        );
+        assert_eq!(found.get(&buffers[1]), Some(&Vec::new()));
+
+        let poison = crime::blame::Authored {
+            author: "nobody walked this".to_string(),
+            date: String::new(),
+        };
+        cached.insert(
+            buffers[0].clone(),
+            ("head".to_string(), vec![poison.clone()]),
+        );
+        let again = blame(&root, buffers.iter(), Some("head"), &mut cached);
+        assert_eq!(again.get(&buffers[0]), Some(&vec![poison]), "walked twice");
+
+        let moved = blame(&root, buffers.iter(), Some("another"), &mut cached);
+        assert_eq!(moved.get(&buffers[0]), Some(&vec![ada.clone(), ada]));
+
+        // Nothing at all outside a repository, which is what makes the border
+        // silent there rather than reporting an absence on every file.
+        let bare = tempfile::tempdir().expect("a temp directory");
+        assert_eq!(
+            blame(bare.path(), buffers.iter(), Some("head"), &mut cached),
+            BTreeMap::new()
+        );
+    }
+
+    /// The date is the day the author was on when they wrote it, not the day it
+    /// was in UTC — git's own `--date=short`. An hour before midnight UTC, an
+    /// hour east, is already tomorrow where the hand was.
+    #[test]
+    fn the_authored_date_is_read_in_the_offset_its_author_was_at() {
+        assert_eq!(short_date(git2::Time::new(1_767_567_600, 0)), "2026-01-04");
+        assert_eq!(short_date(git2::Time::new(1_767_567_600, 60)), "2026-01-05");
     }
 
     /// The swap `:update` makes on a binary install, through the same `curl`

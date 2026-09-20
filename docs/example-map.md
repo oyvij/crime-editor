@@ -3094,6 +3094,47 @@ terminal, so `install.sh` asks the binary rather than reading the source. The ta
 **R39.6** The four Asset names are pinned by a unit test that names `.github/workflows/release.yml`,
 and the workflow names the test.
 
+## F40 — Git blame — **DEFINED**
+
+Scenarios live in `features/git_blame.feature`. `CONTEXT.md`'s "Authorship" is the vocabulary. The
+spec is GitHub issue #33 and the answers on it; the Change bar (F37) is the precedent every edge case
+here is settled against.
+
+**R40.1** The editor's **top border** says who last committed the line the cursor is on and the
+**authored** date, `YYYY-MM-DD`. Authored rather than committed is what "who wrote this, when" means,
+and it survives a rebase; the format does not vary by locale. Always on, and no key toggles it — a
+toggle needs a binding, a Cheatsheet row and a sweep entry for a feature nobody has asked to hide.
+No commit hash: a hash is worth showing once there is something to do with it.
+**R40.2** It is the **committed** file's blame, so a buffer line is traced back through the diff
+before it names anybody — a line inserted above the cursor would otherwise hand the cursor's line the
+author of the line above it. A line the working tree has changed, and every line of a file the commit
+has no copy of, are **not committed yet**.
+**R40.3** **Told by the edge, cached against the commit.** Only a new commit can change what a blame
+answers, so the key is the file and `HEAD` and never `Buffer::revision`: typing starts no walk of a
+file's history. A buffer opened since the last poll is asked about at once, on the same poll as F37's
+committed text.
+**R40.4** **Silence outside a repository, and without git.** A border reporting "not a git
+repository" on every file of a folder that is not one is noise — R37.2's answer to the same question,
+where a file the commit has no copy of carries no bar.
+**R40.5** **Edit View only.** Review and Story both put their own content in the editor's title, and
+this must not disturb either. A Preview is not a View — it is one Buffer's way of being drawn inside
+Edit (ADR 0007) — and a Preview row carries the source line it came from, so the Authorship is that
+line's.
+**R40.6** **The name gives, the date is kept whole.** A border with no room for both cuts the author
+with an ellipsis: the date is ten columns whatever the commit, and a date cut short names the wrong
+day. Pinned in a unit test in `src/ui.rs`, as is the exact wording; a border with no room for the
+date at all says nothing rather than half of one.
+
+**⛔ Not scenarios, deliberately.** Blame for a Selection or a range (this is the cursor's line);
+opening, showing or diffing the commit the Authorship names; blame in a hosted pane, the file tree or
+a Corner occupant; a setting for the date format or to turn it off; any per-line gutter presentation
+— the gutter's one column is already spoken for by the Change bar, diagnostics and the voice's place
+(R37.3).
+
+**Still open.** The walk is synchronous at the edge, so the first blame of a very large file with a
+long history is paid on the main loop. Cached per commit, it happens once — but off the loop, through
+a `Sender` the way an analysis and a format already are, is the shape if it is ever felt.
+
 ## Spec status
 
 Every feature is defined in Gherkin — **1087 scenario headings across 37 feature files** — and no

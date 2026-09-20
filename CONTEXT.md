@@ -151,6 +151,15 @@ A Buffer shown as the characters the file holds, markup included. The only way a
 switch to Source is the switch to being able to change it.
 _Avoid_: raw (that is unsanitised bytes elsewhere in this repo), plain, unformatted
 
+**Authorship**:
+Who last committed the line the cursor is on, and the day they wrote it, said on the editor's top
+border. It is the *committed* file's answer, so a line the working tree has changed — and every line
+of a file the commit has no copy of — is **not committed yet** rather than somebody's. Outside a
+repository, and without git, there is no Authorship at all and the border says nothing: the
+Change bar's answer to the same question.
+_Avoid_: blame (that is git's command, and what it names is the whole file), attribution, ownership,
+last-modified
+
 **Buffer mark**:
 The glyph on a file tree row saying whether that file is open, current, or unsaved.
 _Avoid_: badge, indicator, icon

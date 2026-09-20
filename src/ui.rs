@@ -1491,6 +1491,7 @@ fn editor_widget(
             "editor".into(),
             refusal_spans(state),
             command,
+            width,
         ));
     };
 
@@ -1535,7 +1536,7 @@ fn editor_widget(
     }
 
     if crime::previewing(state) {
-        return preview_widget(state, command, title, footer, preview);
+        return preview_widget(state, command, title, footer, preview, width);
     }
 
     let dark = state.editor_theme != "light";
@@ -1621,7 +1622,7 @@ fn editor_widget(
     // Every match of what `/` looked for, not only the one the cursor is on, so
     // the count is visible without walking them. Under the selection, so the
     // match being stepped to still reads as picked.
-    let width = state.find_query.chars().count();
+    let matched = state.find_query.chars().count();
     for at in crime::matches(state) {
         let Some(line) = lines.get_mut(at.line - 1) else {
             continue;
@@ -1629,7 +1630,7 @@ fn editor_widget(
         *line = picked(
             line,
             at.column - 1,
-            at.column - 1 + width,
+            at.column - 1 + matched,
             Style::default().bg(Color::Yellow).fg(Color::Black),
             true,
         );
@@ -1701,7 +1702,7 @@ fn editor_widget(
 
     Paragraph::new(folded(lines, state))
         .scroll((state.editor_scroll as u16, 0))
-        .block(editor_block(state, title, footer, command))
+        .block(editor_block(state, title, footer, command, width))
 }
 
 /// The mirror of the file down the editor's right-hand edge, and the scrollbar
@@ -1998,6 +1999,7 @@ fn preview_widget(
     title: Line<'static>,
     footer: Vec<Span<'static>>,
     rows: &[crime::preview::Row],
+    width: u16,
 ) -> Paragraph<'static> {
     let dark = state.editor_theme != "light";
     let columns = crime::preview_columns(state);
@@ -2008,7 +2010,7 @@ fn preview_widget(
     // Every match of what `/` looked for, painted on the row it is in — the
     // same highlight Source draws, over rows rather than lines, since
     // `crime::matches` already answers in row coordinates while previewing.
-    let width = state.find_query.chars().count();
+    let matched = state.find_query.chars().count();
     for at in crime::matches(state) {
         let Some(line) = lines.get_mut(at.line - 1) else {
             continue;
@@ -2016,7 +2018,7 @@ fn preview_widget(
         *line = picked(
             line,
             at.column - 1,
-            at.column - 1 + width,
+            at.column - 1 + matched,
             Style::default().bg(Color::Yellow).fg(Color::Black),
             false,
         );
@@ -2046,7 +2048,7 @@ fn preview_widget(
     shift(&mut lines, state, 0);
     Paragraph::new(lines)
         .scroll((state.editor_scroll as u16, 0))
-        .block(editor_block(state, title, footer, command))
+        .block(editor_block(state, title, footer, command, width))
 }
 
 /// A rendered row as a drawn line, each piece styled by what it *is*. Shared
@@ -2243,8 +2245,12 @@ fn buffer_title(
 ///
 /// Nothing at all for a buffer that cannot be read: `reading::transport` is
 /// empty then, and an empty `Line` draws no title.
-fn transport_title(state: &State) -> Line<'static> {
-    Line::from(
+fn transport_title(state: &State, room: usize) -> Line<'static> {
+    let mut spans = match blame_label(state, room) {
+        label if label.is_empty() => Vec::new(),
+        label => vec![Span::styled(label, Style::default().fg(Color::DarkGray))],
+    };
+    spans.extend(
         crime::reading::transport(state)
             .into_iter()
             .flat_map(|(control, glyph)| {
@@ -2258,12 +2264,42 @@ fn transport_title(state: &State) -> Line<'static> {
                 ]
             })
             .collect::<Vec<Span<'static>>>(),
-    )
-    .right_aligned()
+    );
+    Line::from(spans).right_aligned()
+}
+
+/// F40. Who last committed the line the cursor is on, and the day they wrote
+/// it, drawn dimmed on the top border to the left of the Transport — or that
+/// nobody has committed it yet. Empty whenever [`crime::blame::at_cursor`] has
+/// nothing to say, and an empty `Line` draws no title.
+///
+/// The name is what gives when the border runs out of room: the date is ten
+/// columns whatever the commit, and a name cut short still says which hand,
+/// while a date cut short says the wrong day.
+fn blame_label(state: &State, room: usize) -> String {
+    let Some(authorship) = crime::blame::at_cursor(state) else {
+        return String::new();
+    };
+    let (who, when) = match &authorship {
+        crime::blame::Authorship::Committed(authored) => {
+            (authored.author.as_str(), format!("  {}", authored.date))
+        }
+        crime::blame::Authorship::NotCommittedYet => ("Not committed yet", String::new()),
+    };
+    // One space each side, so the clause is not against a corner or against the
+    // first control — the reason the Transport keeps a column of air too.
+    let left = room.saturating_sub(2 + when.width());
+    match left {
+        0 => String::new(),
+        left => format!(" {}{when} ", truncate(who, left)),
+    }
 }
 
 /// What the border leaves the left-hand title: the width inside its two
-/// corners, less the Transport at the far end.
+/// corners, less the Transport at the far end. The Authorship takes no share of
+/// it — the name of the file this pane is showing is the last thing on the
+/// border to give, and a pane too narrow for both says nothing about who wrote
+/// the line rather than nothing about which file it is in.
 fn title_room(state: &State, width: u16) -> usize {
     let labels: Vec<String> = crime::reading::transport(state)
         .into_iter()
@@ -2581,7 +2617,7 @@ fn story_widget(
     };
     Paragraph::new(lines)
         .scroll((state.editor_scroll as u16, 0))
-        .block(editor_block(state, title, footer, command))
+        .block(editor_block(state, title, footer, command, width))
 }
 
 /// What an old-side Site shows instead of code. `OpenAt` is executed here as a
@@ -2877,9 +2913,16 @@ fn editor_block(
     title: Line<'static>,
     footer: Vec<Span<'static>>,
     command: Option<&str>,
+    width: u16,
 ) -> Block<'static> {
+    // What the left-hand title did not take, which is what the Authorship may
+    // have: ratatui draws a left-aligned title *over* a right-aligned one, so a
+    // clause measured against the whole border is a clause drawn under the
+    // filename — and `title_room` has already cut the name to the columns the
+    // Transport leaves.
+    let room = title_room(state, width).saturating_sub(title.width());
     pane_block(title, state, Pane::Editor)
-        .title(transport_title(state))
+        .title(transport_title(state, room))
         .title_bottom(Line::from(footer).right_aligned())
         .title_bottom(
             Line::from(Span::styled(
@@ -3948,14 +3991,53 @@ fn overlay(frame: &mut Frame, title: &str, lines: Vec<Line<'static>>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        action_icon, branch_lines, buffer_title, cheatsheet_rows, code_lines, colour, diff_rows,
-        folded, guided, highlight, icon_colour, layout, paint_drag, pane_actions_title,
+        action_icon, blame_label, branch_lines, buffer_title, cheatsheet_rows, code_lines, colour,
+        diff_rows, folded, guided, highlight, icon_colour, layout, paint_drag, pane_actions_title,
         preview_line, risk_lines, risk_title, shift, status_line, story_title, title_room,
         transport_title, tree_lines, truncate, with_caret, Block, Borders, Color, Kind, Line,
         Modifier, Place, Selection, Span, State, Style, Tone, UnicodeWidthStr, DIRTY, DOTS,
         WARNING,
     };
     use crime::risk::{Figure, Figures, Function, Metrics};
+
+    /// F40's exact wording, which no scenario asserts: the hand that wrote the
+    /// line and the day it did, two columns apart and one clear of the border
+    /// each side. Pinned here because the scenarios assert the authorship and
+    /// never the copy — and pinned narrow as well, because the name is the half
+    /// that gives: a date cut short names the wrong day.
+    #[test]
+    fn the_border_names_the_author_and_keeps_the_date_whole_when_it_is_cut() {
+        let mut state = State::default();
+        state.git_installed = true;
+        state.repo = Some(Vec::new());
+        let path = std::path::PathBuf::from("/w/main.rs");
+        state.current_buffer = Some(path.clone());
+        state.buffers.insert(
+            path.clone(),
+            crime::editor::Buffer::open("fn main() {}\n", false, 4),
+        );
+        state
+            .committed
+            .insert(path.clone(), Some("fn main() {}\n".to_string()));
+        state.blame.insert(
+            path.clone(),
+            vec![crime::blame::Authored {
+                author: "Ada Lovelace".to_string(),
+                date: "2026-01-05".to_string(),
+            }],
+        );
+
+        assert_eq!(blame_label(&state, 40), " Ada Lovelace  2026-01-05 ");
+        assert_eq!(blame_label(&state, 20), " Ada L\u{2026}  2026-01-05 ");
+        // A border with no room for the date says nothing rather than half of one.
+        assert_eq!(blame_label(&state, 12), "");
+
+        // And the one clause with no date to keep, so nothing is cut against it.
+        state
+            .committed
+            .insert(path, Some("fn main() { run() }\n".to_string()));
+        assert_eq!(blame_label(&state, 40), " Not committed yet ");
+    }
 
     /// The two sentences an empty picker can say are different findings, and
     /// the only place either is spelled. A repository with no branches and a
@@ -4181,7 +4263,7 @@ mod tests {
         let mut buffer = ratatui::buffer::Buffer::empty(area);
         Block::default()
             .borders(Borders::ALL)
-            .title(transport_title(&state))
+            .title(transport_title(&state, 40 - 2))
             .render(area, &mut buffer);
         let top: Vec<String> = (0..40)
             .map(|column| buffer[(column, 0)].symbol().to_string())
@@ -4212,6 +4294,78 @@ mod tests {
         }
     }
 
+    /// F40 on the border, rendered: the Authorship lands to the *left* of the
+    /// Transport, and the filename is cut before either. Rendered rather than
+    /// reasoned about, for the reason the Transport's own placement is — and the
+    /// Transport still ends hard against the corner, which is where
+    /// `layout::strip_at` hit-tests it from: a clause drawn into those columns
+    /// would be a control that can be clicked and not seen.
+    #[test]
+    fn the_authorship_sits_between_the_filename_and_the_transport() {
+        use ratatui::widgets::Widget;
+        let mut state = State::default();
+        state.git_installed = true;
+        state.repo = Some(Vec::new());
+        state.speech.speed = 1.0;
+        let path = std::path::PathBuf::from("/w/guide.md");
+        state.current_buffer = Some(path.clone());
+        state.buffers.insert(
+            path.clone(),
+            crime::editor::Buffer::open("# Guide\n", false, 4),
+        );
+        state
+            .committed
+            .insert(path.clone(), Some("# Guide\n".to_string()));
+        state.blame.insert(
+            path,
+            vec![crime::blame::Authored {
+                author: "Ada Lovelace".to_string(),
+                date: "2026-01-05".to_string(),
+            }],
+        );
+
+        let area = ratatui::layout::Rect::new(0, 0, 80, 4);
+        let drawn = |state: &State, name: &str| {
+            let mut buffer = ratatui::buffer::Buffer::empty(area);
+            let title = buffer_title(
+                name,
+                &crime::editor::Buffer::open("x", false, 4),
+                "normal",
+                title_room(state, 80),
+            );
+            let room = title_room(state, 80).saturating_sub(title.width());
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .title(transport_title(state, room))
+                .render(area, &mut buffer);
+            (0..80)
+                .map(|column| buffer[(column, 0)].symbol().to_string())
+                .collect::<String>()
+        };
+        let top = drawn(&state, "guide.md");
+        assert!(top.starts_with("\u{250c}guide.md"), "{top:?}");
+        assert!(
+            top.contains("Ada Lovelace  2026-01-05"),
+            "the authorship is not on the border: {top:?}"
+        );
+        assert!(top.ends_with("1.00x \u{2510}"), "{top:?}");
+
+        // And the filename is the last thing to give: a name that leaves no room
+        // for a date takes the columns, rather than being drawn over by a clause
+        // about who wrote a line in a file nobody can now name.
+        let top = drawn(
+            &state,
+            "a-very-long-document-name-indeed-and-then-some-more-of-it.md",
+        );
+        assert!(
+            top.contains("indeed-and-then-some"),
+            "the name gave: {top:?}"
+        );
+        assert!(!top.contains("Ada"), "{top:?}");
+        assert!(top.ends_with("1.00x \u{2510}"), "{top:?}");
+    }
+
     /// A filename long enough to reach the Transport is cut, rather than drawn
     /// over controls that can then be clicked and not seen: ratatui draws a
     /// left-aligned title over a right-aligned one.
@@ -4232,7 +4386,7 @@ mod tests {
                 "normal",
                 title_room(&state, 40),
             ))
-            .title(transport_title(&state))
+            .title(transport_title(&state, 40 - 2))
             .render(area, &mut buffer);
         let top: String = (0..40)
             .map(|column| buffer[(column, 0)].symbol().to_string())
@@ -4685,7 +4839,7 @@ mod tests {
         state.editor_hscroll = 6;
         let area = ratatui::layout::Rect::new(0, 0, 12, 4);
         let mut buffer = ratatui::buffer::Buffer::empty(area);
-        super::preview_widget(&state, None, Line::from("README.md"), Vec::new(), &rows)
+        super::preview_widget(&state, None, Line::from("README.md"), Vec::new(), &rows, 80)
             .render(area, &mut buffer);
         let drawn: String = (0..12)
             .map(|column| buffer[(column, 1)].symbol().to_string())
@@ -4715,7 +4869,7 @@ mod tests {
         });
         let area = ratatui::layout::Rect::new(0, 0, 12, 3);
         let mut buffer = ratatui::buffer::Buffer::empty(area);
-        super::preview_widget(&state, None, Line::from("README.md"), Vec::new(), &rows)
+        super::preview_widget(&state, None, Line::from("README.md"), Vec::new(), &rows, 80)
             .render(area, &mut buffer);
         let reversed = |column: u16| {
             buffer[(column, 1)]

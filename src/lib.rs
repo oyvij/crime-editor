@@ -14,6 +14,7 @@
 //! returned as an [`Effect`] rather than performed here. Nothing in this crate
 //! touches the terminal, the pty, the filesystem or git.
 
+pub mod blame;
 pub mod editor;
 pub mod filter;
 pub mod fold;
@@ -1570,6 +1571,14 @@ pub struct State {
     /// commit does not hold. It is the side the change marks diff the buffer
     /// against, which is why the key is the buffer's path and not git's.
     pub committed: BTreeMap<PathBuf, Option<String>>,
+    /// Who last committed each line of each open buffer, in the commit `HEAD`
+    /// names — one entry per line of the file *as that commit holds it*, so a
+    /// buffer line is traced back through the diff before it is indexed
+    /// (`blame::committed_line`). Told by the edge on the same poll as
+    /// `committed` and cached there against the commit, never against
+    /// `Buffer::revision`: a blame walks history, and typing must not start one.
+    /// Nothing at all for a file the commit has no copy of.
+    pub blame: BTreeMap<PathBuf, Vec<blame::Authored>>,
     pub comments: Vec<Comment>,
     pub reviews: BTreeSet<u32>,
     pub retention_limit: usize,
@@ -2144,6 +2153,7 @@ impl Default for State {
             walking: None,
             file_hunks: Vec::new(),
             committed: BTreeMap::new(),
+            blame: BTreeMap::new(),
             story_sets: Vec::new(),
             predictions_put: BTreeSet::new(),
             risk: risk::Risk::default(),

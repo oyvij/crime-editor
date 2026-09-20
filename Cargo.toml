@@ -1,6 +1,6 @@
 [package]
 name = "crime"
-version = "0.160.1"
+version = "0.161.0"
 edition = "2021"
 description = "CRIME — Command · Review · Integrated · Modal · Editor"
 license = "MIT"
@@ -10,6 +10,11 @@ readme = "README.md"
 [dependencies]
 anyhow = "1.0.104"
 arboard = "3.6.1"
+# Already in the tree through `mermaid-text`; a direct row because a
+# commit's timestamp has to become a civil date, and leap-year arithmetic by hand
+# is the most expensive kind of small code (AGENTS.md). No `clock` feature: the
+# only instant that matters is the one git recorded.
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 clap = { version = "4.6.6", features = ["derive"] }
 crossterm = { version = "0.29.0", features = ["osc52"] }
 git2 = "0.21.0"
