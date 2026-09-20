@@ -3021,7 +3021,9 @@ The spec is VS Code's gutter indicator, asked for by screenshot.
 
 **R37.1** A line the buffer holds that **the last commit does not** carries a bar in the gutter. An
 inserted line and an edited one are the same answer — the `+` side of a diff — and which lines is
-what the scenarios assert; the glyph and the colour are the edge's.
+what the scenarios assert; the glyph and the colour are the edge's. The diff itself is
+`authorship::traced`, shared with F40's Authorship since R40.2a: the same lines the border says nobody
+has committed are the lines the gutter bars.
 **R37.2** The mark answers **the buffer as it is**, saved or not: a line typed a second ago is a
 change. The other side is what `HEAD` holds, **told by the edge** on the git poll and never
 remembered by the core, keyed by the buffer's own path — a file the commit has no copy of is told as
@@ -3094,9 +3096,59 @@ terminal, so `install.sh` asks the binary rather than reading the source. The ta
 **R39.6** The four Asset names are pinned by a unit test that names `.github/workflows/release.yml`,
 and the workflow names the test.
 
+## F40 — Authorship — **DEFINED**
+
+Scenarios live in `features/authorship.feature`. `CONTEXT.md`'s "Authorship" is the vocabulary — not
+"blame", which is git's command and names a whole file. The spec is GitHub issue #33 ("Add git blame
+feature") and the answers on it; the Change bar (F37) is the precedent every edge case here is
+settled against.
+
+**R40.1** The editor's **top border** says who last committed the line the cursor is on and the
+**authored** date, `YYYY-MM-DD`. Authored rather than committed is what "who wrote this, when" means,
+and it survives a rebase; the format does not vary by locale. Always on, and no key toggles it — a
+toggle needs a binding, a Cheatsheet row and a sweep entry for a feature nobody has asked to hide.
+No commit hash: a hash is worth showing once there is something to do with it.
+**R40.2** It is the **committed** file's answer, so a buffer line is traced back through the diff
+before it names anybody — a line inserted above the cursor would otherwise hand the cursor's line the
+author of the line above it. A line the working tree has changed, and every line of a file the commit
+has no copy of, are **not committed yet**.
+**R40.2a** **One diff, not two.** `authorship::traced` is the only derivation of which committed line
+a buffer line came from, and R37.1's Change bar now bars exactly the lines it answers `None` for —
+`story::added_lines` was a second diff of the same two strings and is deleted. Two derivations would
+be two answers to which lines the commit holds, and the disagreement is a gutter bar beside a line the
+border credits to somebody.
+**R40.3** **Told by the edge, cached against the commit.** Only a new commit can change what it
+answers, so the key is the file and `HEAD` and never `Buffer::revision`: typing starts no walk of a
+file's history. A buffer opened since the last poll is asked about at once, on the same poll as F37's
+committed text.
+**R40.4** **Silence outside a repository, and without git.** A border reporting "not a git
+repository" on every file of a folder that is not one is noise — R37.2's answer to the same question,
+where a file the commit has no copy of carries no bar.
+**R40.5** **Edit View only.** Review and Story both put their own content in the editor's title, and
+this must not disturb either. A Preview is not a View — it is one Buffer's way of being drawn inside
+Edit (ADR 0007) — and a Preview row carries the source line it came from, so the Authorship is that
+line's.
+**R40.6** **The name gives, the date is kept whole.** A border with no room for both cuts the author
+with an ellipsis: the date is ten columns whatever the commit, and a date cut short names the wrong
+day. Pinned in a unit test in `src/ui.rs`, as is the exact wording; a border with no room for the
+date at all says nothing rather than half of one.
+
+**⛔ Not scenarios, deliberately.** Blame for a Selection or a range (this is the cursor's line);
+opening, showing or diffing the commit the Authorship names; Authorship in a hosted pane, the file tree or
+a Corner occupant; a setting for the date format or to turn it off; any per-line gutter presentation
+— the gutter's one column is already spoken for by the Change bar, diagnostics and the voice's place
+(R37.3).
+
+**Still open.** Two costs, both measured against what F37 already paid and neither felt yet.
+The `blame_file` walk is synchronous at the edge, so the first read of a very large file with a long
+history is paid on the main loop; cached per commit it happens once, but off the loop through a
+`Sender` — the way an analysis and a format already are — is the shape if it is ever felt. And
+`traced` runs a patch per draw, which is what `changed_lines` already did before this feature and is
+now the same single one; memoising it against `Buffer::revision` is the move if a frame ever shows it.
+
 ## Spec status
 
-Every feature is defined in Gherkin — **1087 scenario headings across 37 feature files** — and no
+Every feature is defined in Gherkin — **1429 scenario headings across 55 feature files** — and no
 blocking questions remain. What is still open is listed per feature above, and every remaining item is
 a refinement that does not change an existing scenario: Q28, Q31, Q34, Q35, Q36, Q37, Q39, Q40,
 Q41, Q42, Q53, Q54, Q55, Q56, Q57, Q58, Q59, Q60.

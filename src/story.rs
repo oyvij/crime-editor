@@ -1810,23 +1810,6 @@ pub fn hunks(old: &[u8], new: &[u8]) -> Vec<Hunk> {
         .collect()
 }
 
-/// The lines of `new` that `old` does not hold, 1-based — a diff read for its
-/// `+` lines alone, so an edited line and an inserted one are the same answer.
-/// Pure for the reason [`hunks`] is.
-pub fn added_lines(old: &str, new: &str) -> Vec<usize> {
-    let Ok(patch) = git2::Patch::from_buffers(old.as_bytes(), None, new.as_bytes(), None, None)
-    else {
-        return Vec::new();
-    };
-    (0..patch.num_hunks())
-        .filter_map(|hunk| Some((hunk, patch.hunk(hunk).ok()?.1)))
-        .flat_map(|(hunk, lines)| (0..lines).map(move |line| (hunk, line)))
-        .filter_map(|(hunk, line)| patch.line_in_hunk(hunk, line).ok())
-        .filter(|line| line.origin() == '+')
-        .filter_map(|line| Some(line.new_lineno()? as usize))
-        .collect()
-}
-
 /// What the spine shows under the Stories: the hunks no Step claims, and how
 /// many of the range's deletions went unwalked. Never a Story itself — no
 /// premise, nothing authored.
@@ -2322,16 +2305,6 @@ pub fn line_at_row(state: &State, row: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-
-    #[test]
-    fn added_lines_are_the_plus_side_of_the_diff_and_nothing_else() {
-        let old = "a\nb\nc\n";
-        assert_eq!(added_lines(old, old), Vec::<usize>::new());
-        assert_eq!(added_lines(old, "a\nx\nb\nc\n"), vec![2]);
-        assert_eq!(added_lines(old, "a\nB\nc\n"), vec![2]);
-        assert_eq!(added_lines(old, "a\nc\n"), Vec::<usize>::new());
-        assert_eq!(added_lines(old, "1\na\nb\nc\n2\n"), vec![1, 5]);
-    }
 
     use super::*;
 

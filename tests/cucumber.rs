@@ -4166,6 +4166,51 @@ fn no_line_marked_changed(world: &mut CrimeWorld) {
     assert!(crime::changed_lines(&world.state).is_empty());
 }
 
+/// The Authorship the edge read off the commit, one row per line of the file *as the
+/// commit holds it* — the same shape and the same key as the commit's text
+/// above, because the core is told both on the same poll and never reads git.
+#[given(expr = "the last commit authored {string} as:")]
+fn commit_authored(world: &mut CrimeWorld, path: String, step: &Step) {
+    let authors = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .skip(1)
+        .map(|row| crime::authorship::Authored {
+            author: row[1].clone(),
+            date: row[2].clone(),
+        })
+        .collect();
+    let absolute = abs(world, &path);
+    world.state.authorship.insert(absolute, authors);
+}
+
+#[then(expr = "the editor pane reports the line as authored by {string} on {string}")]
+fn line_authored_by(world: &mut CrimeWorld, author: String, date: String) {
+    assert_eq!(
+        crime::authorship::at_cursor(&world.state),
+        Some(crime::authorship::Authorship::Committed(
+            crime::authorship::Authored { author, date }
+        ))
+    );
+}
+
+#[then(expr = "the editor pane reports the line as {string}")]
+fn line_authorship_is(world: &mut CrimeWorld, state: String) {
+    let reported = match crime::authorship::at_cursor(&world.state) {
+        Some(crime::authorship::Authorship::NotCommittedYet) => "not-committed-yet",
+        Some(crime::authorship::Authorship::Committed(_)) => "committed",
+        None => "no-authorship",
+    };
+    assert_eq!(reported, state);
+}
+
+#[then(expr = "the editor pane reports no authorship")]
+fn no_authorship(world: &mut CrimeWorld) {
+    assert_eq!(crime::authorship::at_cursor(&world.state), None);
+}
+
 #[given(expr = "{string} is open in the editor holding:")]
 fn open_holding(world: &mut CrimeWorld, path: String, step: &Step) {
     let contents = step
