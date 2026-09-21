@@ -69,6 +69,11 @@ _Avoid_: terminal pane, bottom panel, dock, tool window
 Every shell split in the Strip, shown and hidden as one.
 _Avoid_: terminals, terminal tab
 
+**Group tab**:
+One of the names on the Strip's top border — `Shells`, and `Debug` while a Debug session exists —
+lit for the group showing, and clicked to show another.
+_Avoid_: tab (a Buffer is not one either), switcher
+
 **Copying**:
 Putting the selection on the system clipboard, falling back to the terminal over SSH.
 _Avoid_: cut, clip
@@ -726,7 +731,8 @@ _Avoid_: debug panel, debug tool window, debug tab
 
 **Program output**:
 The debugged program's own terminal, inside the Debug group. It can be hidden to give the Variables
-the width without ending it, and marks new output while it is out of sight.
+the width without ending it. New output while it is out of sight is marked wherever that is — on
+the `Debug` Group tab, and on the Chip that shows it again.
 _Avoid_: console, debug terminal, shell (a shell is the user's)
 
 **Evaluator**:
