@@ -768,7 +768,9 @@ removes one or clears them all.
 _Avoid_: breakpoints dialog, breakpoint view
 
 **Watch**:
-An expression kept at the top of the Variables and re-evaluated at every pause.
+An expression kept at the top of the Variables and re-evaluated at every pause. One that calls
+something is marked as calling, since it runs that call again at every pause; a Hover, by contrast,
+never calls anything.
 _Avoid_: pinned expression
 
 **Debug group**:
