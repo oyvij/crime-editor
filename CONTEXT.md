@@ -721,6 +721,12 @@ adapter's own words. One that changed since the last pause is drawn highlighted 
 stepping shows what the line just did. Never drawn on a line the call has not reached.
 _Avoid_: inline hint, annotation, value overlay
 
+**Library frame**:
+A Frame whose source lies outside the workspace, or that the Debug adapter itself marks as not worth
+showing. A run of them is folded into one dimmed row that says how many, and unfolds on request —
+never hidden outright, since how much library sits between two of your calls is itself a clue.
+_Avoid_: external frame, framework frame, hidden frame
+
 **Breakpoint**:
 A line the program pauses at when it reaches it, marked in the gutter. It moves with its line as the
 Buffer is edited, and a project remembers it across runs along with the text the line held.
