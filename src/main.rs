@@ -594,6 +594,7 @@ struct Edge {
     /// two widths is two different answers. "Never parse per frame" is sharper
     /// here than for tokens — a diagram is routed, not merely scanned.
     previewed: (PathBuf, u64, usize, Vec<varde::preview::Row>),
+    faint: ratatui::style::Style,
     /// A query waiting for typing to settle.
     pending_search: Option<(String, Instant)>,
     /// When to tell the core that typing has paused long enough to be worth
@@ -752,6 +753,17 @@ fn run(
         || root.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
     );
+    // Asked before raw mode, which the query sets and restores for itself. A
+    // terminal that does not answer is not a failure: `ui::faint` falls back
+    // to the terminal's own dimming.
+    let palette = terminal_colorsaurus::color_palette(Default::default())
+        .ok()
+        .map(|palette| {
+            [palette.foreground, palette.background].map(|colour| {
+                let (r, g, b) = colour.scale_to_8bit();
+                [r, g, b]
+            })
+        });
     let (out, enhanced) = enter_terminal(&title)?;
     state.reports_modifiers = false;
 
@@ -782,6 +794,7 @@ fn run(
         highlighted: (PathBuf::new(), u64::MAX, Vec::new()),
         diff_sides: (Vec::new(), Vec::new()),
         previewed: (PathBuf::new(), u64::MAX, 0, Vec::new()),
+        faint: ui::faint(palette),
         pending_search: None,
         candidates_due: None,
         hover_due: None,
@@ -1525,6 +1538,7 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
                 diff_new: &edge.diff_sides.0,
                 diff_old: &edge.diff_sides.1,
                 preview: &edge.previewed.3,
+                faint: edge.faint,
             },
         );
     })?;

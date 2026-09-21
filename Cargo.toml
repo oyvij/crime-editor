@@ -1,6 +1,6 @@
 [package]
 name = "varde"
-version = "0.162.1"
+version = "0.163.0"
 edition = "2021"
 description = "Varde — a terminal IDE that reviews, tests and ships your work"
 license = "MIT"
@@ -42,6 +42,7 @@ hound = "3.5.1"
 linkify = "0.11.0"
 sha2 = "0.11.0"
 toml_edit = "0.25.15"
+terminal-colorsaurus = "1"
 
 [dev-dependencies]
 cucumber = "0.21"
