@@ -671,6 +671,12 @@ exception — and so can be inspected and evaluated in. The only state in which 
 the Evaluator mean anything.
 _Avoid_: halted, suspended, stopped (a stopped session has ended)
 
+**Waiting**:
+The state of an attach Debug session whose program has gone away — restarted or crashed — and which
+is listening to attach again, sending its Breakpoints anew when the program answers. A Launch
+configuration can opt out; one that attaches does not by default. Ended only by stopping it.
+_Avoid_: reconnecting, detached, idle
+
 **Paused line**:
 The line the Paused program will run next, in the Frame being inspected.
 _Avoid_: current line, execution point, cursor
