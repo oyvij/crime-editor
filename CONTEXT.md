@@ -8,6 +8,20 @@ This file is the glossary and nothing else. `AGENTS.md` holds the working contra
 
 ## Language
 
+### What it is called
+
+**Varde**:
+The editor. A stone cairn somebody stacked to mark the way for whoever comes next. Written `Varde`
+in prose, `varde` as the binary, the crate, the state directories and the release assets, and
+`VARDE` in nothing but the XTVERSION reply, where uppercase is the sequence's convention.
+_Avoid_: CRIME, the TUI, the tool, Varde Editor
+
+**CRIME**:
+What Varde was called until 0.161.1, and an acronym — Command · Review · Integrated · Modal ·
+Editor. Retired: `docs/adr/0020-the-editor-is-called-varde.md`. It survives only in that ADR and in
+release history, and a CRIME install does not update into a Varde one.
+_Avoid_: using it at all
+
 ### Selecting and copying
 
 **Selection**:
