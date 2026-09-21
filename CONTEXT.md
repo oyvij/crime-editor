@@ -673,6 +673,12 @@ One call on the Paused program's stack, listed in the Corner. Choosing one moves
 the Variables and the Evaluator to that call.
 _Avoid_: stack entry, call, Step
 
+**Inline value**:
+A variable's value drawn faintly at the end of a line the Paused call has already run, in the Debug
+adapter's own words. One that changed since the last pause is drawn highlighted for that pause, so
+stepping shows what the line just did. Never drawn on a line the call has not reached.
+_Avoid_: inline hint, annotation, value overlay
+
 **Breakpoint**:
 A line the program pauses at when it reaches it, marked in the gutter. It moves with its line as the
 Buffer is edited, and a project remembers it across runs along with the text the line held.
