@@ -673,7 +673,8 @@ _Avoid_: debugger backend, debug server, debug engine
 **Paused**:
 The state of a Debug session whose program is stopped — at a Breakpoint, after stepping, or on an
 exception — and so can be inspected and evaluated in. The only state in which Frames, Variables and
-the Evaluator mean anything.
+the Evaluator mean anything. Several threads can be Paused at once; the one being inspected stays
+put when another pauses, and the others are counted in the Frames and on the Transport.
 _Avoid_: halted, suspended, stopped (a stopped session has ended)
 
 **Running**:
