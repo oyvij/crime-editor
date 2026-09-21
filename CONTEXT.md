@@ -640,10 +640,10 @@ a mouse is one the cheatsheet cannot promise.
 _Avoid_: play button, toolbar, controls, player bar, media bar, debug toolbar
 
 **Chip**:
-One control in a Transport: a glyph and the keys that do the same, in the theme's own colours. Dimmed
-while what it does is unavailable, lit while it is the last one used. Where the Transport has no room
-for every Chip whole, all of them shed their keys together and none is cut or wrapped. One Chip says
-what pressing it does, so continue and pause, like play and pause, are one Chip.
+One control in a Transport: a glyph and the keys that do the same, in the theme's own colours.
+Dimmed while what it does is unavailable, lit while it is the last one used. Where the Transport has
+no room for every Chip whole, all of them shed their keys together and none is cut or wrapped. One
+Chip says what pressing it does, so continue and pause, like play and pause, are one Chip.
 _Avoid_: button, icon, control
 
 ### Debugging a running program
@@ -713,8 +713,8 @@ second key or Escape.
 _Avoid_: which-key, leader menu, popup
 
 **Frame**:
-One call on the Paused program's stack, listed in the Corner under the thread it belongs to. Choosing one moves the Paused line,
-the Variables and the Evaluator to that call.
+One call on the Paused program's stack, listed in the Corner under the thread it belongs to.
+Choosing one moves the Paused line, the Variables and the Evaluator to that call.
 _Avoid_: stack entry, call, Step
 
 **Inline value**:
@@ -738,7 +738,8 @@ _Avoid_: stop, marker
 **Exception filter**:
 A kind of exception the program can be told to pause on — caught, uncaught, a Rust panic, one named
 class — offered by the Debug adapter and never invented by Varde. Switched at the top of the
-Breakpoint list and remembered per project. Pausing on one puts the exception first in the Variables.
+Breakpoint list and remembered per project. Pausing on one puts the exception first in the
+Variables.
 _Avoid_: exception breakpoint, catchpoint, break on throw
 
 **Unverified breakpoint**:

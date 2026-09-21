@@ -13,8 +13,9 @@ never a right-click menu. Right-click stays a no-op, as `features/mouse.feature`
 
 ## What a Chip is
 
-A glyph and the keys that do the same thing — every one of them, so the debugger's step over reads
-` ⤼ F8 ␣n `, and the Chip teaches its own key and its modifier-free alias every time it is looked at.
+A glyph and the keys that do the same thing — every one of them, so the debugger's step over
+reads ` ⤼ F8 ␣n `, and the Chip teaches its own key and its modifier-free alias every time it is
+looked at.
 No word: the keys carry more than a label would and cost less width.
 
 **Dimmed and lit come from state, never from a timer.** A Chip is dimmed while its action cannot
@@ -50,12 +51,12 @@ where the eye already is, and they are the pattern Varde already had.
 
 **A new action without a Chip is incomplete**, the same as a key missing from the cheatsheet. The
 debugger (issue #45) is the first feature built this way, and the Reading's Transport is restyled to
-match. Existing keyed-only actions elsewhere in Varde are catching up, not grandfathered: each gets its
-Chip when the feature it belongs to is next worked on.
+match. Existing keyed-only actions elsewhere in Varde are catching up, not grandfathered: each gets
+its Chip when the feature it belongs to is next worked on.
 
 **Width is the cost, and it is paid knowingly.** A Transport of eight Chips with their keys is wider
 than a row of bare glyphs, so the key-shedding rule will apply often on narrow screens. Chips with
 glyph and keys were chosen over bare glyphs for exactly the discoverability that costs the width.
 
-**Transport and Chip are words in `CONTEXT.md`.** A Transport is no longer the Reading's alone: it is
-any pane's row of Chips driving something in flight.
+**Transport and Chip are words in `CONTEXT.md`.** A Transport is no longer the Reading's alone: it
+is any pane's row of Chips driving something in flight.
