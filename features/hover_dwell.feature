@@ -16,7 +16,7 @@ Feature: Resting the pointer says what a symbol is
   keystroke's place in insert mode, which is the reason the gesture asks rather than clicks.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project is a git repository
 
   Rule: A pointer that rests on a symbol asks what it is, in either mode

@@ -6,7 +6,7 @@ that follows the code in execution order rather than file order, each Step point
 the diff and making one claim about it. You walk a Story with the code on screen, and you can
 comment on any Step exactly as you would in [Review view](review.md).
 
-CRIME does not write Stories itself and never parses what the AI prints. It asks the AI to write a
+Varde does not write Stories itself and never parses what the AI prints. It asks the AI to write a
 file, waits for the file to appear, checks it, and walks it.
 
 ## The words
@@ -57,7 +57,7 @@ everything that landed meanwhile.
 
 ### Confirming
 
-Whatever the Range, CRIME shows it and asks before authoring, because sending the prompt clears
+Whatever the Range, Varde shows it and asks before authoring, because sending the prompt clears
 whatever the AI's command line is showing.
 
 | Key | In the confirmation |
@@ -67,8 +67,8 @@ whatever the AI's command line is showing.
 
 Confirming pastes the authoring prompt into the AI pane and submits it. If no AI session is
 running, the configured one is started first and the prompt is held until it is ready for input
-(see [AI pane](ai-pane.md)). Beside the story file CRIME also writes a companion
-`.crime/stories/<base>-<head>.context.md` and names it in the prompt, so the AI has the change in
+(see [AI pane](ai-pane.md)). Beside the story file Varde also writes a companion
+`.varde/stories/<base>-<head>.context.md` and names it in the prompt, so the AI has the change in
 front of it.
 
 ### A Range already authored
@@ -84,10 +84,10 @@ on real changes and a guessed limit would be wrong on a slow run and slow on a f
 the wait is the file arriving, the AI exiting (the view says `authoring-abandoned`), or you
 pressing `Esc`.
 
-When the file lands CRIME checks four things that need no judgement: every Site's file exists,
+When the file lands Varde checks four things that need no judgement: every Site's file exists,
 its line range fits inside the file, a Site that claims a change really overlaps one, and a cited
 value really appears on the line it cites. A set that fails is **handed back** to the AI with a fix
-request naming only the failing Steps, and CRIME keeps waiting. Two rounds; if the second artifact
+request naming only the failing Steps, and Varde keeps waiting. Two rounds; if the second artifact
 still fails, the set is refused with what failed. A file that does not parse at all — a missing
 title, a Step without a name, a Prediction without exactly three choices — is refused whole, never
 salvaged in part: a spine quietly missing one Story is indistinguishable from a Story the AI never
@@ -95,19 +95,19 @@ wrote.
 
 ## Where a Story set lives, and how long
 
-Sets are written to `.crime/stories/<base>-<head>.json`, named for the two revisions as twelve-hex
+Sets are written to `.varde/stories/<base>-<head>.json`, named for the two revisions as twelve-hex
 prefixes — `aaaaaaaaaaaa-bbbbbbbbbbbb.json` for a committed Range, `aaaaaaaaaaaa-worktree.json`
 for an uncommitted one. The ten most recent are kept, with their companion files; older sets are
 pruned when a new one is written.
 
-**A Story dies with its Range.** CRIME never updates a Story to follow the code. When a Step's Site
+**A Story dies with its Range.** Varde never updates a Story to follow the code. When a Step's Site
 no longer holds the text it was written against, the Step says so, shows what the Site used to
 hold, and stops claiming to describe what is on screen — it is never quietly re-pointed at
 whatever moved into its place. Walk the same code next month and somebody authors it again; that
 is the cheap side of the trade, because a Story generated per Range is never *wrong*. The
 reasoning is `docs/adr/0005-a-story-dies-with-its-range.md`.
 
-A Story set is not hand-written, and nothing in CRIME will help you make one last. If you want
+A Story set is not hand-written, and nothing in Varde will help you make one last. If you want
 durable, curated tours of a codebase, that is a different feature.
 
 ## The spine
@@ -176,8 +176,8 @@ it rather than leaving the Story.
 
 A Step may name concrete values to make the flow real. Each carries where it was copied from, and
 `g` jumps there. A value with nowhere to point is displayed as **invented** — the distinction is
-the whole reason you can trust the rest. CRIME checks that a cited value's characters are on the
-line it cites and nothing more; whether it is really a literal is not something CRIME can tell.
+the whole reason you can trust the rest. Varde checks that a cited value's characters are on the
+line it cites and nothing more; whether it is really a literal is not something Varde can tell.
 
 ### Stale Steps
 
@@ -194,7 +194,7 @@ except where an uncommitted Range is committed and the base moves under it.
 
 ### Where you left off
 
-Your position in a Story survives leaving it and restarting CRIME. It is discarded when the set is
+Your position in a Story survives leaving it and restarting Varde. It is discarded when the set is
 re-authored — carrying a position across a rewrite would land you on a different claim while
 telling you it is where you left off — and the view says so.
 
@@ -216,7 +216,7 @@ often as you like. Only a correct pick replaces the choices with its explanation
 be undone by picking again. Nothing blocks: `n` steps on with the question unanswered.
 
 A Prediction already put — answered or skipped — is not asked again when you return to the Step.
-Re-authoring puts it afresh. CRIME records only *that* a Prediction was put, never which choice
+Re-authoring puts it afresh. Varde records only *that* a Prediction was put, never which choice
 you picked: a history of wrong answers is a score by another name, and this is a reviewer reading
 a colleague's change.
 
@@ -246,24 +246,24 @@ name, most recently committed first — in a picker.
 Picking a branch **checks it out**, then resolves the Range as what that branch introduced over
 the default branch and asks you to confirm as usual. Checking out is necessary: a Step's
 staleness is judged by what its lines hold on disk, so a set for a branch that is not checked out
-would report every Step stale. CRIME does not check the original branch back out afterwards — a
+would report every Step stale. Varde does not check the original branch back out afterwards — a
 second checkout can fail if files were touched during the review — and Story view names which
 branch it is on and which one it left.
 
-The picker is refused on a dirty working tree with an instruction to commit first, because CRIME
-never checks out over unsaved work. CRIME's own `.crime/` files do not count as your work. It is
+The picker is refused on a dirty working tree with an instruction to commit first, because Varde
+never checks out over unsaved work. Varde's own `.varde/` files do not count as your work. It is
 also refused in a folder that is not a repository.
 
 ## A Bare workspace
 
-`crime` with no folder opens the current directory as a **Bare workspace**: the folder is the
-workspace and `:w` still writes into it, but nothing of CRIME's is written there. No `.crime/` is
-created, no config is seeded, and everything CRIME needs for itself goes into a Sidecar under
-`~/.crime/` that is deleted when CRIME exits. A Bare workspace remembers nothing between runs —
+`varde` with no folder opens the current directory as a **Bare workspace**: the folder is the
+workspace and `:w` still writes into it, but nothing of Varde's is written there. No `.varde/` is
+created, no config is seeded, and everything Varde needs for itself goes into a Sidecar under
+`~/.varde/` that is deleted when Varde exits. A Bare workspace remembers nothing between runs —
 that is the point of it.
 
 Two things follow for reviews and Stories. A review submitted from a Bare workspace is written to
-`~/.crime/reviews/`, outside every workspace, so the output of your reading is not deleted with
+`~/.varde/reviews/`, outside every workspace, so the output of your reading is not deleted with
 the Sidecar. And a Bare workspace is where you review a repository that is not on your machine.
 
 ## Guest repos
@@ -277,7 +277,7 @@ waiting. `git` has to be installed; without it the command is refused.
 
 Picking a guest branch checks it out *in the clone* and resolves the Range against the guest
 repo's own default branch. Walking opens the guest repo's files inside the clone, and their Sites
-are judged against the clone. Those files are read-only: a file that is deleted when CRIME quits
+are judged against the clone. Those files are read-only: a file that is deleted when Varde quits
 is a file editing cannot help, and every key that would change one is refused out loud. The guest
 repo never appears in the file tree — the tree is the folder you started in.
 
@@ -286,7 +286,7 @@ than cloning again, which is what puts a branch pushed since the clone in the pi
 fails keeps the copy you have. A bare `:story?` after a guest repo is this folder's own branches
 again. At exit the Sidecar and the clone go with it — nothing is left behind.
 
-`:story? <url>` in a project workspace (`crime <folder>`) is refused: a guest repo needs a Bare
+`:story? <url>` in a project workspace (`varde <folder>`) is refused: a guest repo needs a Bare
 workspace.
 
 ## See also

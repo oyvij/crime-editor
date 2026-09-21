@@ -1,9 +1,9 @@
 # Language intelligence
 
-CRIME hosts a **Language server** for each language it is configured for and asks it what the
+Varde hosts a **Language server** for each language it is configured for and asks it what the
 code means: what a name is, where it is defined, what is wrong with it, and what you might be
 typing. The server is a separate program on your machine — `rust-analyzer`, `gopls`,
-`pyright-langserver` — that CRIME starts when you open a file in its language and talks to in the
+`pyright-langserver` — that Varde starts when you open a file in its language and talks to in the
 background. There is no pane for it; you only see its answers.
 
 Nothing here takes anything away. A language with no server configured, or whose server is not
@@ -54,7 +54,7 @@ crossing the pane on its way somewhere else asks nothing.
   the first being taken quietly.
 - No definition says so and moves nothing.
 - A definition **outside the workspace root** — in a dependency's source, say — is refused, naming
-  the path it would have opened. Every pane in CRIME is bounded by the root, and a file outside it
+  the path it would have opened. Every pane in Varde is bounded by the root, and a file outside it
   is one the tree cannot mark and the watcher cannot follow.
 
 A jump to a definition is recorded, so `Ctrl+P` (or `gp`) takes you back — including from a
@@ -68,7 +68,7 @@ places the cursor.
 
 ### Candidates
 
-While you type an identifier in insert mode, CRIME asks the server what you might mean once typing
+While you type an identifier in insert mode, Varde asks the server what you might mean once typing
 has paused for a moment, and offers the **Candidates** in a list just below the line you are on, at
 the cursor's column. The list is ten rows at most and scrolls; every Candidate stays available.
 
@@ -115,7 +115,7 @@ external command such as `prettier`, `black` or `rustfmt`. Either way:
   and the buffer is left alone. A command that exits cleanly and prints nothing is treated as a
   failure too, never as "format the file empty".
 - A language nothing configures refuses out loud, naming the key to write:
-  `[formatter.<language>]` in `.crime/config.toml`.
+  `[formatter.<language>]` in `.varde/config.toml`.
 - A configured command that is **not installed** puts its install command on the terminal's input
   line and moves focus there, without pressing Enter. Nothing is remembered about it being missing:
   the next `:format` after you install it just works, with no restart.
@@ -128,51 +128,51 @@ extension — or, for a file with none, its name, so `[formatter.Makefile]` is a
 
 ## Tools
 
-`Ctrl+Space` then `v` (the palette's **Tools** entry) opens the list of everything CRIME runs,
+`Ctrl+Space` then `v` (the palette's **Tools** entry) opens the list of everything Varde runs,
 grouped into language servers, formatters, requirements (`[facts.*]`) and speech (the synthesizer
 with its voice, and the player). One row each, with the command it runs and its state on this
 machine. It is probed when the list opens, so the moment after an install is the moment to look.
 Opening the list starts no server.
 
 Every template row your config files do not name is listed too, as `available`: a row you deleted,
-or one a newer CRIME added. A row that differs from the template's says so, since a corrected
+or one a newer Varde added. A row that differs from the template's says so, since a corrected
 template never edits a row you already have.
 
 | State | Means |
 |---|---|
 | `installed` | the command is on your `PATH` and, if it has been started, it is answering |
 | `missing` | the command is not on your `PATH` |
-| `stopped` | the command is here but its server exited — see `.crime/lsp-<language>.log` |
+| `stopped` | the command is here but its server exited — see `.varde/lsp-<language>.log` |
 | `missing-requirement` | the command is here but something it needs is not, e.g. a TypeScript SDK; the row says which, and `i` runs that requirement's install if it has one for this OS |
 | `partly-working` | the configuration says this server cannot do something, and the row names it |
 | `no-install-command` | not installed, and nothing is configured to install it on this OS |
-| `available` | a template row no config file names, so CRIME does not run it |
+| `available` | a template row no config file names, so Varde does not run it |
 | `install-failed` | its install ran and exited with a failure — the output is in the terminal pane |
 | `needs-installer` | not installed, and the program its install starts with (`npm`, `uv`, `go`, …, looking past `sudo`) is not on your `PATH` either; the row names it, and taking it does nothing — `install.sh` installs package managers |
 
 | Key | Does |
 |---|---|
-| `i` | take the row: add it to `~/.crime/config.toml` if the file lacks it, and run its install command for this OS in the terminal pane |
+| `i` | take the row: add it to `~/.varde/config.toml` if the file lacks it, and run its install command for this OS in the terminal pane |
 | `r` | re-check the row |
 | `Esc` | close the list |
 
 The row is appended after the last line of your global config, with any requirement it names,
 and nothing you wrote is touched; a row the file already has is not written again. The install runs
-where you can watch it and answer a `sudo` prompt, and when it ends CRIME checks for the command
+where you can watch it and answer a `sudo` prompt, and when it ends Varde checks for the command
 again. If your global config does not parse, `i` names the fault and writes and runs nothing. A row
 already `installed` refuses `i`; a `stopped` row runs its install, since reinstalling is exactly
 what fixes a command that is present and does not work. Once the command appears the server
 starts, with no restart.
 
 One case needs a restart: an installer that added its directory to your shell profile, which a
-running CRIME cannot see. If a re-check after installing still finds nothing, CRIME asks whether to
+running Varde cannot see. If a re-check after installing still finds nothing, Varde asks whether to
 restart; answering yes quits (unsaved buffers are refused exactly as `Ctrl+Q` refuses them), and
 declining leaves everything as it was.
 
 ## What ships
 
 These servers are configured out of the box. Install one and it works — nothing else to configure.
-Take one in Tools to install it; the `install.sh` described in [Installing CRIME](../install.md)
+Take one in Tools to install it; the `install.sh` described in [Installing Varde](../install.md)
 offers the package managers these commands start with. A blank
 cell means nobody has packaged that server for that OS; add an `install.<os>` key yourself (below).
 
@@ -209,9 +209,9 @@ Formatters, for `:format` where the server does not format:
 ## Configuring a server or a formatter
 
 Servers and formatters are configuration, never code. The shipped rows are the bottom layer;
-`~/.crime/config.toml` beats them and `<project>/.crime/config.toml` beats that, **key by key** — a
+`~/.varde/config.toml` beats them and `<project>/.varde/config.toml` beats that, **key by key** — a
 project that sets one key of a shipped language keeps every other key of it. A language nobody at
-CRIME has heard of is served by adding a table. See [Configuration](configuration.md).
+Varde has heard of is served by adding a table. See [Configuration](configuration.md).
 
 ```toml
 [lsp.zig]
@@ -222,11 +222,11 @@ install.linux = "zig build -Doptimize=ReleaseSafe"
 partial = "type errors"                      # optional: what this server cannot do, in your words
 also_served_by = ["typescript"]              # optional: other languages whose servers also serve these files
 
-[lsp.zig.initialization_options]             # optional: passed to the server verbatim, never read by CRIME
+[lsp.zig.initialization_options]             # optional: passed to the server verbatim, never read by Varde
 some_option = true
 ```
 
-A malformed table, or a language no layer ever gave a `command`, stops CRIME from starting and
+A malformed table, or a language no layer ever gave a `command`, stops Varde from starting and
 names the file and the line.
 
 ```toml
@@ -241,7 +241,7 @@ install.macos = "brew install some-formatter"
 
 Some servers need a path that lives inside your workspace and differs from machine to machine. The
 TypeScript server, for instance, will not answer at all unless told where a usable `tsserver.js`
-is, and the Vue server needs the same SDK as `--tsdk=`. CRIME ships no such path — an invented one
+is, and the Vue server needs the same SDK as `--tsdk=`. Varde ships no such path — an invented one
 that does not exist is worse than an honest blank — and instead ships a **fact** that finds it at
 every start:
 
@@ -276,16 +276,16 @@ optional `vue_typescript_plugin` fact finds. Installing the two servers from the
 whole of the setup: template mistakes from one server and type errors from the other land in the
 same gutter.
 
-The Vue server also asks its client a question CRIME cannot answer; `[lsp.vue].unanswerable` names
+The Vue server also asks its client a question Varde cannot answer; `[lsp.vue].unanswerable` names
 the pair of methods so it is refused out loud and the server carries on with what it can do alone.
 If a file's only server has asked such a question, an empty `gd` or `K` says the server needed a
 companion rather than blaming the server for knowing nothing.
 
 ## When something goes wrong
 
-Each server's own error output goes to `.crime/lsp-<language>.log` in the workspace, truncated
+Each server's own error output goes to `.varde/lsp-<language>.log` in the workspace, truncated
 each time the server is started. The two notices that can send you there are "could not start the
-language server" — check the `command` in `.crime/config.toml` and the log — and "the language
+language server" — check the `command` in `.varde/config.toml` and the log — and "the language
 server stopped", after which there are no diagnostics, hover or completion for that language until
 it runs again. Fix what the log says, then `r` in the server list or simply open a file in that
 language; nothing needs restarting unless the list asks.
@@ -295,5 +295,5 @@ language; nothing needs restarting unless the list asks.
 - [Editing](editing.md) — the keys around these: `Tab`, `u`, `Ctrl+P`, the results box.
 - [Configuration](configuration.md) — where `[lsp.*]`, `[formatter.*]` and `[facts.*]` live and how
   the layers merge.
-- [Installing CRIME](../install.md) — `install.sh` reads these same rows and offers the package managers they need.
+- [Installing Varde](../install.md) — `install.sh` reads these same rows and offers the package managers they need.
 - [Review](review.md) — the error and warning counts over a change.

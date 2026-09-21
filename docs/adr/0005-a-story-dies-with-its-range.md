@@ -1,7 +1,7 @@
 # A Story dies with its range
 
 A Story is authored for one revision range, named for it on disk
-(`.crime/stories/<base12>-<head12>.json`), and expected to be gone once that range merges. CRIME
+(`.varde/stories/<base12>-<head12>.json`), and expected to be gone once that range merges. Varde
 never updates a Story to follow the code. When a Step's Site no longer holds the text it was written
 against, the Step says so, says what the Site used to hold, and stops claiming to describe what is on
 screen — it is never quietly re-pointed at whatever moved into its place.
@@ -23,7 +23,7 @@ the authoring, it is the reviewing of a tour that is quietly lying. And the auth
 person's afternoon: it is a prompt and a file watcher.
 
 Two things follow that would otherwise look like omissions. Retention is **ten** story sets, not the
-fifty CRIME keeps of reviews, because a story set is 30–70KB against a review's 1KB and none of them
+fifty Varde keeps of reviews, because a story set is 30–70KB against a review's 1KB and none of them
 are meant to be read again. And a Walkthrough — one person's position in a Story — is **discarded
 outright** when the Story is re-authored rather than being carried across by story name and step
 index. Carrying it across would put the reviewer on a different claim while telling them it is where
@@ -32,7 +32,7 @@ to reproduce it.
 
 ## Consequences
 
-Nobody can hand-write a Story and expect it to last, and nothing in CRIME will help them try. A
+Nobody can hand-write a Story and expect it to last, and nothing in Varde will help them try. A
 future contributor who wants durable, curated tours of the codebase — onboarding material, an
 architecture walk — is not asking for a longer-lived Story; they are asking for a different feature,
 and it should be argued for on its own terms rather than added as a retention setting here.

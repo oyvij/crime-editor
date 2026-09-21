@@ -1,12 +1,12 @@
-Feature: Tools — one list of everything CRIME runs
+Feature: Tools — one list of everything Varde runs
 
-  The palette's `v` opens Tools: every program CRIME runs, grouped into language servers,
+  The palette's `v` opens Tools: every program Varde runs, grouped into language servers,
   formatters, requirements (`[facts.*]`) and speech — the synthesizer with its voice, and the
   player. One list rather than one per kind, because every row has the same shape: a name, the
   command it runs, and a status in one vocabulary shared by all of them.
 
   The list is what the config files name, and beside it every template row they do not name, read
-  as `available`. That one rule answers a row the reader deleted and a row a newer CRIME added to
+  as `available`. That one rule answers a row the reader deleted and a row a newer Varde added to
   its template: an upgrade never edits the file, and the new row still reaches the reader here
   (`docs/adr/0018-the-global-config-is-the-list-of-programs.md`).
 
@@ -14,7 +14,7 @@ Feature: Tools — one list of everything CRIME runs
   the way the language server scenarios already do.
 
   Background:
-    Given CRIME was built for "linux"
+    Given Varde was built for "linux"
 
   Scenario: Tools groups its rows by kind, in one order
     Given there is no global config
@@ -80,7 +80,7 @@ Feature: Tools — one list of everything CRIME runs
     the template, with any `[facts.*]` row its values name, and nothing already in the file is
     touched. The install runs in the shell pane, visibly, where a `sudo` prompt can be answered, and
     reports its exit status through a sentinel file the watcher already sees — the way a clone does
-    (`docs/adr/0015-a-clone-is-the-users-own-git.md`). A file CRIME cannot parse is refused before
+    (`docs/adr/0015-a-clone-is-the-users-own-git.md`). A file Varde cannot parse is refused before
     anything is written or run.
 
     Scenario: Taking an available row appends it to the global config and runs its install
@@ -301,7 +301,7 @@ Feature: Tools — one list of everything CRIME runs
       And the edge resolved no "typescript_sdk"
       When I re-check the row for "vue"
       And the command "tsc" is not on PATH
-      Then CRIME asks whether to restart
+      Then Varde asks whether to restart
 
   Rule: An install writes what it configures
 
@@ -314,19 +314,19 @@ Feature: Tools — one list of everything CRIME runs
     Scenario: The speech install exiting 0 writes the voice it configures
       Given the global config is:
         """
-        # How CRIME reads aloud.
+        # How Varde reads aloud.
         [speech]
         command = "piper"
         voice = ""
         install.linux = "uv tool install piper-tts"
-        configures.voice = "~/.crime/voices/bryce.onnx"
+        configures.voice = "~/.varde/voices/bryce.onnx"
         """
       And the project has no config file
       And the command "piper" is not on PATH
       And the command "uv" is on PATH
       And I took the speech row for "synthesizer"
       When the install reports the exit status "0"
-      Then the global config sets "speech.voice" to "~/.crime/voices/bryce.onnx"
+      Then the global config sets "speech.voice" to "~/.varde/voices/bryce.onnx"
 
     Scenario: A voice the reader chose is never overwritten
       Given the global config is:
@@ -335,7 +335,7 @@ Feature: Tools — one list of everything CRIME runs
         command = "piper"
         voice = "/voices/mine.onnx"
         install.linux = "uv tool install piper-tts"
-        configures.voice = "~/.crime/voices/bryce.onnx"
+        configures.voice = "~/.varde/voices/bryce.onnx"
         """
       And the project has no config file
       And the command "piper" is not on PATH
@@ -351,7 +351,7 @@ Feature: Tools — one list of everything CRIME runs
         command = "piper"
         voice = ""
         install.linux = "uv tool install piper-tts"
-        configures.voice = "~/.crime/voices/bryce.onnx"
+        configures.voice = "~/.varde/voices/bryce.onnx"
         """
       And the project has no config file
       And the command "piper" is not on PATH

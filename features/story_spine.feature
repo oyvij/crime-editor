@@ -10,11 +10,11 @@ Feature: The spine shows the shape of a change before any of it is walked
   separately, because "this change deleted nothing" and "twelve lines went and nobody walked them"
   are opposite situations that a single zero cannot tell apart.
 
-  Hunks are computed by CRIME from the two sides of the change, with CRIME's own pinned diff options,
+  Hunks are computed by Varde from the two sides of the change, with Varde's own pinned diff options,
   so both sides of the subtraction agree. A Story never authors its own coverage.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project is a git repository
     And "src/keys.rs" held:
       """

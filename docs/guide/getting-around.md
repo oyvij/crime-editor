@@ -1,6 +1,6 @@
 # Getting around
 
-CRIME opens on a folder and presents it as a workspace: a file tree, an editor, your own shell and
+Varde opens on a folder and presents it as a workspace: a file tree, an editor, your own shell and
 an AI CLI, side by side in one terminal. This guide covers the frame everything else sits in — the
 panes, the views, the palette, focus, the tree, open files, the terminal, the mouse, the clipboard,
 quitting and updating. Editing itself is in [editing.md](editing.md); the AI pane has its own guide
@@ -11,31 +11,31 @@ in [ai-pane.md](ai-pane.md); reviewing a change is [review.md](review.md), narra
 ## Starting
 
 ```sh
-crime .            # the current folder is the workspace
-crime ~/some/repo  # a folder somewhere else
-crime              # a Bare workspace, see below
+varde .            # the current folder is the workspace
+varde ~/some/repo  # a folder somewhere else
+varde              # a Bare workspace, see below
 ```
 
 The folder you name becomes the workspace root and its name is the title. An empty folder is a
-perfectly good workspace — that is how a project begins. A path CRIME cannot use stops it before the
+perfectly good workspace — that is how a project begins. A path Varde cannot use stops it before the
 TUI appears, and says which of three things went wrong: the folder does not exist, the path is a
 file, or the folder cannot be read.
 
-The first start in a project creates `<project>/.crime/` and seeds a `config.toml` there with every
+The first start in a project creates `<project>/.varde/` and seeds a `config.toml` there with every
 key commented out, so the settings are discoverable in place. Anything already in that file is left
 alone on every later start. Per-project state — which folders were expanded, which files were open,
 where the dividers sit, the last view — is written on the way out, so reopening puts things back.
 
 ### A Bare workspace
 
-`crime` with no folder opens the folder you are standing in, and writes nothing of CRIME's into it:
-no `.crime/`, no seeded config, nothing added to `.gitignore`. The folder is still the workspace —
-the tree is it, and `:w` writes there — but everything CRIME keeps for itself goes into a Sidecar
-under your own `~/.crime` instead. A Bare workspace reads `~/.crime/config.toml` and the built-in
-defaults, and has no project configuration layer at all, even if a `.crime/config.toml` happens to
+`varde` with no folder opens the folder you are standing in, and writes nothing of Varde's into it:
+no `.varde/`, no seeded config, nothing added to `.gitignore`. The folder is still the workspace —
+the tree is it, and `:w` writes there — but everything Varde keeps for itself goes into a Sidecar
+under your own `~/.varde` instead. A Bare workspace reads `~/.varde/config.toml` and the built-in
+defaults, and has no project configuration layer at all, even if a `.varde/config.toml` happens to
 sit in the folder. It measures no Risk at startup (asking for it still works). Quitting deletes the
 Sidecar and saves no session state. The one thing that survives is a submitted review, which goes to
-`~/.crime/reviews/` rather than into the Sidecar, because losing an output is a different kind of
+`~/.varde/reviews/` rather than into the Sidecar, because losing an output is a different kind of
 nothing from leaving no trace.
 
 ## Panes and views
@@ -72,7 +72,7 @@ One gesture reaches every pane, view and project command, from anywhere:
 | `Esc Esc` | inside a hosted pane (terminal or AI). Both escapes still reach the program running there |
 
 The specification also names a bare Ctrl double-tap on terminals that report modifier presses, but
-CRIME does not currently ask terminals for that mode, so count on the two above.
+Varde does not currently ask terminals for that mode, so count on the two above.
 
 The palette is grouped. Press the letter, or click the row:
 
@@ -90,11 +90,11 @@ The palette is grouped. Press the letter, or click the row:
 | | `r` | Review | switch to Review view |
 | | `s` | Story | switch to Story view |
 | Project | `f` | Find | project-wide search, the same as `Ctrl+F` |
-| | `v` | Tools | everything CRIME runs, and what is installed ([language-intelligence.md](language-intelligence.md)) |
+| | `v` | Tools | everything Varde runs, and what is installed ([language-intelligence.md](language-intelligence.md)) |
 | | `c` | Collapse | close every open folder in the tree |
 | Help | `h` | Keys | take the Cheatsheet down or put it back, the same as `:help` |
-| | `u` | Update | rebuild CRIME from its checkout, the same as `:update` |
-| | `q` | Quit | leave CRIME |
+| | `u` | Update | rebuild Varde from its checkout, the same as `:update` |
+| | `q` | Quit | leave Varde |
 
 `Esc` cancels and changes nothing. A key that is not in the list is ignored and the palette stays
 open. Choosing the view already on screen redraws nothing but still moves focus, so `e` from the AI
@@ -130,7 +130,7 @@ because every editor teaches it — the arrows, `hjkl`, `Home`/`End`, `Alt+←/�
 
 A terminal cell holds one character, so the box hides the code under it. `:help` or palette `h`
 takes it down and puts it back, and the choice is remembered per project. On a 26-row terminal only
-the first sixteen rows fit; the rows that survive are the ones nothing else in CRIME teaches.
+the first sixteen rows fit; the rows that survive are the ones nothing else in Varde teaches.
 
 ## The file tree
 
@@ -163,7 +163,7 @@ leaves and clears. With no match the tree says so rather than going blank.
 
 ### Tree actions
 
-Nothing in CRIME touches the filesystem itself. Every tree action becomes a shell command in the
+Nothing in Varde touches the filesystem itself. Every tree action becomes a shell command in the
 terminal, so the terminal is the one place a file is made or removed and you can read exactly what
 ran. Paths are absolute and quoted only when they need it.
 
@@ -190,7 +190,7 @@ that held it. A new file is ready to open with `Enter` as soon as the watcher li
 
 The tree follows the filesystem: files created and deleted appear and disappear, in the folders you
 have expanded. A file created inside a collapsed folder is not listed until you expand it — lazy
-watching means CRIME genuinely does not know about it yet. What is *open* is followed whether or not
+watching means Varde genuinely does not know about it yet. What is *open* is followed whether or not
 its folder is expanded. A file appearing on disk never takes over the editor; a branch checkout does
 not either.
 
@@ -237,7 +237,7 @@ remembered per project.
 | `:qa!` | close every Buffer, dirty ones included |
 
 Closing moves to a neighbouring Buffer; closing the last one empties the editor and puts focus in
-the tree. `:q` never quits CRIME. Reopening a project returns to the files that were open.
+the tree. `:q` never quits Varde. Reopening a project returns to the files that were open.
 
 ## The terminal
 
@@ -251,10 +251,10 @@ currently in, and the new one takes the keyboard. Splitting the middle of three 
 right after it. `Alt+h`/`Alt+l` step through the splits, stopping at the ends; a click moves the
 keyboard to a split. Keys, paste, a drag and the wheel are all about the split with the keyboard.
 `exit` in a shell closes its split, and the keyboard falls back to the last remaining one. The last
-shell exiting is how CRIME ends. Splits divide the strip's columns evenly — there are no stacked
+shell exiting is how Varde ends. Splits divide the strip's columns evenly — there are no stacked
 splits and no dragging one wider.
 
-A command CRIME pushes at the terminal — a tree action's `touch`, a server install line — goes to a
+A command Varde pushes at the terminal — a tree action's `touch`, a server install line — goes to a
 shell whose prompt is waiting: the focused split if it is idle, else the first idle one, never to a
 shell running a job where it would become the job's input. With every split busy a new shell is
 split off and the command waits for its prompt.
@@ -307,7 +307,7 @@ selected it interrupts the child, as it does in any terminal.
 
 | Gesture | Effect |
 |---|---|
-| `Ctrl+Q` | quit, from any pane CRIME interprets |
+| `Ctrl+Q` | quit, from any pane Varde interprets |
 | palette `q` | quit, from anywhere — hosted panes included |
 
 Quitting is refused while any Buffer has unsaved edits, and says so. It is deliberately not on the
@@ -317,9 +317,9 @@ works from everywhere. Per-project state is written on the way out.
 
 ## Staying up to date
 
-CRIME is a symlink on your PATH pointing at the release binary inside its own checkout, so an
+Varde is a symlink on your PATH pointing at the release binary inside its own checkout, so an
 ordinary release build *is* the install. The cost is drift: the checkout moves ahead and the binary
-keeps being the old one. So at launch CRIME compares the Running version it was compiled from with
+keeps being the old one. So at launch Varde compares the Running version it was compiled from with
 the Version its checkout's manifest claims, and when the checkout is strictly ahead there is an
 Update. Nothing is announced as a notice; the version tag at the right end of the bottom row, which
 always shows the Running version, turns blue and reads `v0.2.0 → v0.3.0  C-space u to update`. A
@@ -332,18 +332,18 @@ file read — no network, no git.
 | `:update` or palette `u` | run `cd <checkout> && cargo build --release` in the terminal |
 | `:update` or palette `u`, binary install | download the newer Release, verify it, replace the binary and relaunch |
 
-The command names CRIME's checkout, not the open workspace, and it works whether or not an Update is
+The command names Varde's checkout, not the open workspace, and it works whether or not an Update is
 offered. It starts no AI session, opens and writes no file — everything happens in the terminal
 where the compiler's output is readable.
 
 A binary install has no checkout, so `:update` fetches the Release it found at startup instead,
 checks the download against the Release's published checksums, and swaps it in for the running
-binary. A bad download is refused and the old binary stays. CRIME then relaunches with the same
+binary. A bad download is refused and the old binary stays. Varde then relaunches with the same
 arguments — unless a buffer is unsaved, which is refused the way quitting is; save and `:update`
 again, and it relaunches without downloading twice. With neither a checkout nor a newer Release you
 are told there is nothing to update from and nothing runs.
 
-`cargo build --release` overwrites the file the symlink names, so the next `crime` you launch is the
+`cargo build --release` overwrites the file the symlink names, so the next `varde` you launch is the
 new one; the session you are in keeps running the old binary until you restart it. A build that
 fails writes nothing, and the last version that compiled stays exactly where it was. Two things
 follow from the arrangement: the editor is whatever the checkout last compiled successfully, and

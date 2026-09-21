@@ -1,11 +1,11 @@
 # A voice is an installed binary, not a linked library
 
-CRIME reads a selection aloud. The synthesis could happen *inside* CRIME — `piper-rs` turns text into
+Varde reads a selection aloud. The synthesis could happen *inside* Varde — `piper-rs` turns text into
 samples, `rodio` plays them, and nothing has to exist on the machine beforehand. That is the obvious
 design and it is rejected here.
 
-**A voice is an external command CRIME runs, named in configuration, probed on `PATH`, and installed
-by a command CRIME types and does not press Enter on.** Audio leaves CRIME through a second such
+**A voice is an external command Varde runs, named in configuration, probed on `PATH`, and installed
+by a command Varde types and does not press Enter on.** Audio leaves Varde through a second such
 command. Neither is ever named in a branch.
 
 ## What the linked version actually costs
@@ -37,7 +37,7 @@ install.linux  = "…"
 
 A row of TOML in the bottom layer of the merge. `which` finds the command or does not. A missing
 command puts the install line on the terminal's input line, unexecuted, where the user reads it
-before it runs — which is how the model gets onto the machine without CRIME ever making a network
+before it runs — which is how the model gets onto the machine without Varde ever making a network
 request. The 61MB question dissolves: the command that installs the synthesizer fetches the voice,
 in a shell the user controls, with output they can see.
 
@@ -58,7 +58,7 @@ before the first word.
 **A pause cannot fade.** This is the real cost and it is worth naming, because it is the one thing the
 linked version does better. Stopping an external player mid-waveform is abrupt, and `SIGSTOP` is worse
 than abrupt — it freezes the process while the audio device drains, so the buffer underruns and
-clicks. The answer is that CRIME does not stop the sound mid-sample at all: it stops the player and
+clicks. The answer is that Varde does not stop the sound mid-sample at all: it stops the player and
 **resumes by rewriting the stream from the recorded offset**, measured at 7.5ms, which is inaudible
 and sample-accurate. A `rodio` sink could fade instead.
 
@@ -75,7 +75,7 @@ voice that is itself hard to stay inside has bought nothing. A neural voice is t
 install is what it costs.
 
 The voice shipped in `DEFAULTS` is public domain — `en_US-bryce-medium`. The best-sounding candidate
-tested, `en_US-ryan-high`, is CC BY-NC-SA 4.0. CRIME may be open-sourced, and a non-commercial clause
+tested, `en_US-ryan-high`, is CC BY-NC-SA 4.0. Varde may be open-sourced, and a non-commercial clause
 is cheap to avoid now and expensive to unpick later.
 
 ## Consequences
@@ -90,6 +90,6 @@ third hosted child in the sense 0011 means, started when the first markdown buff
 on the first keystroke — because a lazily-started voice pays its load on the press that wanted sound.
 It holds ~238MB while it lives.
 
-**A voice CRIME cannot find is a normal state, not an error.** Same shape as a language with no
+**A voice Varde cannot find is a normal state, not an error.** Same shape as a language with no
 install command for this OS: the row says nothing is configured, and the user is one line of TOML from
-fixing it for every future CRIME on that machine.
+fixing it for every future Varde on that machine.

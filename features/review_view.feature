@@ -12,7 +12,7 @@ Feature: Review view shows what has changed
   not the same situation as a repository with a clean tree.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
 
   Scenario: Modified, staged and untracked files all appear
     Given the project is a git repository
@@ -34,7 +34,7 @@ Feature: Review view shows what has changed
       | path           | git status |
       | src/landing.js | modified   |
       | dist/bundle.js | ignored    |
-      | .crime/state.json | ignored |
+      | .varde/state.json | ignored |
     When I open Review view
     Then the review list shows:
       | src/landing.js |

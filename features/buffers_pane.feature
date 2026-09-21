@@ -22,7 +22,7 @@ Feature: The Buffers pane
   it freely.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
 
   Scenario: The palette offers the pane in the group the panes live in
     Given the view palette is shown
@@ -222,17 +222,17 @@ Feature: The Buffers pane
     Then the Buffers pane selection is in view
 
   Scenario: The pane's visibility is mine, and survives a restart
-    Given the project ".crime/state.json" records the corner pane as "Buffers"
-    When CRIME starts in the project
+    Given the project ".varde/state.json" records the corner pane as "Buffers"
+    When Varde starts in the project
     Then the Buffers pane is shown
 
   Scenario: A corner nobody opened stays closed on a restart
-    Given the project ".crime/state.json" records the corner pane as "Hidden"
-    When CRIME starts in the project
+    Given the project ".varde/state.json" records the corner pane as "Hidden"
+    When Varde starts in the project
     Then the corner is empty
 
-  Scenario: A session saved by an older CRIME with the Risk list showing still opens showing it
-    Given the project ".crime/state.json" records the Risk list as shown
-    When CRIME starts in the project
+  Scenario: A session saved by an older Varde with the Risk list showing still opens showing it
+    Given the project ".varde/state.json" records the Risk list as shown
+    When Varde starts in the project
     Then the Risk list is shown
     And the Buffers pane is hidden

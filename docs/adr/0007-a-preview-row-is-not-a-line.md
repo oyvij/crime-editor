@@ -3,7 +3,7 @@
 Everything the editor pane does is built on one arithmetic identity: screen row N shows source line
 N + `editor_scroll`. Four subsystems rely on it independently — `code_lines` emits exactly one row
 per line, `mouse.rs` hit-tests a screen row into a buffer line, `layout::viewport` clamps a scroll
-offset against a line count, and `crime::matches` paints a match at a line and column. None of them
+offset against a line count, and `varde::matches` paints a match at a line and column. None of them
 share a mapping; each one re-derives the same identity, which is only safe because the identity has
 never had an exception.
 
@@ -29,7 +29,7 @@ and written by a ratatui maintainer. Turning it down cost most of the remaining 
 so the reason has to be good.
 
 It has no offsets. Not a partial map, not an approximate one: it never asks the parser where an event
-came from, because nothing that renders markdown *for display* needs to. CRIME is not displaying a
+came from, because nothing that renders markdown *for display* needs to. Varde is not displaying a
 document, it is editing one — the cursor crosses between the two shapes, `/` matches in rows the
 reader can see, a drag copies what is on screen, and the scroll clamp bounds a row count. All four
 are the map, and a renderer that cannot say which line a row came from cannot answer any of them.

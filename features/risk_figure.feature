@@ -1,6 +1,6 @@
 Feature: Risk is computed for the workspace
 
-  Opening CRIME on a folder starts measuring Risk without being asked. The headline is the Risk
+  Opening Varde on a folder starts measuring Risk without being asked. The headline is the Risk
   count — how many Functions sit above the configured threshold — and it lives on the tree pane's top
   border: a spinner while the job runs, the count when it lands, so the same place on screen always
   answers the same question.
@@ -16,12 +16,12 @@ Feature: Risk is computed for the workspace
   Iteration — never on a save (`docs/adr/0009-a-spinner-is-bounded-by-its-job.md`).
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project is a git repository
     And the risk threshold is 20
 
   Scenario: Opening a workspace starts measuring Risk without being asked
-    When CRIME opens "/home/me/projects/crime"
+    When Varde opens "/home/me/projects/varde"
     Then an analysis was asked for over the scope "workspace"
     And the tree border risk state is "computing"
 
@@ -115,14 +115,14 @@ Feature: Risk is computed for the workspace
   Scenario: Reopening on the commit the figure was computed at runs no analysis
     Given the figures were recorded at the commit "aaaaaaaaaaaa"
     And "HEAD" resolves to "aaaaaaaaaaaa"
-    When CRIME opens "/home/me/projects/crime"
+    When Varde opens "/home/me/projects/varde"
     Then the tree border risk state is "computed"
     And no analysis was asked for
 
   Scenario: Reopening after the commit has moved runs an analysis
     Given the figures were recorded at the commit "aaaaaaaaaaaa"
     And "HEAD" resolves to "bbbbbbbbbbbb"
-    When CRIME opens "/home/me/projects/crime"
+    When Varde opens "/home/me/projects/varde"
     Then an analysis was asked for over the scope "workspace"
 
   Scenario: An explicit recompute runs whether or not the figure is stale
@@ -148,12 +148,12 @@ Feature: Risk is computed for the workspace
     Then 1 analysis is in flight
     And the earlier analysis was superseded
 
-  Scenario: The figures are written as CRIME's own shape, carrying the commit and the metric
+  Scenario: The figures are written as Varde's own shape, carrying the commit and the metric
     Given "HEAD" resolves to "aaaaaaaaaaaa"
     When the figures arrive for the scope "workspace":
       | file        | function | line | cyclomatic | cognitive | maintainability | lines |
       | src/keys.rs | route    | 88   | 31         | 24        | 41              | 96    |
-    Then the figures were written to ".crime/risk.json"
+    Then the figures were written to ".varde/risk.json"
     And the written figures record the commit "aaaaaaaaaaaa"
     And the written figures record the metric "CX"
     And the written figures list:

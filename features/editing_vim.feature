@@ -5,7 +5,7 @@ Feature: More of vim
   default behaves.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And "src/tree.js" is open in the editor holding:
       """
       one

@@ -15,7 +15,7 @@ Feature: Indent guides
   on punctuation nobody is looking at, which is noise rather than context.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And "src/main.rs" is open in the editor holding:
       """
       fn a() {

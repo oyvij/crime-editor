@@ -112,13 +112,13 @@ ordinary. The box's footer names the three keys that are not text:
 | `Esc` | discard it and close the box |
 | `Ctrl+Z` | undo the last edit — a pasted stack trace or a word delete goes in one key |
 
-A filed comment is drawn in the diff against the last line of its range, and CRIME tells you it
+A filed comment is drawn in the diff against the last line of its range, and Varde tells you it
 was added. Every comment also records the revision of the file that was on screen when you made
 it, so a comment still points at what you actually saw even after the AI rewrites the file.
 
 ## Submitting
 
-Type `:submit` and press `Enter`. Before anything is sent CRIME asks you to confirm, because
+Type `:submit` and press `Enter`. Before anything is sent Varde asks you to confirm, because
 sending clears whatever the AI's command line is currently showing — which can be a half-written
 message of yours.
 
@@ -127,7 +127,7 @@ message of yours.
 | `Enter` or `y` | submit |
 | `Esc` or `n` | decline — nothing is sent, the AI's prompt is untouched, your comments stay |
 
-An empty review cannot be submitted; CRIME refuses and tells you why.
+An empty review cannot be submitted; Varde refuses and tells you why.
 
 ### The verdict
 
@@ -140,9 +140,9 @@ The review carries one of two verdicts, decided by its contents:
 
 Confirming does three things.
 
-1. **Writes the review** to `.crime/reviews/NNNN.json` in the project, numbered on from the last
-   one. The last fifty are kept; older ones are pruned on submit. From a Bare workspace (`crime`
-   with no folder) the file goes to `~/.crime/reviews/` instead, so it outlives the session — see
+1. **Writes the review** to `.varde/reviews/NNNN.json` in the project, numbered on from the last
+   one. The last fifty are kept; older ones are pruned on submit. From a Bare workspace (`varde`
+   with no folder) the file goes to `~/.varde/reviews/` instead, so it outlives the session — see
    [Stories](stories.md#a-bare-workspace).
 2. **Sends it into the AI pane** — a summary of every comment with `file:from-to`, the type and
    the body, plus the path of the file just written — and submits the prompt. You do not have to

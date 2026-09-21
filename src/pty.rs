@@ -2,11 +2,11 @@
 //! the AI pane — they differ only in the command they run.
 
 use anyhow::Result;
-use crime::{keys, mouse, queries};
 use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use varde::{keys, mouse, queries};
 
 /// A terminal is two-way: the child prints a question and reads the answer on
 /// its own stdin. The parser hands every sequence it does not implement here,
@@ -81,10 +81,10 @@ impl Pane {
             None => CommandBuilder::new_default_prog(),
         };
         builder.cwd(cwd);
-        // The child's terminal identity is CRIME's, not the one CRIME was launched
+        // The child's terminal identity is Varde's, not the one Varde was launched
         // from. Inherited, a child in Kitty believes it is in Kitty and emits
         // sequences vt100 cannot read — and behaves differently on every machine.
-        // The list is in `queries`, beside the identity CRIME gives in escape
+        // The list is in `queries`, beside the identity Varde gives in escape
         // sequences, so a change to one is read next to the other.
         for (name, value) in queries::CHILD_ENV {
             match value {

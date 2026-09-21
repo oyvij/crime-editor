@@ -1,6 +1,6 @@
 Feature: Several files open at once
 
-  CRIME keeps every file you open, without a tab bar. What is open shows as a
+  Varde keeps every file you open, without a tab bar. What is open shows as a
   mark in the file tree — the list of files you already have — and as a strip of
   dots on the editor's bottom edge, one per buffer, filled for the one you are
   in. gt and gT step through them; the dots are clickable.
@@ -14,7 +14,7 @@ Feature: Several files open at once
   in a folder nobody has walked into is not a row yet.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
 
   Scenario: Opening a second file keeps the first
     Given "src/one.js" is open in the editor
@@ -99,7 +99,7 @@ Feature: Several files open at once
     And I open "src/two.js"
     When I close the buffer
     Then the current buffer is "src/one.js"
-    And CRIME is still running
+    And Varde is still running
 
   Scenario: Closing the last buffer empties the editor
     Given "src/one.js" is open in the editor
@@ -147,7 +147,7 @@ Feature: Several files open at once
     Given "src/one.js" is open in the editor
     And I open "src/two.js"
     And I quit
-    When CRIME starts in the project
+    When Varde starts in the project
     Then the open buffers are:
       | src/one.js |
       | src/two.js |
@@ -160,7 +160,7 @@ Feature: Several files open at once
     Given "src/one.js" is open in the editor
     And "src/two.js" is previewed
     And I quit
-    When CRIME starts in the project
+    When Varde starts in the project
     Then the open buffers are:
       | src/one.js |
     And the current buffer is "src/one.js"

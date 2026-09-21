@@ -7,13 +7,13 @@ Feature: Terminal splits
   starts them and watches them exit, and tells the core the count, which is
   why the keyboard only moves to a split the edge actually holds.
 
-  A command CRIME pushes at the terminal — a tree action's `touch`, an install
+  A command Varde pushes at the terminal — a tree action's `touch`, an install
   line — goes to a shell whose prompt is waiting, never to one running a job,
   where it would be the job's input. The edge tells which is which. When every
   split is busy, a new shell is split off and the command waits for its prompt.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
 
   Scenario: Splitting asks for a shell beside the focused one
     Given the terminal holds 1 shell
@@ -67,7 +67,7 @@ Feature: Terminal splits
     And terminal 2 has focus
     And the file tree shows the folder "src/tree"
     When I trigger "go here" on that folder
-    Then the terminal input is "cd /home/me/projects/crime/src/tree"
+    Then the terminal input is "cd /home/me/projects/varde/src/tree"
     And terminal 2 has the keyboard
 
   Scenario: A pushed command avoids a split running a process
@@ -76,7 +76,7 @@ Feature: Terminal splits
     And terminal 1 has focus
     And the file tree shows the folder "src/tree"
     When I trigger "go here" on that folder
-    Then the terminal input is "cd /home/me/projects/crime/src/tree"
+    Then the terminal input is "cd /home/me/projects/varde/src/tree"
     And terminal 2 has the keyboard
 
   Scenario: With every split busy, a new shell is asked for and the command waits
@@ -94,7 +94,7 @@ Feature: Terminal splits
     And I trigger "go here" on that folder
     And the terminal holds 2 shells
     When terminal 2 prints its prompt
-    Then the terminal input is "cd /home/me/projects/crime/src/tree"
+    Then the terminal input is "cd /home/me/projects/varde/src/tree"
     And terminal 2 has the keyboard
 
   Scenario: Another shell's prompt is not the one the command was waiting for

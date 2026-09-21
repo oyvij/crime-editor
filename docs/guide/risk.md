@@ -1,10 +1,10 @@
 # Risk
 
-Risk is what the workspace says about how hard its own code will be to change safely. CRIME
+Risk is what the workspace says about how hard its own code will be to change safely. Varde
 measures it per function, counts how many functions sit above a threshold, and puts that count on
 the tree pane's top border where you will see it without asking. The Risk list turns the count
 into a worklist, worst first, and the Refactor loop points your AI session at that list — with
-CRIME, not the AI, deciding whether each pass was good.
+Varde, not the AI, deciding whether each pass was good.
 
 Risk is not a claim about correctness. Code can be risky and right, and a figure never says a
 function is wrong.
@@ -32,13 +32,13 @@ function is wrong.
 The metric is cyclomatic complexity per Function, read by the `rust-code-analysis` library. That
 library implements the metrics for Python, Rust, C/C++, Java, JavaScript and TypeScript/TSX; a
 workspace in no language it handles is `nothing-analysed` and shows no count, because a fabricated
-zero is a clean bill of health nobody was given. Alongside the primary figure CRIME records each
+zero is a clean bill of health nobody was given. Alongside the primary figure Varde records each
 Function's cognitive complexity, maintainability index and line count, because the Refactor
 loop's Gate watches all of them.
 
 ### When it is computed
 
-- **On opening a project** (`crime <folder>`), without being asked. The border shows a spinner
+- **On opening a project** (`varde <folder>`), without being asked. The border shows a spinner
   while the job runs and the count when it lands. The result is cached against the commit it was
   measured at, so reopening on the same commit runs nothing and reopening after the commit moved
   runs it again.
@@ -52,7 +52,7 @@ Never on a keystroke and never on a save. Saving marks the figure **stale**: the
 and the stale count stays up until you recompute or the commit moves. A figure that churned as you
 typed would be noise; one that lied about being current would be worse.
 
-A Bare workspace (`crime` with no folder) measures nothing at startup, because the result would be
+A Bare workspace (`varde` with no folder) measures nothing at startup, because the result would be
 written into a Sidecar deleted at exit. Its border reads `nothing-analysed` until you ask; the
 recompute action still works.
 
@@ -133,7 +133,7 @@ The loop hands your AI session a Scope and a goal — bring the Functions above 
 waits to be told a pass is finished, then **runs the project's tests itself**, **recomputes the
 figures itself**, and applies the Gate. It never asks the session whether the pass was good. A
 session reporting success is reporting what it believes, and belief is not a measurement; the
-reasoning is `docs/adr/0010-crime-owns-the-test-gate.md`.
+reasoning is `docs/adr/0010-varde-owns-the-test-gate.md`.
 
 Start it with the pane's action (`l`, or its icon). It is refused, visibly, when:
 
@@ -147,20 +147,20 @@ Start it with the pane's action (`l`, or its icon). It is refused, visibly, when
 
 ### An Iteration
 
-1. CRIME deletes the sentinel `.crime/refactor-done` if one is left over, so a stale one cannot
+1. Varde deletes the sentinel `.varde/refactor-done` if one is left over, so a stale one cannot
    complete the pass before it starts.
-2. It snapshots the files under `.crime/snapshots/`, per Iteration.
+2. It snapshots the files under `.varde/snapshots/`, per Iteration.
 3. It sends the session one prompt naming the Scope, where the figures are written
-   (`.crime/risk.json`), the worst few Functions, the target threshold, what a good split is, and
+   (`.varde/risk.json`), the worst few Functions, the target threshold, what a good split is, and
    an instruction to follow whatever convention file the repository holds. The prompt never
    contains the test command and never names an AI provider. If no session is running one is
    started and the prompt held until it speaks.
-4. It waits for the session to write `.crime/refactor-done`. The file's contents are ignored; its
+4. It waits for the session to write `.varde/refactor-done`. The file's contents are ignored; its
    existence is the signal. **There is no timeout.** A session thinking for forty seconds looks
    exactly like one that finished, and timing out would mean measuring a half-written edit. The
    pane says what it is waiting for — `session`, `tests`, `measuring` — so an indefinite wait is
    distinguishable from a hang.
-5. When the sentinel appears CRIME runs the test command off the shell pane, so the shell stays
+5. When the sentinel appears Varde runs the test command off the shell pane, so the shell stays
    yours, then recomputes the figures for the Scope.
 6. The **Gate**: the tests still pass, the primary figure moved down, and no other recorded
    metric moved up. "Moved down" counts either the Risk count or the total — chipping a Function
@@ -247,15 +247,15 @@ different file set: the same three-condition Gate, the same per-Iteration snapsh
 the same stop, nothing committed, and no file outside the Scope is touched. One loop at a time
 across both Scopes.
 
-## What lives under `.crime/`
+## What lives under `.varde/`
 
 | Path | What it is |
 |---|---|
-| `.crime/risk.json` | The last figure: the commit it was measured at, the metric (`CX`), and every Function with its file, name, first line and all four recorded metrics — `cyclomatic`, `cognitive`, `maintainability`, `lines`. The loop's prompt points the session here. |
-| `.crime/snapshots/` | Per-Iteration copies of the files the loop let the session touch, restored on a failed Gate. |
-| `.crime/refactor-done` | The sentinel the session writes to say a pass is finished. Deleted before each Iteration. |
+| `.varde/risk.json` | The last figure: the commit it was measured at, the metric (`CX`), and every Function with its file, name, first line and all four recorded metrics — `cyclomatic`, `cognitive`, `maintainability`, `lines`. The loop's prompt points the session here. |
+| `.varde/snapshots/` | Per-Iteration copies of the files the loop let the session touch, restored on a failed Gate. |
+| `.varde/refactor-done` | The sentinel the session writes to say a pass is finished. Deleted before each Iteration. |
 
-CRIME never writes a git ignore rule for these or anything else. Whether to ignore them is your
+Varde never writes a git ignore rule for these or anything else. Whether to ignore them is your
 project's decision, in your `.gitignore`.
 
 ## See also

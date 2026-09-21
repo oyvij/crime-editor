@@ -16,7 +16,7 @@ Feature: Risk in Review view
   of the two loops: it stops risk arriving rather than paying it down later.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project is a git repository
     And the risk threshold is 20
     And the configured test command is "cargo test"

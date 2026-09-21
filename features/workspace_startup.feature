@@ -1,39 +1,39 @@
-Feature: Opening CRIME on a folder
+Feature: Opening Varde on a folder
 
-  CRIME opens on exactly one folder and that folder is the workspace. A path it cannot use
+  Varde opens on exactly one folder and that folder is the workspace. A path it cannot use
   as a workspace stops it before the TUI appears, and each way a path can be unusable gets
   its own explanation — a typo, a file, and a permissions problem are three different
   problems for the user to fix.
 
-  An empty folder is not one of them. Starting CRIME in a fresh directory is how a project
+  An empty folder is not one of them. Starting Varde in a fresh directory is how a project
   begins.
 
   Scenario: The folder opened becomes the workspace
-    Given the folder "/home/me/projects/crime" exists
-    When CRIME opens "/home/me/projects/crime"
-    Then the workspace root is "/home/me/projects/crime"
-    And the workspace title is "crime"
+    Given the folder "/home/me/projects/varde" exists
+    When Varde opens "/home/me/projects/varde"
+    Then the workspace root is "/home/me/projects/varde"
+    And the workspace title is "varde"
 
   Scenario: An empty folder is a valid workspace
     Given the folder "/home/me/projects/fresh" exists and is empty
-    When CRIME opens "/home/me/projects/fresh"
+    When Varde opens "/home/me/projects/fresh"
     Then the workspace root is "/home/me/projects/fresh"
     And the file tree is empty
 
-  Scenario: A path that does not exist stops CRIME
+  Scenario: A path that does not exist stops Varde
     Given "/home/me/projects/nope" does not exist
-    When CRIME opens "/home/me/projects/nope"
-    Then CRIME refuses to start
+    When Varde opens "/home/me/projects/nope"
+    Then Varde refuses to start
     And the reason is "no-such-folder"
 
-  Scenario: A path that is a file stops CRIME
-    Given "/home/me/projects/crime/README.md" is a file
-    When CRIME opens "/home/me/projects/crime/README.md"
-    Then CRIME refuses to start
+  Scenario: A path that is a file stops Varde
+    Given "/home/me/projects/varde/README.md" is a file
+    When Varde opens "/home/me/projects/varde/README.md"
+    Then Varde refuses to start
     And the reason is "not-a-folder"
 
-  Scenario: A folder that cannot be read stops CRIME
+  Scenario: A folder that cannot be read stops Varde
     Given the folder "/home/me/projects/locked" cannot be read
-    When CRIME opens "/home/me/projects/locked"
-    Then CRIME refuses to start
+    When Varde opens "/home/me/projects/locked"
+    Then Varde refuses to start
     And the reason is "folder-not-readable"

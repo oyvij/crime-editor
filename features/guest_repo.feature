@@ -1,12 +1,12 @@
 Feature: Reviewing a repository that is not on this machine
 
-  `:story? <url>` in a Bare workspace clones a repository CRIME has never seen — a Guest repo —
+  `:story? <url>` in a Bare workspace clones a repository Varde has never seen — a Guest repo —
   into the Sidecar, and lists its branches in the same picker a local repository's branches are
   listed in. The clone runs as the user's own `git` in the shell pane, so their SSH config, their
   per-host key and their agent all work without being configured twice, progress is visible, and a
   passphrase or a host-key prompt is answerable (`docs/adr/0015-a-clone-is-the-users-own-git.md`).
 
-  Everything after the clone is `git2` like every other read in CRIME. Only the clone shells out,
+  Everything after the clone is `git2` like every other read in Varde. Only the clone shells out,
   and it shells out because it is the one operation that has to authenticate as the user.
 
   Background:
@@ -14,7 +14,7 @@ Feature: Reviewing a repository that is not on this machine
     And the workspace folder holds the file "README.md"
 
   Scenario: A URL clones the repository into the Sidecar and lists its branches
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And git is installed
     And the repository has branches:
       | name           | kind   | seconds |
@@ -29,11 +29,11 @@ Feature: Reviewing a repository that is not on this machine
       | main    |
     And the story view state is "no-stories"
 
-  # The Guest repo is in the Sidecar, which is not the workspace: the folder CRIME was started in
+  # The Guest repo is in the Sidecar, which is not the workspace: the folder Varde was started in
   # is what the tree is, and a foreign repository is never part of it.
 
   Scenario: The Guest repo is not in the file tree
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And git is installed
     And the repository has branches:
       | name | kind  | seconds |
@@ -44,7 +44,7 @@ Feature: Reviewing a repository that is not on this machine
     And the file tree does not show "theirs"
 
   Scenario: A URL in a project workspace is refused, and nothing is cloned
-    Given CRIME started in the project
+    Given Varde started in the project
     And git is installed
     When I run ":story? git@github.com:them/theirs.git"
     Then the story view state is "guest-needs-bare-workspace"
@@ -52,7 +52,7 @@ Feature: Reviewing a repository that is not on this machine
     And no command has been executed
 
   Scenario: A URL with no git on the machine is refused
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And git is not installed
     When I run ":story? git@github.com:them/theirs.git"
     Then the story view state is "git-not-installed"
@@ -63,7 +63,7 @@ Feature: Reviewing a repository that is not on this machine
   # clone that failed a refusal instead of a wait nobody can end.
 
   Scenario: A clone that failed is refused with its exit status, not silence
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And git is installed
     When I run ":story? git@github.com:them/nope.git"
     And the clone finishes with exit status "128"
@@ -73,11 +73,11 @@ Feature: Reviewing a repository that is not on this machine
   # Picking a branch of the Guest repo does what picking a local branch does,
   # aimed at the repository in the Sidecar: it is checked out there, and the
   # range is what that branch introduced over the *Guest repo's* own default
-  # branch. The workspace CRIME was started in is not a repository at all in
+  # branch. The workspace Varde was started in is not a repository at all in
   # the general case, so a range resolved against it would be no range.
 
   Scenario: Picking a Guest repo's branch authors a story for what that branch introduced
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And git is installed
     And the repository has branches:
       | name    | kind  | seconds |
@@ -93,11 +93,11 @@ Feature: Reviewing a repository that is not on this machine
     And the modal is "confirm-story"
 
   # The authoring session is the one the reviewer already had running: its
-  # working directory is nothing CRIME moves, so every path the prompt hands
+  # working directory is nothing Varde moves, so every path the prompt hands
   # over is absolute and points into the Sidecar.
 
   Scenario: The authoring prompt and its hand-over are absolute paths in the Sidecar
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And an AI session is running in the AI pane
     And git is installed
     And the repository has branches:
@@ -114,7 +114,7 @@ Feature: Reviewing a repository that is not on this machine
     And the story context file was written into the Sidecar
 
   Scenario: Authoring a Guest repo's story set neither stops nor moves the AI session
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And an AI session is running in the AI pane
     And git is installed
     And the repository has branches:
@@ -136,7 +136,7 @@ Feature: Reviewing a repository that is not on this machine
   # opens the file inside it.
 
   Scenario: A Guest repo's story step is read and opened inside the clone
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And git is installed
     And the repository has branches:
       | name    | kind  | seconds |
@@ -182,7 +182,7 @@ Feature: Reviewing a repository that is not on this machine
     And step 1 is not stale
 
   Scenario: A Guest repo's step shows its range's diff on d
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And git is installed
     And the repository has branches:
       | name    | kind  | seconds |
@@ -237,7 +237,7 @@ Feature: Reviewing a repository that is not on this machine
   # branch is checked out there in the first place.
 
   Scenario: A step whose site in the clone no longer holds its text says so
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And git is installed
     And the repository has branches:
       | name    | kind  | seconds |
@@ -283,11 +283,11 @@ Feature: Reviewing a repository that is not on this machine
       """
     Then step 1 is stale as "text-changed"
 
-  # A file that is deleted when CRIME quits is a file editing cannot help:
+  # A file that is deleted when Varde quits is a file editing cannot help:
   # the buffer reads, and every key that would change it is refused out loud.
 
   Scenario: A buffer on a Guest repo's file refuses an edit
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And git is installed
     And the repository has branches:
       | name | kind  | seconds |
@@ -313,7 +313,7 @@ Feature: Reviewing a repository that is not on this machine
   # somebody else's repository.
 
   Scenario: A ":story?" with no URL after a Guest repo is this folder's own again
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And git is installed
     And the project is a git repository
     And the working tree has no changes
@@ -332,7 +332,7 @@ Feature: Reviewing a repository that is not on this machine
   # exists only fails, and the fetch is what puts a branch pushed since the clone in the picker.
 
   Scenario: A second ":story?" on the same URL fetches instead of cloning again
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And git is installed
     And the repository has branches:
       | name | kind  | seconds |
@@ -345,7 +345,7 @@ Feature: Reviewing a repository that is not on this machine
     And the story view state is "fetching"
 
   Scenario: The branch list after a fetch holds a branch pushed since the clone
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And git is installed
     And the repository has branches:
       | name | kind  | seconds |
@@ -365,7 +365,7 @@ Feature: Reviewing a repository that is not on this machine
   # throw away the one that arrived.
 
   Scenario: A fetch that failed is refused with its exit status, and the clone stays
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And git is installed
     And the repository has branches:
       | name | kind  | seconds |
@@ -380,7 +380,7 @@ Feature: Reviewing a repository that is not on this machine
     And the Guest repo is still there
 
   Scenario: A URL this session has not downloaded is still cloned
-    Given CRIME started with no folder in "/home/me/projects/theirs"
+    Given Varde started with no folder in "/home/me/projects/theirs"
     And git is installed
     And the repository has branches:
       | name | kind  | seconds |

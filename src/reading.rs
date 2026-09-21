@@ -731,8 +731,8 @@ mod tests {
     fn a_voice_is_read_with_the_home_directory_for_its_tilde() {
         let home = Path::new("/home/me");
         assert_eq!(
-            voice_file("~/.crime/voices/v.onnx", home),
-            Some(PathBuf::from("/home/me/.crime/voices/v.onnx"))
+            voice_file("~/.varde/voices/v.onnx", home),
+            Some(PathBuf::from("/home/me/.varde/voices/v.onnx"))
         );
         assert_eq!(
             voice_file("/voices/v.onnx", home),
@@ -857,7 +857,7 @@ mod tests {
     }
 
     /// A synthesizer that logs its answer rather than printing it bare is the
-    /// shape that froze a Reading for good: the path was on a line CRIME was
+    /// shape that froze a Reading for good: the path was on a line Varde was
     /// not reading, so the wait for it never ended.
     #[test]
     fn the_wav_is_the_last_token_of_the_line_that_names_one() {

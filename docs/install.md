@@ -1,53 +1,53 @@
-# Installing CRIME
+# Installing Varde
 
-CRIME installs two ways. The **binary** is the default: a prebuilt `crime` for this platform,
-downloaded from the latest GitHub Release, verified and put at `~/.local/bin/crime`. It needs no
+Varde installs two ways. The **binary** is the default: a prebuilt `varde` for this platform,
+downloaded from the latest GitHub Release, verified and put at `~/.local/bin/varde`. It needs no
 toolchain and updates itself from inside the editor (`:update`, ADR 0017). **From source** is a
-checkout, a release build and a symlink on your PATH pointing at it — for anyone working on CRIME,
+checkout, a release build and a symlink on your PATH pointing at it — for anyone working on Varde,
 where the ordinary release build *is* the install. Nothing is added to your shell configuration
 either way.
 
 ## The scripted way
 
-`install.sh` at the repo root does either, and sets up what CRIME needs around it, interactively:
+`install.sh` at the repo root does either, and sets up what Varde needs around it, interactively:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/oyvij/crime-editor/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/oyvij/varde-editor/main/install.sh | bash
 ```
 
 It reads its prompts from `/dev/tty`, which is what lets it ask questions while piped from `curl`.
-With no `crime` on PATH it asks **binary or source**, binary by default. Then it installs CRIME,
+With no `varde` on PATH it asks **binary or source**, binary by default. Then it installs Varde,
 writes the global config, asks about package managers, and offers the default AI CLI, the speech
 player and the URL opener. Nothing is installed without printing the command it is about to run.
 
-**The binary.** The script fetches `SHA256SUMS` and `crime-<os>-<arch>` from the latest Release,
+**The binary.** The script fetches `SHA256SUMS` and `varde-<os>-<arch>` from the latest Release,
 checks the asset's SHA-256 against its line, and only then writes it — as a real file, not a
-symlink — to `~/.local/bin/crime`. A missing asset, a failed download or a checksum mismatch aborts
+symlink — to `~/.local/bin/varde`. A missing asset, a failed download or a checksum mismatch aborts
 with a message and installs nothing. Only `curl` is required.
 
 **From source.** The script requires git, a C compiler and `cargo` via rustup (declining any of
 these aborts), then clones or `git pull --ff-only`, runs `cargo build --release` and links the
 symlink. Run from inside a clone (`./install.sh` after `git clone`), it never asks binary or source:
 it builds that clone and never clones again. Answered "source" from `curl`, it asks where the
-checkout should live, defaulting to `~/.crime/src`. A clone the server refuses is offered again over
+checkout should live, defaulting to `~/.varde/src`. A clone the server refuses is offered again over
 SSH, for a fork that is private.
 
-**Re-run**, it updates whichever kind it finds behind `crime`: a symlink into a checkout's
+**Re-run**, it updates whichever kind it finds behind `varde`: a symlink into a checkout's
 `target/release` is pulled and rebuilt; anything else is a binary install and is replaced in place
-with the latest Release. `CRIME_REPO` overrides the repository for a fork — the clone URL and the
+with the latest Release. `VARDE_REPO` overrides the repository for a fork — the clone URL and the
 Release the binary comes from are both derived from it.
 
-**The config.** Every run leaves a `~/.crime/config.toml`: when none is there, the script writes
-what `crime --default-config` prints — the template CRIME itself seeds the file with on a start that
+**The config.** Every run leaves a `~/.varde/config.toml`: when none is there, the script writes
+what `varde --default-config` prints — the template Varde itself seeds the file with on a start that
 finds none, every setting commented out and every program row live (ADR 0018). An existing file is
 never replaced, and a binary too old to print the template is reported rather than leaving a partial
 file.
 
 **Language servers, formatters and the voice are not installed by the script.** Each one is taken
-from Tools inside CRIME, one key per row, which writes the row, runs its install in the shell pane
+from Tools inside Varde, one key per row, which writes the row, runs its install in the shell pane
 and fills in what the install configures (ADR 0018). What the script does for them is make sure
-their install commands can run: it asks the `crime` it just installed, on either path, with
-`crime --deps` — the rows `~/.crime/config.toml` names, or the template's when that file does not
+their install commands can run: it asks the `varde` it just installed, on either path, with
+`varde --deps` — the rows `~/.varde/config.toml` names, or the template's when that file does not
 exist yet — and takes the package manager each `install.<os>` starts with (the first word, or the
 one after `sudo`, the same rule Tools uses to read a row `needs-installer`). Each one this machine
 lacks is one `y/N`, naming the rows that need it:
@@ -67,14 +67,14 @@ which would be wrong for a Homebrew or nvm npm.
 Only what the edge runs *without* configuration is spelled out in `install.sh` itself: the build
 toolchain, git, the default AI CLI (`claude`), the speech player's package (`alsa-utils`, on Linux,
 since Tools offers no install for it) and the URL opener. **When a feature adds a program
-CRIME shells out to, it is either a row with an `install.<os>` key or a line in the script, and
-`./install.sh --list` shows whether it is picked up.** `--list` asks whichever `crime` is installed,
+Varde shells out to, it is either a row with an `install.<os>` key or a line in the script, and
+`./install.sh --list` shows whether it is picked up.** `--list` asks whichever `varde` is installed,
 so it needs no source.
 
-`crime --deps` prints one line per row, tab-separated as `kind`, `name`, `command`, `install`, the
+`varde --deps` prints one line per row, tab-separated as `kind`, `name`, `command`, `install`, the
 install command being this OS's `install.<os>` or blank. The kinds are `lsp`, `formatter`, `speech`,
 and `player` for the speech row's `player.<os>`; a speech command or player no file names is not
-listed. A config file CRIME would refuse to start on stops `--deps` with the same file and line. It
+listed. A config file Varde would refuse to start on stops `--deps` with the same file and line. It
 needs no folder and no terminal, and exits before touching either — which is what lets a machine
 with no checkout learn what to offer.
 
@@ -86,19 +86,19 @@ From your checkout, build once and link the result into a directory that is alre
 
 ```sh
 cargo build --release
-ln -sfn "$(pwd)/target/release/crime" ~/.local/bin/crime
+ln -sfn "$(pwd)/target/release/varde" ~/.local/bin/varde
 ```
 
 `$(pwd)` is what makes this work from wherever you cloned into — the symlink records your own
 absolute path, so there is nothing to configure and nothing to edit for a different checkout
 location. `~/.local/bin` is on PATH on the target machine; if yours is somewhere else, substitute
-it. Confirm with `command -v crime`, which should print the symlink's path.
+it. Confirm with `command -v varde`, which should print the symlink's path.
 
 That is the whole installation. From any folder in any terminal:
 
 ```sh
-crime .            # open the current folder as the workspace
-crime ~/some/repo  # open a folder somewhere else
+varde .            # open the current folder as the workspace
+varde ~/some/repo  # open a folder somewhere else
 ```
 
 ## On a source install, the build is the install
@@ -121,8 +121,8 @@ Two consequences follow from the symlink, and both are deliberate:
 - **The running editor is whatever the checkout last compiled successfully.** A commit that builds
   but misbehaves is an editor that misbehaves. There is no second copy of the binary held back as a
   known-good version.
-- **Cleaning the build directory uninstalls CRIME.** `cargo clean` deletes `target/`, which is the
-  file the symlink points at, and `crime` stops working until you build again.
+- **Cleaning the build directory uninstalls Varde.** `cargo clean` deletes `target/`, which is the
+  file the symlink points at, and `varde` stops working until you build again.
 
 Both are recovered by a build, which is why neither is worth a second copy of the binary to avoid.
 
@@ -131,7 +131,7 @@ Both are recovered by a build, which is why neither is worth a second copy of th
 `cargo clean` is the wrong tool here, and the section above says why: it deletes the file the symlink
 names. The two halves of `target/` have opposite risks and should never be swept together.
 
-- **`target/release` is the installation.** Deleting it uninstalls CRIME until the next build. The
+- **`target/release` is the installation.** Deleting it uninstalls Varde until the next build. The
   update path — Ctrl+Space, which runs `cargo build --release` in the checkout — overwrites the
   binary in place and never needs a clean first. Nothing accumulates here: one binary, overwritten.
 - **`target/debug` is disposable.** It holds the test-suite artifacts and nothing on your PATH points

@@ -1,7 +1,7 @@
 # An Update is a newer Version, not a newer commit
 
-CRIME is installed as a symlink into its own checkout, so the binary and the checkout drift apart
-the moment somebody builds neither. To notice the drift, CRIME has to compare what it is against
+Varde is installed as a symlink into its own checkout, so the binary and the checkout drift apart
+the moment somebody builds neither. To notice the drift, Varde has to compare what it is against
 what is on disk — and there are two things it could compare.
 
 We compare **Versions**: the number the checkout claims about itself against the Running version

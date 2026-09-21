@@ -1,26 +1,26 @@
-# CRIME owns the test gate
+# Varde owns the test gate
 
 The Refactor loop points an AI session at the workspace and asks it to lower a number. That is a
 program editing your files in a sequence you are not watching keystroke by keystroke, so the whole
 design question is: **who decides that a pass was good?**
 
 The tempting answer is the session itself. One prompt — reduce the Risk count, run the tests, keep
-iterating until you cannot improve it — and CRIME merely hosts the pane. It is less code, it needs no
+iterating until you cannot improve it — and Varde merely hosts the pane. It is less code, it needs no
 test runner, and it is what every agent CLI is built to do.
 
 It cannot work here, for a reason this repo has already written down. `docs/adr/0004-hosted-panes-are-transparent.md`
 forbids reading what a hosted pane prints — not as a style rule, but because a branch that inspects a
-child's output is a branch that has a provider in it. So CRIME cannot see the session claim success,
+child's output is a branch that has a provider in it. So Varde cannot see the session claim success,
 and would not be entitled to believe it if it could. A session reporting that the tests pass is
 reporting what it believes. Belief is not a measurement, and the thing being risked is your code.
 
-**The decision: CRIME hands over a Scope and a goal, and CRIME decides.** Each Iteration snapshots the
+**The decision: Varde hands over a Scope and a goal, and Varde decides.** Each Iteration snapshots the
 files it is about to let the session touch, hands the session the Scope, waits to be told the pass is
 finished, then runs the project's tests itself, recomputes the Risk figures itself, and applies the
 Gate. Edits that fail the Gate are returned to the snapshot. Edits that pass it stay in the working
 tree — **uncommitted, always**.
 
-**Never committing is the constraint the rest hangs off.** CRIME's reason to exist includes reviewing a
+**Never committing is the constraint the rest hangs off.** Varde's reason to exist includes reviewing a
 change before it lands; a loop that commits its own work leaves nothing to review and quietly promotes
 an agent's fifteen passes into history nobody read. So the loop's entire output is one dirty working
 tree, and the Review view is where it is judged. This also means the loop cannot be trusted *because*
@@ -30,7 +30,7 @@ it is gated — it is gated so that what reaches your review is at least still g
 
 **A quiescence timer for "the pass is done."** Silence is not completion: an agent thinking for forty
 seconds looks exactly like an agent that finished. Completion is made a *filesystem* fact instead — the
-session writes a sentinel, and CRIME's existing watcher sees it. A file is something the edge may
+session writes a sentinel, and Varde's existing watcher sees it. A file is something the edge may
 observe without reading a pane, and any CLI that can edit files can write one.
 
 **`git stash`, or `git checkout HEAD -- .`, for the revert.** Both destroy uncommitted work that was
@@ -55,7 +55,7 @@ there is. Nothing about it relaxes the third condition.
 ## Consequences
 
 **The prompt is one generic constant and carries no project-specific fact.** Notably it never carries
-the test command, because CRIME runs the tests — which removes the most project-specific string of all
+the test command, because Varde runs the tests — which removes the most project-specific string of all
 from a prompt that has to work on any workspace. What it does carry is the Scope, where the figures
 are written, and an instruction to obey whatever convention file the repo already has.
 

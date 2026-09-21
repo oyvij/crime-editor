@@ -8,7 +8,7 @@
 // struct is already moved by value on the way out.
 #![allow(clippy::result_large_err)]
 
-//! CRIME — Command · Review · Integrated · Modal · Editor
+//! Varde — Command · Review · Integrated · Modal · Editor
 //!
 //! One state struct, one `update`, and everything the outside world must do is
 //! returned as an [`Effect`] rather than performed here. Nothing in this crate
@@ -46,41 +46,41 @@ use std::path::{Path, PathBuf};
 use tree::Entry;
 use tree_actions::{Action, Target};
 
-/// The name of CRIME's own folder in a workspace. Only for the sites that need
+/// The name of Varde's own folder in a workspace. Only for the sites that need
 /// it spelled *relative* to the workspace — what a prompt tells a session to
 /// write, which is read against the session's own working directory. A path on
-/// disk comes from [`crime_dir`].
-pub const CRIME_DIR: &str = ".crime";
+/// disk comes from [`varde_dir`].
+pub const VARDE_DIR: &str = ".varde";
 
-/// Where everything CRIME writes for a workspace goes. Nothing joins
-/// [`CRIME_DIR`] onto a root itself: where CRIME's files live is one decision
+/// Where everything Varde writes for a workspace goes. Nothing joins
+/// [`VARDE_DIR`] onto a root itself: where Varde's files live is one decision
 /// in one place rather than one per site, with an eighth site to miss
 /// (`docs/adr/0016-a-bare-workspace-leaves-nothing-behind.md`).
 ///
 /// A Bare workspace has a Sidecar and answers with it, which is the whole of
-/// "CRIME writes nothing into a folder it was not given": every site above is
+/// "Varde writes nothing into a folder it was not given": every site above is
 /// already routed here, so there is no site left that can still write into the
 /// project. The Sidecar is derived by the edge from the folder and the process
 /// id, and read here — never built here, since neither part is the library's
 /// to observe.
-pub fn crime_dir(root: &Path, sidecar: Option<&Path>) -> PathBuf {
+pub fn varde_dir(root: &Path, sidecar: Option<&Path>) -> PathBuf {
     match sidecar {
         Some(sidecar) => sidecar.to_path_buf(),
-        None => root.join(CRIME_DIR),
+        None => root.join(VARDE_DIR),
     }
 }
 
-/// Where a Reading's stream is written, and the one thing CRIME writes that is
-/// not about a workspace at all. Not the project's `.crime/`, which is drawn
+/// Where a Reading's stream is written, and the one thing Varde writes that is
+/// not about a workspace at all. Not the project's `.varde/`, which is drawn
 /// in the file tree and walked by `git status` — a file that exists for eleven
 /// seconds and vanishes is a flicker with no explanation there, and one left
 /// by a crash is a mystery inside somebody's repository. Not the OS temp
 /// directory either, because a sweep over a folder shared with every other
 /// program is a pattern match against somebody else's filenames: everything
-/// under here is CRIME's, so all of it can go
+/// under here is Varde's, so all of it can go
 /// (`docs/adr/0014-scratch-audio-lives-outside-the-workspace.md`).
-pub fn tmp_dir(crime_home: &Path) -> PathBuf {
-    crime_home.join("tmp")
+pub fn tmp_dir(varde_home: &Path) -> PathBuf {
+    varde_home.join("tmp")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -108,7 +108,7 @@ pub enum Pane {
 }
 
 /// What one of the terminal strip's shells is doing, told by the edge: a
-/// foreground job is running in it, or its prompt is waiting. A command CRIME
+/// foreground job is running in it, or its prompt is waiting. A command Varde
 /// pushes goes to a waiting one — typed at a running job it is the job's input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shell {
@@ -158,7 +158,7 @@ const WHEEL_ROWS: usize = 1;
 const SLIDE_COLUMNS: usize = 8;
 
 /// What the palette offers, grouped the way it is drawn: the panes to go to,
-/// the views to switch to, then what applies to the project and to CRIME
+/// the views to switch to, then what applies to the project and to Varde
 /// itself. Grouping is what let the list grow past the point where a flat
 /// thirteen rows read as a heap — and what shows that `Edit` and `Editor` are
 /// different questions, one a view and one a pane.
@@ -176,7 +176,7 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
         "Panes",
         &[
             ('o', "Editor"),
-            // `g` is CRIME's own buffer gesture: `gt`/`gT` step buffers, so
+            // `g` is Varde's own buffer gesture: `gt`/`gT` step buffers, so
             // the palette's `g` opens the list of what they step through.
             ('g', "Buffers"),
             ('d', "Files"),
@@ -248,7 +248,7 @@ pub fn palette_rows(screen: u16) -> Vec<(Option<char>, String)> {
     // from the keyboard whether it is drawn or not.
     //
     // The gaps between the groups carry nothing at all. The cancel line goes
-    // next — Escape closes every box CRIME has, so it is the one row a reader
+    // next — Escape closes every box Varde has, so it is the one row a reader
     // can guess, which is the same argument that keeps it out of the
     // cheatsheet. Only then is an entry dropped, and the last row says so: a
     // command nobody can see is a command nobody uses, so losing one is
@@ -353,7 +353,7 @@ pub enum Modal {
     /// The one situation a restart answers, asked rather than taken: an
     /// installer that appended its directory to a shell profile is invisible to
     /// a process that inherited its environment at launch, so no probe this
-    /// CRIME runs will ever find it. Reached only by a re-check that still
+    /// Varde runs will ever find it. Reached only by a re-check that still
     /// found nothing, which is what makes it distinguishable from the outside
     /// (R31.24). Carries nothing: what it offers is the same for every
     /// language, and the language it was asked about is already on screen
@@ -688,7 +688,7 @@ pub enum Event {
         command: Option<String>,
         force: bool,
     },
-    /// `:q` and `:q!` — closes the open file, not CRIME.
+    /// `:q` and `:q!` — closes the open file, not Varde.
     CloseBuffer {
         force: bool,
     },
@@ -699,12 +699,12 @@ pub enum Event {
     CloseAllBuffers {
         force: bool,
     },
-    /// Ctrl+Q, or the palette's `q`. Leaving CRIME is not on the `:` line, so a
+    /// Ctrl+Q, or the palette's `q`. Leaving Varde is not on the `:` line, so a
     /// mistyped clear-up cannot take the session with it.
     Quit,
     /// The same, abandoning unsaved work.
     QuitForce,
-    /// `:update` — a release build of CRIME's own checkout, or on a binary
+    /// `:update` — a release build of Varde's own checkout, or on a binary
     /// install the remembered Release put in place of the running binary.
     Rebuild,
     /// How putting the Release in place of the running binary ended. Success
@@ -792,7 +792,7 @@ pub enum Event {
     /// folder is a repository with a clean tree at all, are git's to answer,
     /// so this asks rather than deciding.
     ///
-    /// `Some(url)` is a repository CRIME has never seen: a Guest repo, cloned
+    /// `Some(url)` is a repository Varde has never seen: a Guest repo, cloned
     /// into the Sidecar by the user's own `git` before its branches can be
     /// listed (ADR 0015). One event rather than two, because the picker is
     /// the same picker — the URL only says which repository it lists.
@@ -827,7 +827,7 @@ pub enum Event {
     StoryResolved(story::Resolution),
     /// The reviewer answered the `ConfirmStory` modal with "author".
     ConfirmStory,
-    /// The watcher saw a new file land in `.crime/stories/` — told by name
+    /// The watcher saw a new file land in `.varde/stories/` — told by name
     /// only, so the core can track retention without reading it. Loading
     /// what it holds is `StoryArtifact`'s, sent alongside this by the same
     /// watcher moment.
@@ -861,9 +861,9 @@ pub enum Event {
         /// second field to disagree with it.
         before: Option<risk::Figures>,
     },
-    /// Starts the Refactor loop over a Scope: CRIME hands a session the Scope
+    /// Starts the Refactor loop over a Scope: Varde hands a session the Scope
     /// and the goal, then judges the pass itself
-    /// (`docs/adr/0010-crime-owns-the-test-gate.md`).
+    /// (`docs/adr/0010-varde-owns-the-test-gate.md`).
     StartRefactorLoop(risk::Scope),
     /// Stops the loop, putting the Iteration in flight back. Its own event
     /// rather than a second meaning for `Escape`: that key is heavily
@@ -1060,7 +1060,7 @@ pub struct Search {
     /// Index into `results.hits`.
     pub selected: usize,
     /// The first [`search::Row`] the box shows. State rather than something the
-    /// renderer works out, for the reason every other scroll in CRIME is:
+    /// renderer works out, for the reason every other scroll in Varde is:
     /// clamped in one place, and read by whoever draws it.
     pub scroll: usize,
 }
@@ -1102,11 +1102,11 @@ pub enum Effect {
     },
     DeleteFile(PathBuf),
     /// The directory and everything under it. Two producers, and the rule
-    /// under both is one rule: the directory is CRIME's own, so all of it can
+    /// under both is one rule: the directory is Varde's own, so all of it can
     /// go. Quitting a Bare workspace removes its Sidecar, which is the whole
     /// of what "leaves nothing behind" means (ADR 0016), and starting sweeps
     /// [`tmp_dir`], which is what a crash mid-Reading escapes into (ADR 0014).
-    /// Never a path in the workspace — a project's `.crime/` is the user's to
+    /// Never a path in the workspace — a project's `.varde/` is the user's to
     /// keep.
     DeleteDir(PathBuf),
     SpawnAi {
@@ -1257,7 +1257,7 @@ pub enum Effect {
         /// Which repository the range is git's to answer for.
         repo: PathBuf,
         spelling: String,
-        /// Absolute, and inside CRIME's own directory: the prompt has already
+        /// Absolute, and inside Varde's own directory: the prompt has already
         /// named this path to a session whose working directory is nobody's
         /// to move.
         path: PathBuf,
@@ -1306,7 +1306,7 @@ pub enum Effect {
         /// Which repository the ladder is walked in ([`State::repo_root`]).
         repo: PathBuf,
         /// Where the artifact belongs, so the path the AI is handed is
-        /// absolute rather than relative to a working directory CRIME does
+        /// absolute rather than relative to a working directory Varde does
         /// not set.
         dir: PathBuf,
         explicit: Option<String>,
@@ -1336,7 +1336,7 @@ pub enum Effect {
     /// under the Iteration's number. Per Iteration and never a commit:
     /// `git stash` and `git checkout HEAD -- .` both destroy uncommitted work
     /// that was the user's before the loop started
-    /// (`docs/adr/0010-crime-owns-the-test-gate.md`).
+    /// (`docs/adr/0010-varde-owns-the-test-gate.md`).
     ///
     /// The whole tree whichever Scope the loop is over, so the Scope is not in
     /// it: the restore puts back only the files the Iteration touched, so a
@@ -1520,15 +1520,15 @@ impl Selection {
 #[derive(Debug, Clone, PartialEq)]
 pub struct State {
     pub root: PathBuf,
-    /// Where CRIME's own files go, when they may not go in the workspace: the
+    /// Where Varde's own files go, when they may not go in the workspace: the
     /// Sidecar of a Bare workspace, `None` for a project. Derived by the edge
-    /// and read through [`crime_dir`] — never written here, the rule every
+    /// and read through [`varde_dir`] — never written here, the rule every
     /// edge-observed field follows.
     pub sidecar: Option<PathBuf>,
-    /// `~/.crime`, handed in by the edge. The one thing written there is a
+    /// `~/.varde`, handed in by the edge. The one thing written there is a
     /// review submitted from a Bare workspace, whose Sidecar is deleted at
     /// exit and whose folder is the user's own (ADR 0016).
-    pub crime_home: PathBuf,
+    pub varde_home: PathBuf,
     pub modal: Modal,
     pub view: View,
     pub double_tap_ms: u64,
@@ -1727,7 +1727,7 @@ pub struct State {
     /// it, and a variant is the wrong place for something two callers need.
     pub comment: Option<Buffer>,
     last_tap: Option<(Tap, u64)>,
-    /// CRIME's own checkout, when the running binary came from one. Known here
+    /// Varde's own checkout, when the running binary came from one. Known here
     /// and not only at the edge, because the rebuild command has to name it —
     /// the terminal pane's working directory is the workspace, not the checkout.
     pub checkout: Option<PathBuf>,
@@ -1757,9 +1757,9 @@ pub struct State {
     /// The branch the picker left, once one was picked. Remembered rather than
     /// told, unlike [`State::branch`] beside it, because it is a *past* fact:
     /// no read of the repository can say where the reviewer was. Story view
-    /// says it next to where they are now, because CRIME does not put them
+    /// says it next to where they are now, because Varde does not put them
     /// back — a second checkout can fail and leave them somewhere neither they
-    /// nor CRIME chose.
+    /// nor Varde chose.
     pub left_branch: Option<String>,
     /// The Guest repo in the Sidecar, once its branches have been listed —
     /// `None` while the repository under review is the workspace itself.
@@ -1796,7 +1796,7 @@ pub struct State {
     pub file_hunks: Vec<story::FileHunks>,
     /// Every story-set filename the watcher has told this workspace about,
     /// oldest first — the core's only way to know which one is oldest, since
-    /// the AI writes each file and CRIME never lists the directory itself.
+    /// the AI writes each file and Varde never lists the directory itself.
     pub story_sets: Vec<String>,
     /// The workspace's figure, or the fact that it is being measured.
     pub risk: risk::Risk,
@@ -2010,7 +2010,7 @@ impl State {
     /// this and not of [`State::root`]: a Bare workspace's folder is often no
     /// repository at all, and a range resolved against it would be no range.
     /// The workspace stays [`State::root`]'s: the tree, the buffers a save
-    /// writes and what `.gitignore` covers are all about the folder CRIME was
+    /// writes and what `.gitignore` covers are all about the folder Varde was
     /// opened on.
     pub fn repo_root(&self) -> &Path {
         self.guest.as_deref().unwrap_or(&self.root)
@@ -2065,7 +2065,7 @@ impl Default for State {
         Self {
             root: PathBuf::new(),
             sidecar: None,
-            crime_home: PathBuf::new(),
+            varde_home: PathBuf::new(),
             modal: Modal::None,
             view: View::Edit,
             double_tap_ms: 300,
@@ -2519,7 +2519,7 @@ pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
     // business.
     history::record(state, &mut next, jump);
     // A Guest repo's file cannot be edited: the clone goes with the Sidecar
-    // when CRIME exits, so an edit there is work nobody can keep. Asked here
+    // when Varde exits, so an edit there is work nobody can keep. Asked here
     // for the reason `history::record` is asked here — this is the one
     // function holding both the state the event arrived at and the state it
     // produced, and an arm that has to remember to refuse is an arm that will
@@ -3357,19 +3357,19 @@ fn on_key_6(_state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
             // finished (ADR 0010): a sentinel is a file, and a file is
             // something the edge may observe without reading a pane.
             // The whole path, not its last component: `SENTINEL` names the
-            // file inside `crime_dir`, and matching on the name alone would
+            // file inside `varde_dir`, and matching on the name alone would
             // let a `refactor-done` anywhere in the watched tree complete an
             // Iteration and run the Gate.
-            let sentinel = crime_dir(&next.root, next.sidecar.as_deref()).join(risk::SENTINEL);
+            let sentinel = varde_dir(&next.root, next.sidecar.as_deref()).join(risk::SENTINEL);
             let reported = appeared.iter().any(|(path, _)| path == &sentinel);
             // The download's end, seen by the same watcher and for the same
             // reason (ADR 0015) — but the status is the sentinel's contents,
             // so it is read rather than inferred from the file being there.
             // Only while one is in flight: a `download-done` left in a
-            // Sidecar is not a download this CRIME asked for.
+            // Sidecar is not a download this Varde asked for.
             let read_the_download = match &next.story_set {
                 story::Set::Downloading { url, how } => {
-                    let sidecar = crime_dir(&next.root, next.sidecar.as_deref());
+                    let sidecar = varde_dir(&next.root, next.sidecar.as_deref());
                     let done = sidecar.join(story::DOWNLOAD_SENTINEL);
                     appeared.iter().any(|(path, _)| path == &done).then(|| {
                         Effect::ReadGuestBranches {
@@ -3383,7 +3383,7 @@ fn on_key_6(_state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
             };
             // A taken row's install, by the same watcher and the same rule:
             // only while one is running.
-            let install = crime_dir(&next.root, next.sidecar.as_deref()).join(tools::SENTINEL);
+            let install = varde_dir(&next.root, next.sidecar.as_deref()).join(tools::SENTINEL);
             let read_the_install = (next.installing.is_some()
                 && appeared.iter().any(|(path, _)| path == &install))
             .then_some(Effect::ReadInstallStatus(install));
@@ -5838,7 +5838,7 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
 
         // Taking a row, which is the whole install (ADR 0018). The key only
         // asks for the global config's text: what is written back is decided
-        // against the file as it is now, never as it was when CRIME started,
+        // against the file as it is now, never as it was when Varde started,
         // since a reader who edited it since would lose the edit.
         Event::InstallTool => {
             let offered = match next.modal {
@@ -5893,7 +5893,7 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                     // there for every injection.
                     next.modal = Modal::None;
                     vec![Effect::ReadGlobalConfig {
-                        path: next.crime_home.join(startup::CONFIG_FILE),
+                        path: next.varde_home.join(startup::CONFIG_FILE),
                         kind: row.kind,
                         name: row.name,
                         write: tools::Write::Row,
@@ -5930,14 +5930,14 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                         next.speech.voice = startup::speech(&config, &next.os).voice;
                     }
                     vec![Effect::WriteFile {
-                        path: next.crime_home.join(startup::CONFIG_FILE),
+                        path: next.varde_home.join(startup::CONFIG_FILE),
                         contents,
                     }]
                 }
             }
         }
 
-        // The row written and its install run, or neither: a file CRIME would
+        // The row written and its install run, or neither: a file Varde would
         // refuse to start on is refused here too, before anything is written
         // or run.
         Event::GlobalConfigRead {
@@ -5967,7 +5967,7 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                     if let Some((contents, config)) = written {
                         // The rows it added run from now on, as a start
                         // reading this file would run them: a row the file
-                        // names is a row CRIME starts, with no restart.
+                        // names is a row Varde starts, with no restart.
                         for (name, server) in config.servers() {
                             next.servers.entry(name).or_insert(server);
                         }
@@ -5978,13 +5978,13 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                             next.facts.entry(name).or_insert(fact);
                         }
                         effects.push(Effect::WriteFile {
-                            path: next.crime_home.join(startup::CONFIG_FILE),
+                            path: next.varde_home.join(startup::CONFIG_FILE),
                             contents,
                         });
                     }
                     if let Some(install) = row.install {
                         let sentinel =
-                            crime_dir(&next.root, next.sidecar.as_deref()).join(tools::SENTINEL);
+                            varde_dir(&next.root, next.sidecar.as_deref()).join(tools::SENTINEL);
                         next.install_failed.remove(&(kind, name.clone()));
                         next.installing = Some((kind, name));
                         // Where a `sudo` prompt or a passphrase is typed.
@@ -6006,7 +6006,7 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                 // voice it fetched is what the row needs to speak. Only
                 // `[speech]` carries `configures`.
                 let configures = (row.0 == tools::Kind::Speech).then(|| Effect::ReadGlobalConfig {
-                    path: next.crime_home.join(startup::CONFIG_FILE),
+                    path: next.varde_home.join(startup::CONFIG_FILE),
                     kind: row.0,
                     name: row.1.clone(),
                     write: tools::Write::Configures,
@@ -6072,7 +6072,7 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                 // And only over the list that asked. A question that replaced
                 // whatever is on screen when the answer happens to land is a
                 // modal that appeared on its own, which is the one thing no
-                // modal in CRIME does — the `Diverged` box is opened by a key
+                // modal in Varde does — the `Diverged` box is opened by a key
                 // and never by the watcher for exactly this reason. At the edge
                 // the answer lands in the same drain as the asking, so there is
                 // nothing to step on; this is what keeps that true rather than
@@ -6215,7 +6215,7 @@ fn on_close_buffer(_state: &State, mut next: State, event: Event, wheeled: bool)
             }
         }
 
-        // Q59: the restart is CRIME leaving, not CRIME re-executing itself.
+        // Q59: the restart is Varde leaving, not Varde re-executing itself.
         // Re-executing would inherit this process's environment — the very
         // environment the shell profile's new directory is missing from — so it
         // would answer the one situation the question exists for by not
@@ -6284,7 +6284,7 @@ fn on_quit_force(state: &State, mut next: State, event: Event, wheeled: bool) ->
         Event::ToggleBuffersList => take_the_corner(state, &mut next, layout::Corner::Buffers),
         Event::ToggleCursorHistory => take_the_corner(state, &mut next, layout::Corner::History),
 
-        // The two gestures the pane exists beside, answered wherever CRIME's
+        // The two gestures the pane exists beside, answered wherever Varde's
         // own keys are answered. `history` holds the whole of what a step is,
         // because a step from the middle of the list and a step from the live
         // end past the newest Visit are one question — and answering them in
@@ -6605,10 +6605,10 @@ fn on_drag_row(state: &State, mut next: State, event: Event, wheeled: bool) -> A
         //
         // A set that fails a check is handed back rather than thrown away
         // (ticket 06): the AI gets a fix request naming only the failing
-        // Steps, and CRIME keeps waiting. Bounded by rounds and never by a
+        // Steps, and Varde keeps waiting. Bounded by rounds and never by a
         // clock — `story::ATTEMPTS` artifacts, then the set is refused whole
         // down the same path a malformed one takes. Nothing in either state is
-        // walkable: a Step CRIME already knows points at the wrong code is
+        // walkable: a Step Varde already knows points at the wrong code is
         // worse than no Story at all.
         Event::StoryFiles(files) => {
             if let story::Set::Filling { artifact, attempt } = &state.story_set {
@@ -6628,7 +6628,7 @@ fn on_drag_row(state: &State, mut next: State, event: Event, wheeled: bool) -> A
                     // rewriting a Story nobody is waiting for.
                     Some(attempt) if attempt < story::ATTEMPTS => {
                         let prompt = story::fix_prompt(
-                            &crime_dir(&next.root, next.sidecar.as_deref()),
+                            &varde_dir(&next.root, next.sidecar.as_deref()),
                             &artifact,
                             &problems,
                         );
@@ -6707,9 +6707,9 @@ fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool
                 // Written before the prompt reaches the pane: the prompt
                 // points at it in one line, and an AI that read it first would
                 // find nothing there.
-                // Both paths are already absolute and inside CRIME's own
+                // Both paths are already absolute and inside Varde's own
                 // directory, which is what lets the prompt go to a session
-                // whose working directory CRIME never set and never moves.
+                // whose working directory Varde never set and never moves.
                 let context = story::context_path(&out);
                 let mut effects = vec![
                     Effect::RenderView(View::Story),
@@ -6756,11 +6756,11 @@ fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool
                 // It is also where the Guest repo is adopted: refs listed for
                 // a clone in flight are that clone's, so from here every git
                 // question a Story asks is asked of the Sidecar's copy rather
-                // than of the folder CRIME was opened on.
+                // than of the folder Varde was opened on.
                 if let story::Set::Downloading { url, .. } = &next.story_set {
                     let url = url.clone();
                     next.guest = Some(
-                        crime_dir(&next.root, next.sidecar.as_deref())
+                        varde_dir(&next.root, next.sidecar.as_deref())
                             .join(story::guest_name(&url)),
                     );
                     // Refs listed for a download in flight are a repository
@@ -6806,7 +6806,7 @@ fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool
         }
 
         // The selection is pulled back onto a row that is still shown, the way
-        // every list in CRIME clamps: a row picked before a filter narrowed the
+        // every list in Varde clamps: a row picked before a filter narrowed the
         // list is a row nobody can see, and Enter on it would check out a branch
         // the reviewer is not looking at.
         Event::FilterBranches(text) => {
@@ -6861,7 +6861,7 @@ fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool
 fn resolve_story(state: &State, explicit: Option<String>, force: bool) -> Effect {
     Effect::ResolveStory {
         repo: state.repo_root().to_path_buf(),
-        dir: crime_dir(&state.root, state.sidecar.as_deref()),
+        dir: varde_dir(&state.root, state.sidecar.as_deref()),
         explicit,
         force,
     }
@@ -6888,7 +6888,7 @@ fn say_in_story(next: &mut State, set: story::Set) -> Vec<Effect> {
 /// Refused in a project workspace: a project workspace is locked to its
 /// project, and a foreign repository must never appear inside it. Refused
 /// again with no `git` on the machine — the one runtime dependency this
-/// feature adds, and an absence CRIME says out loud rather than a command
+/// feature adds, and an absence Varde says out loud rather than a command
 /// that fails in a pane.
 fn download_guest(next: &mut State, url: String) -> Vec<Effect> {
     if next.sidecar.is_none() {
@@ -6901,10 +6901,10 @@ fn download_guest(next: &mut State, url: String) -> Vec<Effect> {
         true => story::Download::Fetch,
         false => story::Download::Clone,
     };
-    // Through the accessor like every other CRIME path (ticket 01), so the
+    // Through the accessor like every other Varde path (ticket 01), so the
     // directory the download lands in and the one the watcher matches the
     // sentinel against cannot be spelled two ways.
-    let sidecar = crime_dir(&next.root, next.sidecar.as_deref());
+    let sidecar = varde_dir(&next.root, next.sidecar.as_deref());
     let command = story::download_command(
         how,
         &url,
@@ -6919,7 +6919,7 @@ fn download_guest(next: &mut State, url: String) -> Vec<Effect> {
 /// EnterRemainder, EnterStory, RecomputeRisk, RiskFigures, StartRefactorLoop, StepStory, StopRefactorLoop, StoryFileWritten
 fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
-        // Told by name only (ADR 0005): the AI writes each file, not CRIME,
+        // Told by name only (ADR 0005): the AI writes each file, not Varde,
         // so the edge is the one that lists the directory and knows which
         // name is oldest — this only tracks order and prunes past it.
         // Re-authoring writes the same name again (a story dies with its
@@ -6930,7 +6930,7 @@ fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: 
             next.story_sets.retain(|existing| existing != &name);
             next.story_sets.push(name);
             let mut effects = Vec::new();
-            let dir = crime_dir(&next.root, next.sidecar.as_deref()).join("stories");
+            let dir = varde_dir(&next.root, next.sidecar.as_deref()).join("stories");
             let kept = story::prune(&next.story_sets, story::RETENTION);
             for pruned in next.story_sets.iter().filter(|name| !kept.contains(name)) {
                 // Retention stays one rule, not two: the hand-over is pruned
@@ -7678,36 +7678,36 @@ pub(crate) fn queue_for_ai(next: &mut State, prompt: String) -> Vec<Effect> {
 }
 
 /// Where submitted reviews are kept. A project keeps its own in
-/// `.crime/reviews/` — but a Bare workspace's `.crime` is the Sidecar, deleted
+/// `.varde/reviews/` — but a Bare workspace's `.varde` is the Sidecar, deleted
 /// at exit, and a review written there is the output of the reading thrown
-/// away with it. So it goes to `~/.crime/reviews/` instead: durable, outside
+/// away with it. So it goes to `~/.varde/reviews/` instead: durable, outside
 /// every workspace, under the same retention
 /// (`docs/adr/0016-a-bare-workspace-leaves-nothing-behind.md`). This is the one
-/// thing CRIME writes that does not route through [`crime_dir`], and the only
+/// thing Varde writes that does not route through [`varde_dir`], and the only
 /// one that may not.
 ///
 /// The edge reads it too, for the numbers already there. It has to: one global
 /// directory means a Bare workspace numbering from nothing writes `0001.json`
 /// over the review somebody submitted from another folder — which is the loss
 /// this whole feature exists to prevent.
-pub fn reviews_dir(root: &Path, sidecar: Option<&Path>, crime_home: &Path) -> PathBuf {
+pub fn reviews_dir(root: &Path, sidecar: Option<&Path>, varde_home: &Path) -> PathBuf {
     match sidecar {
-        Some(_) => crime_home.join("reviews"),
-        None => crime_dir(root, None).join("reviews"),
+        Some(_) => varde_home.join("reviews"),
+        None => varde_dir(root, None).join("reviews"),
     }
 }
 
 fn submit(next: &mut State) -> Vec<Effect> {
     let number = next.reviews.iter().next_back().copied().unwrap_or(0) + 1;
-    let dir = reviews_dir(&next.root, next.sidecar.as_deref(), &next.crime_home);
+    let dir = reviews_dir(&next.root, next.sidecar.as_deref(), &next.varde_home);
     let file = format!("{number:04}.json");
     // How the prompt spells it: relative in a project, because the prompt is
     // read against the session's own working directory, and absolutely from a
-    // Bare workspace, whose folder is the user's and holds no `.crime` to
+    // Bare workspace, whose folder is the user's and holds no `.varde` to
     // resolve against.
     let named = match next.sidecar {
         Some(_) => dir.join(&file).display().to_string(),
-        None => format!("{CRIME_DIR}/reviews/{file}"),
+        None => format!("{VARDE_DIR}/reviews/{file}"),
     };
     let verdict = review::verdict(&next.comments);
     let comments = std::mem::take(&mut next.comments);
@@ -7827,7 +7827,7 @@ fn relaunching(next: State) -> (State, Vec<Effect>) {
     (next, effects)
 }
 
-/// What CRIME remembers about a project between sessions.
+/// What Varde remembers about a project between sessions.
 fn state_json(state: &State) -> String {
     let expanded: Vec<String> = state
         .expanded
@@ -7930,7 +7930,7 @@ fn comment_range(state: &State) -> Option<(String, u32, u32)> {
     ))
 }
 
-/// Opening replaces the one buffer CRIME holds, so unsaved edits would be
+/// Opening replaces the one buffer Varde holds, so unsaved edits would be
 /// gone. Refuse instead, the same way quitting does.
 fn open_file(mut next: State, path: PathBuf) -> (State, Vec<Effect>) {
     // Opening keeps what is already open, so nothing is discarded and the
@@ -7972,14 +7972,14 @@ pub(crate) fn enter_view(state: &State, view: View) -> (State, Vec<Effect>) {
     }
     if view == View::Story {
         effects.push(Effect::ReadStories {
-            dir: crime_dir(&next.root, next.sidecar.as_deref()).join("stories"),
+            dir: varde_dir(&next.root, next.sidecar.as_deref()).join("stories"),
             repo: next.repo_root().to_path_buf(),
         });
     }
     (next, effects)
 }
 
-/// Every folder CRIME has to hear about changes in — the decision, so the edge
+/// Every folder Varde has to hear about changes in — the decision, so the edge
 /// only has to add and drop watches to match it.
 ///
 /// Folders, never files: one watch covers everything in a directory, and a
@@ -7998,10 +7998,10 @@ pub fn watched_folders(state: &State) -> BTreeSet<PathBuf> {
     folders.insert(state.root.join(".git"));
     // Always, not only while authoring (ADR 0006): the artifact can land any
     // time after the prompt is sent.
-    folders.insert(crime_dir(&state.root, state.sidecar.as_deref()).join("stories"));
+    folders.insert(varde_dir(&state.root, state.sidecar.as_deref()).join("stories"));
     // The Refactor loop's completion sentinel lands here, and the wait for it
     // has no timeout — a folder nobody watches is a loop that never finishes.
-    folders.insert(crime_dir(&state.root, state.sidecar.as_deref()));
+    folders.insert(varde_dir(&state.root, state.sidecar.as_deref()));
     folders.extend(state.expanded.iter().cloned());
     let open = state
         .buffers
@@ -8989,19 +8989,19 @@ mod tests {
     use super::*;
 
     /// The one answer every site derives from, in both shapes: a project keeps
-    /// CRIME's files under its own root, and a Bare workspace keeps them in the
+    /// Varde's files under its own root, and a Bare workspace keeps them in the
     /// Sidecar the edge handed in — the Sidecar whole, never joined onto, since
-    /// it is already CRIME's own directory and joining `.crime` onto it would
+    /// it is already Varde's own directory and joining `.varde` onto it would
     /// bury every path one level deeper than the sweep looks.
     #[test]
-    fn crimes_own_folder_is_the_sidecar_or_under_the_root() {
-        let root = Path::new("/home/me/projects/crime");
+    fn vardes_own_folder_is_the_sidecar_or_under_the_root() {
+        let root = Path::new("/home/me/projects/varde");
         assert_eq!(
-            crime_dir(root, None),
-            PathBuf::from("/home/me/projects/crime/.crime")
+            varde_dir(root, None),
+            PathBuf::from("/home/me/projects/varde/.varde")
         );
-        let sidecar = Path::new("/home/me/.crime/paths/%home%me%projects%crime-91");
-        assert_eq!(crime_dir(root, Some(sidecar)), sidecar);
+        let sidecar = Path::new("/home/me/.varde/paths/%home%me%projects%varde-91");
+        assert_eq!(varde_dir(root, Some(sidecar)), sidecar);
     }
 
     /// The candidate list belongs to the text being typed, so it goes when the
@@ -9120,7 +9120,7 @@ mod tests {
     /// The ends of Tools, which no Scenario reaches: they walk to a
     /// row and act on it, so an unclamped selection would show up as an offer
     /// from the wrong row rather than as a panic. Down at the bottom stays, and
-    /// Up at the top stays — the same as every other list in CRIME.
+    /// Up at the top stays — the same as every other list in Varde.
     #[test]
     fn the_tools_selection_stops_at_both_ends() {
         let mut state = State {
@@ -9192,7 +9192,7 @@ mod tests {
         assert_eq!(told.modal, Modal::Restart);
         assert_eq!(told.recheck, None, "the question was answered once");
         // And nowhere else: an answer that landed after the list went is an
-        // answer to a question nobody is looking at, and no modal in CRIME
+        // answer to a question nobody is looking at, and no modal in Varde
         // opens itself.
         let elsewhere = State {
             modal: Modal::None,
@@ -9979,7 +9979,7 @@ mod tests {
             ai_spoken: true,
             modal: Modal::ConfirmStory {
                 spelling: "main..HEAD".to_string(),
-                out: ".crime/stories/aaa-bbb.json".to_string(),
+                out: ".varde/stories/aaa-bbb.json".to_string(),
             },
             ..State::default()
         };
@@ -10822,7 +10822,7 @@ mod tests {
             "one\n\n***\n\ntwo\n",                    // Rule
             "```rust\nfn main() {}\n```\n",           // Code
             "```mermaid\ngraph TD\n  A --> B\n```\n", // Diagram
-            "---\ntitle: CRIME\n---\n\nProse.\n",     // Metadata
+            "---\ntitle: Varde\n---\n\nProse.\n",     // Metadata
         ];
         for content in contents {
             let state = previewing_readme(content);
@@ -10878,7 +10878,7 @@ mod tests {
                 1,
                 RowKind::Diagram,
             ),
-            ("---\ntitle: CRIME\n---\n\nProse.\n", 1, RowKind::Metadata),
+            ("---\ntitle: Varde\n---\n\nProse.\n", 1, RowKind::Metadata),
         ];
         for (content, line, expected_kind) in cases {
             let mut state = previewing_readme(content);
@@ -10929,7 +10929,7 @@ mod tests {
         );
     }
 
-    /// Ticket 09: `crime::matches` searches the rendered row rather than the
+    /// Ticket 09: `varde::matches` searches the rendered row rather than the
     /// source line while previewing, so a heading's `##` — consumed by the
     /// render — is never found, and the word it left behind is, in row
     /// coordinates rather than source ones.

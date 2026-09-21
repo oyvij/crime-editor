@@ -441,49 +441,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crime"
-version = "0.161.2"
-dependencies = [
- "anyhow",
- "arboard",
- "chrono",
- "clap",
- "crossterm",
- "cucumber",
- "git2",
- "hound",
- "ignore",
- "libc",
- "linkify",
- "lsp-server",
- "lsp-types",
- "mermaid-text",
- "notify",
- "portable-pty",
- "pulldown-cmark",
- "ratatui",
- "rust-code-analysis",
- "semver",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "shlex",
- "syntect",
- "tempfile",
- "terminput",
- "terminput-crossterm",
- "textwrap",
- "tokio",
- "toml",
- "toml_edit",
- "two-face",
- "unicode-segmentation",
- "unicode-width",
- "vt100",
- "which",
-]
-
-[[package]]
 name = "critical-section"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3561,6 +3518,49 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "varde"
+version = "0.162.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "chrono",
+ "clap",
+ "crossterm",
+ "cucumber",
+ "git2",
+ "hound",
+ "ignore",
+ "libc",
+ "linkify",
+ "lsp-server",
+ "lsp-types",
+ "mermaid-text",
+ "notify",
+ "portable-pty",
+ "pulldown-cmark",
+ "ratatui",
+ "rust-code-analysis",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "shlex",
+ "syntect",
+ "tempfile",
+ "terminput",
+ "terminput-crossterm",
+ "textwrap",
+ "tokio",
+ "toml",
+ "toml_edit",
+ "two-face",
+ "unicode-segmentation",
+ "unicode-width",
+ "vt100",
+ "which",
 ]
 
 [[package]]

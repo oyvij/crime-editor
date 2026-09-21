@@ -12,7 +12,7 @@ Feature: A picked word is echoed where it is used again
   is characters read off a screen with no buffer to look through.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And "src/main.rs" is open in the editor holding:
       """
       fn update(state)

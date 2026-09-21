@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Install or update CRIME, its global config, and the package managers its rows use.
+# Install or update Varde, its global config, and the package managers its rows use.
 #
-#   curl -fsSL https://raw.githubusercontent.com/oyvij/crime-editor/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/oyvij/varde-editor/main/install.sh | bash
 #
 # Interactive: every prompt reads /dev/tty, so it works piped from curl. A fresh
 # machine gets the binary from the latest Release by default, verified against
 # its SHA256SUMS; run from inside a checkout, or answered "source", it clones and
-# builds instead. Re-run, it updates whichever kind it finds behind `crime`.
+# builds instead. Re-run, it updates whichever kind it finds behind `varde`.
 #
 # Language servers, formatters and the voice are not installed here: each is
-# taken from Tools inside CRIME (ADR 0018). What this script offers is the package
+# taken from Tools inside Varde (ADR 0018). What this script offers is the package
 # managers their install commands start with, asked of the installed binary with
-# `crime --deps`, so a row that needs a new manager is asked about with no change
+# `varde --deps`, so a row that needs a new manager is asked about with no change
 # to this file. Only what the edge runs *without* configuration is spelled out
 # below: the build toolchain, git, the default AI CLI, the speech player and the
 # URL opener.
@@ -22,8 +22,8 @@
 set -euo pipefail
 
 # Clone URL and Release source both: a fork overrides one variable.
-REPO="${CRIME_REPO:-https://github.com/oyvij/crime-editor.git}"
-BIN="${CRIME_BIN:-$HOME/.local/bin/crime}"
+REPO="${VARDE_REPO:-https://github.com/oyvij/varde-editor.git}"
+BIN="${VARDE_BIN:-$HOME/.local/bin/varde}"
 
 case "$(uname -s)" in
   Darwin) OS=macos ;;
@@ -31,7 +31,7 @@ case "$(uname -s)" in
   *) echo "install.sh runs on macOS and Linux only" >&2; exit 1 ;;
 esac
 
-# Spelled as the release workflow's asset names, `crime-<os>-<arch>`.
+# Spelled as the release workflow's asset names, `varde-<os>-<arch>`.
 case "$(uname -m)" in
   x86_64 | amd64) ARCH=x86_64 ;;
   arm64 | aarch64) ARCH=aarch64 ;;
@@ -119,7 +119,7 @@ ensure_installer() { # ensure_installer <tool> "<why>" -> 0 if it is present aft
 # once, up front: a failure inside `< <(...)` would not stop the script and would
 # read as nothing needed.
 ask_deps() {
-  DEPS=$("$EXE" --deps) || { echo "$EXE --deps failed; cannot tell what CRIME needs." >&2; exit 1; }
+  DEPS=$("$EXE" --deps) || { echo "$EXE --deps failed; cannot tell what Varde needs." >&2; exit 1; }
 }
 
 # "a", "a and b", "a, b, and c"
@@ -162,7 +162,7 @@ installers() {
 
 # Debian's npm, which is the one `sudo apt install npm` gives, installs globally
 # into /usr/local, so every `npm install -g` row fails with EACCES. npm's own
-# answer is a prefix the user owns, and ~/.local/bin is already on PATH for crime.
+# answer is a prefix the user owns, and ~/.local/bin is already on PATH for varde.
 npm_prefix() {
   have npm || return 0
   local prefix dir
@@ -176,16 +176,16 @@ npm_prefix() {
 
 # ---- the global config ----------------------------------------------------------
 
-# The template, as `crime --default-config` prints it — the same text CRIME
+# The template, as `varde --default-config` prints it — the same text Varde
 # seeds on its own start: every setting commented out, every program row live.
 # Never written over an existing file, and never left half-written.
 seed_config() {
-  local config="$HOME/.crime/config.toml"
+  local config="$HOME/.varde/config.toml"
   if [ -f "$config" ]; then
     echo "  $config: kept"
     return 0
   fi
-  mkdir -p "$HOME/.crime"
+  mkdir -p "$HOME/.varde"
   if "$EXE" --default-config > "$config.tmp"; then
     mv "$config.tmp" "$config"
     echo "  $config: created"
@@ -227,20 +227,69 @@ opener() {
   fi
 }
 
+# ---- CRIME, which is what Varde was called until 0.161.1 ---------------------
+
+# An old install is not updated into a new one: the release assets were renamed
+# and CRIME's last release, 0.161.1, has no Varde in it. What carries over is
+# the global config, and a checkout is moved rather than left to rot beside a
+# second one. Nothing is removed here — `retire_crime` does that, below the
+# install, so a failed install never takes the old one with it. This runs for
+# both install kinds: a source install never downloads an asset, so it cannot
+# live in the binary path.
+OLD="$HOME/.crime"
+
+migrate_crime() {
+  [ -d "$OLD" ] || return 0
+  say "CRIME is the old name for Varde; carrying its config over"
+  if [ -f "$OLD/config.toml" ] && [ ! -f "$HOME/.varde/config.toml" ]; then
+    mkdir -p "$HOME/.varde"
+    # Every mention, not just the ones spelled with a leading ~: a voice
+    # configured as ~/.crime/voices/… points at nothing once it moves and fails
+    # with no message, and the comments name .crime/config.toml as where a
+    # project's own keys go, which is instructions to a directory Varde does not
+    # read.
+    sed 's|\.crime|.varde|g' "$OLD/config.toml" > "$HOME/.varde/config.toml"
+    echo "  copied $OLD/config.toml -> $HOME/.varde/config.toml"
+  fi
+  if [ -d "$OLD/src" ] && [ ! -d "$HOME/.varde/src" ]; then
+    mkdir -p "$HOME/.varde"
+    mv "$OLD/src" "$HOME/.varde/src"
+    echo "  moved $OLD/src -> $HOME/.varde/src"
+    run "git -C '$HOME/.varde/src' remote set-url origin '$REPO'"
+  fi
+}
+
+retire_crime() {
+  local old
+  old=$(command -v crime 2>/dev/null || true)
+  if [ -n "$old" ] && [ "$old" != "$BIN" ] && ask "Remove the old CRIME at $old ?"; then
+    rm -f "$old"
+    echo "  removed $old"
+  fi
+  [ -d "$OLD" ] || return 0
+  if [ -d "$OLD/src" ]; then
+    # A checkout can hold commits that are nowhere else, and this script has no undo.
+    echo "  $OLD kept: it still holds a checkout at $OLD/src"
+  elif ask "Remove $OLD ? Its config is now at $HOME/.varde/config.toml"; then
+    rm -rf "$OLD"
+    echo "  removed $OLD"
+  fi
+}
+
 # ---- which install, and where ---------------------------------------------------
 
-locate() { # sets MODE (binary or source), and CHECKOUT for source; UPDATE=1 when crime is already installed
+locate() { # sets MODE (binary or source), and CHECKOUT for source; UPDATE=1 when varde is already installed
   UPDATE=0
-  if have crime; then
+  if have varde; then
     UPDATE=1
     local path link
-    path=$(command -v crime)
+    path=$(command -v varde)
     link=$(readlink "$path" || true)
-    if [[ "$link" == */target/release/crime ]] && grep -qs '^name = "crime"' "${link%/target/release/crime}/Cargo.toml"; then
-      CHECKOUT="${link%/target/release/crime}"; MODE=source; return
+    if [[ "$link" == */target/release/varde ]] && grep -qsE '^name = "(crime|varde)"' "${link%/target/release/varde}/Cargo.toml"; then
+      CHECKOUT="${link%/target/release/varde}"; MODE=source; return
     fi
     if [ -L "$path" ]; then
-      echo "$path is a symlink to $link, which is neither a CRIME checkout nor a binary this script installed; remove it and rerun." >&2
+      echo "$path is a symlink to $link, which is neither a Varde checkout nor a binary this script installed; remove it and rerun." >&2
       exit 1
     fi
     # Replaced where it is found, so an install outside ~/.local/bin is not duplicated there.
@@ -248,9 +297,9 @@ locate() { # sets MODE (binary or source), and CHECKOUT for source; UPDATE=1 whe
   fi
   # Run from inside a checkout — `./install.sh` after a clone by hand — that
   # checkout is built, so a private fork never needs a second clone.
-  local here default="$HOME/.crime/src" answer
+  local here default="$HOME/.varde/src" answer
   here=$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd)
-  if grep -qs '^name = "crime"' "$here/Cargo.toml"; then
+  if grep -qsE '^name = "(crime|varde)"' "$here/Cargo.toml"; then
     default=$here
   else
     read -r -p "Install the prebuilt binary, or build from source? [binary/source] " answer </dev/tty || answer=""
@@ -258,7 +307,7 @@ locate() { # sets MODE (binary or source), and CHECKOUT for source; UPDATE=1 whe
   fi
   MODE=source
   local where
-  read -r -p "Where should CRIME's checkout live? [$default] " where </dev/tty || where=""
+  read -r -p "Where should Varde's checkout live? [$default] " where </dev/tty || where=""
   CHECKOUT="${where:-$default}"
   CHECKOUT="${CHECKOUT/#\~/$HOME}"
 }
@@ -271,7 +320,7 @@ sha256() { # the hash alone; sha256sum on Linux, shasum on macOS
 
 download() {
   local web="${REPO/#git@github.com:/https://github.com/}"
-  local asset="crime-$OS-$ARCH" base="${web%.git}/releases/latest/download"
+  local asset="varde-$OS-$ARCH" base="${web%.git}/releases/latest/download"
   TMP=$(mktemp -d)
   trap 'rm -rf "$TMP"' EXIT
   say "Downloading $asset from the latest Release"
@@ -286,7 +335,7 @@ download() {
     || { echo "$asset does not match its SHA256SUMS line; the download is corrupt or tampered with. Nothing was installed." >&2; exit 1; }
   echo "  checksum verified"
   mkdir -p "$(dirname "$BIN")"
-  # A temporary file beside the target and a rename, so a crime that is running
+  # A temporary file beside the target and a rename, so a varde that is running
   # keeps its file and the next start gets the new one whole.
   chmod +x "$TMP/$asset"
   cp "$TMP/$asset" "$BIN.new" && mv -f "$BIN.new" "$BIN" \
@@ -313,17 +362,17 @@ fetch_and_build() {
   say "Building (the release build is the install)"
   run "cargo build --release --manifest-path '$CHECKOUT/Cargo.toml'"
   mkdir -p "$(dirname "$BIN")"
-  ln -sfn "$CHECKOUT/target/release/crime" "$BIN"
-  echo "  $BIN -> $CHECKOUT/target/release/crime"
-  EXE="$CHECKOUT/target/release/crime"
+  ln -sfn "$CHECKOUT/target/release/varde" "$BIN"
+  echo "  $BIN -> $CHECKOUT/target/release/varde"
+  EXE="$CHECKOUT/target/release/varde"
 }
 
 # ---- --list: what would be checked, and its state, without touching anything --
 
 list() {
-  EXE=$(command -v crime 2>/dev/null || true)
+  EXE=$(command -v varde 2>/dev/null || true)
   [ -n "$EXE" ] || { [ -x "$BIN" ] && EXE=$BIN; }
-  [ -n "$EXE" ] || { echo "crime is not installed; --list asks the installed binary what it needs" >&2; exit 1; }
+  [ -n "$EXE" ] || { echo "varde is not installed; --list asks the installed binary what it needs" >&2; exit 1; }
   ask_deps
   printf '%-10s %-12s %-28s %s\n' kind name command state
   while IFS=$'\t' read -r kind name cmd inst; do
@@ -335,16 +384,17 @@ list() {
 main() {
   [ "${1:-}" = --list ] && { list; exit 0; }
   [ -r /dev/tty ] || { echo "install.sh is interactive and needs a terminal" >&2; exit 1; }
-  say "CRIME installer ($OS, $ARCH)"
+  say "Varde installer ($OS, $ARCH)"
+  migrate_crime
   locate
   case "$UPDATE:$MODE" in
-    1:source) echo "crime is installed from $CHECKOUT; updating it." ;;
-    1:binary) echo "crime is installed as a binary at $BIN; replacing it with the latest Release." ;;
+    1:source) echo "varde is installed from $CHECKOUT; updating it." ;;
+    1:binary) echo "varde is installed as a binary at $BIN; replacing it with the latest Release." ;;
     0:binary) echo "Fresh install of the prebuilt binary." ;;
     0:source) echo "Fresh install from source." ;;
   esac
   if [ "$MODE" = binary ]; then
-    say "CRIME"
+    say "Varde"
     require curl "curl" "sudo apt install -y curl"
     download
   else
@@ -357,14 +407,15 @@ main() {
   seed_config
   say "Package managers"
   installers
-  say "Programs CRIME runs"
+  say "Programs Varde runs"
   ai
   player
   opener
+  retire_crime
   say "Done"
   case ":$PATH:" in
-    *":$(dirname "$BIN"):"*) echo "Run: crime ." ;;
-    *) echo "$(dirname "$BIN") is not on your PATH. Add it to your shell profile, then: crime ." ;;
+    *":$(dirname "$BIN"):"*) echo "Run: varde ." ;;
+    *) echo "$(dirname "$BIN") is not on your PATH. Add it to your shell profile, then: varde ." ;;
   esac
 }
 

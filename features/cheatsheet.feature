@@ -11,33 +11,33 @@ Feature: Hiding the key reminder
   once it is down.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the current view is Edit
 
   Scenario: The key reminder is up to begin with
     Then the key reminder is shown
 
   Scenario: The help command takes the reminder down
-    When I ask CRIME for help from the command line
+    When I ask Varde for help from the command line
     Then the key reminder is not shown
 
   Scenario: The help command puts it back
     Given the key reminder is hidden
-    When I ask CRIME for help from the command line
+    When I ask Varde for help from the command line
     Then the key reminder is shown
 
   Scenario: Hiding it is remembered
-    When I ask CRIME for help from the command line
+    When I ask Varde for help from the command line
     Then the remembered key reminder is "hidden"
 
   Scenario: A reminder hidden last session is still hidden
-    Given the project ".crime/state.json" records the key reminder as hidden
-    When CRIME starts in the project
+    Given the project ".varde/state.json" records the key reminder as hidden
+    When Varde starts in the project
     Then the key reminder is not shown
 
   Scenario: State recorded before the reminder could be hidden leaves it up
-    Given the project ".crime/state.json" records the last view as "Edit"
-    When CRIME starts in the project
+    Given the project ".varde/state.json" records the last view as "Edit"
+    When Varde starts in the project
     Then the key reminder is shown
 
   Scenario: The palette puts a hidden reminder back

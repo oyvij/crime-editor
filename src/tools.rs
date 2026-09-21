@@ -1,4 +1,4 @@
-//! Tools — the palette's list of everything CRIME runs: language servers,
+//! Tools — the palette's list of everything Varde runs: language servers,
 //! formatters, requirements and speech, as the config files name them, beside
 //! every template row they do not name.
 
@@ -39,7 +39,7 @@ impl Kind {
     }
 }
 
-/// How a row stands against the template CRIME carries. A row that differs
+/// How a row stands against the template Varde carries. A row that differs
 /// is not refreshed: a corrected template reaches a file that already has the
 /// row only by the reader reading the difference and editing their own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,7 +79,7 @@ pub enum Availability {
     /// nothing has been watched to fail — which is as much as can be said about
     /// a language no file has needed yet.
     Installed,
-    /// The command is on this machine and CRIME watched its server go: a
+    /// The command is on this machine and Varde watched its server go: a
     /// written-off conversation, from [`lsp::gone`], which is the edge's own
     /// observation rather than a probe of ours (R31.10 — nothing is spawned to
     /// find out what a row says). It offers whatever installs it, because a
@@ -106,7 +106,7 @@ pub enum Availability {
     Unpackaged,
     /// On this machine, running, and configuration says it answers only part of
     /// what a reader would expect of it. Declared rather than observed, because
-    /// nothing CRIME can watch tells a server that answers less from a file
+    /// nothing Varde can watch tells a server that answers less from a file
     /// with less wrong in it: `@vue/language-server` marks template mistakes
     /// and reports no type error at all, and its row read `installed` while
     /// half of what a reader opened the file for was silently absent. That is
@@ -114,7 +114,7 @@ pub enum Availability {
     /// the words are configuration's for the reason a command is — a limitation
     /// is a fact about a server, and an arm naming one is R31.1's forbidden arm.
     Partial { without: String },
-    /// A template row no config file names: CRIME knows the program and does
+    /// A template row no config file names: Varde knows the program and does
     /// not run it, because a row that is not in a file does not run
     /// (`docs/adr/0018-the-global-config-is-the-list-of-programs.md`).
     Available,
@@ -372,7 +372,7 @@ fn group<T: PartialEq>(
     rows
 }
 
-/// Where a taken row's install reports its exit status, inside CRIME's own
+/// Where a taken row's install reports its exit status, inside Varde's own
 /// directory, which the watcher always watches.
 pub const SENTINEL: &str = "install-done";
 
@@ -465,7 +465,7 @@ pub fn configure(global: &str) -> Result<Option<(String, Config)>, ConfigError> 
 /// every comment and every hand edit is still where it was. The rows are cut
 /// out of the template through `toml_edit`, which keeps the comment above each
 /// one. A file that does not parse is refused with the fault the start would
-/// report, and so is a file the append would make one CRIME refuses — two rows
+/// report, and so is a file the append would make one Varde refuses — two rows
 /// claiming one extension — since the next start would read it.
 pub fn take(global: &str, kind: Kind, name: &str) -> Result<Option<(String, Config)>, ConfigError> {
     let has = startup::merged_config(Some(global), None)?;
@@ -676,7 +676,7 @@ mod tests {
         );
     }
 
-    /// A row the append would make a file CRIME refuses — two rows claiming
+    /// A row the append would make a file Varde refuses — two rows claiming
     /// one extension — is refused before anything is written.
     #[test]
     fn an_append_that_would_break_the_file_is_refused() {
@@ -694,17 +694,17 @@ mod tests {
     /// and nothing else in the file moves.
     #[test]
     fn configuring_fills_a_blank_in_place_and_keeps_the_rest() {
-        let global = "# mine\n[speech]\ncommand = \"piper\"  # pinned\nvoice = \"\"   # blank\nconfigures.voice = \"~/.crime/voices/v.onnx\"\n\n[lsp.rust]\ncommand = \"ra\"\nextensions = [\"rs\"]\n";
+        let global = "# mine\n[speech]\ncommand = \"piper\"  # pinned\nvoice = \"\"   # blank\nconfigures.voice = \"~/.varde/voices/v.onnx\"\n\n[lsp.rust]\ncommand = \"ra\"\nextensions = [\"rs\"]\n";
         let (text, config) = configure(global)
             .expect("parses")
             .expect("the voice is blank");
         assert_eq!(
             text,
-            global.replace("voice = \"\"", "voice = \"~/.crime/voices/v.onnx\"")
+            global.replace("voice = \"\"", "voice = \"~/.varde/voices/v.onnx\"")
         );
         assert_eq!(
             config.get("speech.voice").as_deref(),
-            Some("~/.crime/voices/v.onnx")
+            Some("~/.varde/voices/v.onnx")
         );
     }
 

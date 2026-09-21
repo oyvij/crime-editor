@@ -1,8 +1,8 @@
 # Rust build output
 /target
 
-# Per-user CRIME state when dogfooding CRIME on this repo.
-/.crime/
+# Per-user Varde state when dogfooding Varde on this repo.
+/.varde/
 
 # Agent worktrees: a full checkout plus its build output, 2.3 GB of it.
 .claude/worktrees/

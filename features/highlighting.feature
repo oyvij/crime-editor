@@ -8,7 +8,7 @@ Feature: Syntax highlighting
   renders as plain text rather than failing.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
 
   Scenario: Rust keywords and strings are told apart
     Given "src/main.rs" contains:
@@ -288,11 +288,11 @@ Feature: Syntax highlighting
       Then the remembered editor field is "off"
 
     Scenario: A field turned off last session is still off
-      Given the project ".crime/state.json" records the editor field as off
-      When CRIME starts in the project
+      Given the project ".varde/state.json" records the editor field as off
+      When Varde starts in the project
       Then the editor field is not shown
 
     Scenario: State recorded before the field could be turned off leaves it on
-      Given the project ".crime/state.json" records the last view as "Edit"
-      When CRIME starts in the project
+      Given the project ".varde/state.json" records the last view as "Edit"
+      When Varde starts in the project
       Then the editor field is shown

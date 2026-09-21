@@ -10,7 +10,7 @@ Feature: Editing a file
   writes, because you were told. :e discards the draft and takes the disk version.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And "src/tree.js" is open in the editor holding:
       """
       one
@@ -386,7 +386,7 @@ Feature: Editing a file
     Enter carries the current line's indentation down with it. The whitespace is
     copied rather than measured and re-emitted, so a file indented with tabs stays
     indented with tabs and one indented with three spaces stays indented with
-    three — CRIME holds no opinion about which is right.
+    three — Varde holds no opinion about which is right.
 
     Between the halves of a bracket pair, Enter opens a block: the closing half
     moves to a line of its own at the original indentation and the cursor lands on
@@ -551,7 +551,7 @@ Feature: Editing a file
         [editor]
         tab_width = 2
         """
-      And CRIME started in the project
+      And Varde started in the project
       And "src/empty.js" is open in the editor holding nothing
       And the editor mode is insert
       When I press "Tab" in the editor
@@ -569,7 +569,7 @@ Feature: Editing a file
         [editor]
         tab_width = 2
         """
-      And CRIME started in the project
+      And Varde started in the project
       And "src/empty.js" is open in the editor holding nothing
       And the editor mode is insert
       And I type "{" in the editor
@@ -586,7 +586,7 @@ Feature: Editing a file
         [editor]
         tab_width = 2
         """
-      And CRIME started in the project
+      And Varde started in the project
       And "src/blocks.js" is open in the editor holding:
         """
         function outer() {

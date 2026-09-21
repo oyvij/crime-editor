@@ -1,4 +1,4 @@
-# CRIME — Example Map
+# Varde — Example Map
 
 **C**ommand · **R**eview · **I**ntegrated · **M**odal · **E**ditor
 
@@ -31,8 +31,8 @@ A terminal IDE with four regions in **Edit view**:
 
 The TUI auto-updates when files change on disk.
 
-Configuration and state live in `.crime/` — global at `~/.crime/` (created at install), per-project at
-`<project>/.crime/` (created when the TUI starts in that folder).
+Configuration and state live in `.varde/` — global at `~/.varde/` (created at install), per-project at
+`<project>/.varde/` (created when the TUI starts in that folder).
 
 ---
 
@@ -100,7 +100,7 @@ table is the audit; keep it current, and add a row before writing a new feature'
 
 | Feature | How it's invoked |
 |---|---|
-| F1 startup | `crime <folder>`; `crime` with no argument for a Bare workspace |
+| F1 startup | `varde <folder>`; `varde` with no argument for a Bare workspace |
 | F2 file tree | drawn on start; `Enter`/click expands; `c` or palette `c` collapses all |
 | F3 tree actions | row icons, `n` `N` `d` on the focused row, `-` for back-to-root |
 | F5 watching | automatic (`notify`) |
@@ -124,30 +124,30 @@ table is the audit; keep it current, and add a row before writing a new feature'
 | F28 Risk list | palette `k`; `Alt+j` from the tree once shown; row icons and `Enter` inside it |
 | F29 Refactor loop | the Risk pane's own action, which becomes the stop action while it runs |
 | F30 Risk in review | automatic on entering Review view; the pane's action starts the review-scoped loop |
-| F39 binary releases | automatic at startup on a binary install; `:update` or palette `u` installs the Release and relaunches; `crime --deps`; `install.sh` |
+| F39 binary releases | automatic at startup on a binary install; `:update` or palette `u` installs the Release and relaunches; `varde --deps`; `install.sh` |
 
 `Event::AddComment` has no entry point by design — it is a `Given` shortcut so submission scenarios
 can set up a review in one step. The user's path is `V`+`c`, covered by F17.
 
 ## F1 — Workspace startup — **DEFINED**
 
-Scenarios live in `features/workspace_startup.feature`. `.crime/` creation and state reuse are
-specified in F9 (`features/configuration.feature`), not repeated here. What `crime` with **no**
-argument does differently — the folder is the workspace, but CRIME's own files go to a Sidecar
+Scenarios live in `features/workspace_startup.feature`. `.varde/` creation and state reuse are
+specified in F9 (`features/configuration.feature`), not repeated here. What `varde` with **no**
+argument does differently — the folder is the workspace, but Varde's own files go to a Sidecar
 outside it — is `features/bare_workspace.feature`, specified in
 `.scratch/bare-workspace-and-branch-stories/spec.md` and argued in
 `docs/adr/0016-a-bare-workspace-leaves-nothing-behind.md`.
 
-**R1.1** Opening CRIME on a folder makes that folder the workspace root; the title is its basename.
+**R1.1** Opening Varde on a folder makes that folder the workspace root; the title is its basename.
 **R1.2** An **empty folder is a valid workspace** (Q3) — that is how a project begins.
-**R1.3** A path CRIME cannot use stops it before the TUI appears, with a **distinct reason** per case
+**R1.3** A path Varde cannot use stops it before the TUI appears, with a **distinct reason** per case
 (Q2): `no-such-folder`, `not-a-folder`, `folder-not-readable`.
 
 - ✅ The folder opened becomes the workspace
 - ✅ An empty folder is a valid workspace
-- ✅ A path that does not exist stops CRIME
-- ✅ A path that is a file stops CRIME
-- ✅ A folder that cannot be read stops CRIME
+- ✅ A path that does not exist stops Varde
+- ✅ A path that is a file stops Varde
+- ✅ A folder that cannot be read stops Varde
 
 ## F2 — File tree display — **DEFINED**
 
@@ -174,7 +174,7 @@ only the top level (Q7b).
 - ✅ Reopening a project restores the folders that were expanded
 
 Consequence for F5, now specified there: a file created inside a **collapsed** folder is not listed
-until that folder is expanded. Lazy watching means CRIME genuinely does not know about it yet. This
+until that folder is expanded. Lazy watching means Varde genuinely does not know about it yet. This
 is the one place where "the TUI autoupdates" is bounded by what you have open.
 
 **R2.7** **Collapsing** empties the set of open folders in one gesture, because a folder opened once
@@ -285,7 +285,7 @@ Removed, not deferred. It said: a file created through the new-file flow opens i
 scenarios passed and it never worked once in the running app.
 
 The trigger was deliberately the **tracked command**, not the file watcher (Q13) — so that a branch
-checkout or the AI writing three files could not hijack the editor. But CRIME writes into a real pty
+checkout or the AI writing three files could not hijack the editor. But Varde writes into a real pty
 and gets back a stream of screen bytes: there is no "the command finished, exit status 0" in that
 stream. `Event::CommandRan` had no producer and could not have one without shell integration
 (OSC 133, which bash does not emit by default), a prompt-shape heuristic that would sometimes open
@@ -358,11 +358,11 @@ key events (Kitty keyboard protocol: Ghostty, kitty, foot, WezTerm). Terminals w
 `Ctrl+Space` (Q16). Where the bare Ctrl press is **not** reported, a double-tapped `Esc` opens it
 from a **hosted pane** instead: there Option is not Alt and `Ctrl+Space` belongs to the child, so
 `Esc` is the only gesture left. It withholds no byte — both escapes still reach the child, and only
-the pair CRIME counted beside them opens the palette. Exactly one of the two taps is available on any
+the pair Varde counted beside them opens the palette. Exactly one of the two taps is available on any
 terminal: arming `Esc` where the Ctrl tap already works would take the key *after* a double-tap from
 a CLI that binds `Esc Esc` itself. Its scenarios live in `features/keyboard.feature`, beside the
 focus keys they are the alternative to.
-**R6.2** The double-tap window is **300 ms**, configurable in `~/.crime` (Q16b).
+**R6.2** The double-tap window is **300 ms**, configurable in `~/.varde` (Q16b).
 **R6.3** The palette lists **panes, views and commands, grouped** — Panes: `(o)` Editor, `(d)`
 Files, `(t)` Terminal, `(k)` Risk, `(a)` AI, `(l)` Tall · Views: `(e)` Edit, `(r)` Review, `(s)`
 Story · Project: `(f)` Find, `(v)` Tools · Help: `(h)` Keys, `(u)` Update · `(q)`
@@ -372,7 +372,7 @@ Quit (Q17). *Amended with F22: a view takes its own initial, so `s` moved from s
 A flat list of everything reads as a heap, and the grouping is what makes `Editor` and `Edit`
 legible as the different questions they are — one goes to a pane and leaves the view alone, the
 other changes the view. What left is what asked something of the buffer or the review in front of
-you rather than of CRIME: `C-c`, `:w` and `:submit` belong to the view that answers them, and the
+you rather than of Varde: `C-c`, `:w` and `:submit` belong to the view that answers them, and the
 key box advertises each one there. What is here is what means the same thing everywhere, because one
 gesture is discoverable and a colon-prefixed command line is not. This came from running it: `:` was
 undiscoverable and, on a terminal using the Kitty protocol, did not arrive at all.
@@ -400,7 +400,7 @@ drops the tag's hint, then the tag, since a tag may take at most half the row.
 truncates from the bottom and has no footer to say so, so a row placed below the fold does not exist
 for whoever has not resized their window: Edit view has twenty-five rows and a 26-row terminal — the
 default height of a macOS Terminal, and the size `AGENTS.md`'s replay recipe uses — draws sixteen.
-The rows that survive are **the ones nothing else in CRIME teaches**: the palette gesture, and any
+The rows that survive are **the ones nothing else in Varde teaches**: the palette gesture, and any
 `:` command that is in no palette group, has no completion on the `:` line and is named in no notice.
 `:format` (R32) was placed twenty-third and was therefore a feature nobody could find. What is
 excused off the bottom must be said again where the reader is already looking — the palette's own
@@ -414,7 +414,7 @@ and the mouse hit-tests the same rows, so those entries are unclickable too. Two
 `Panes` group (R33.1, R34.10) were enough to take `(q)` Quit off a 26-row screen, the height the
 replay recipe in `AGENTS.md` uses. The list is fitted **in the core**, where drawing and hit-testing
 already read one answer, and what a short screen costs is what something else already teaches: the
-gaps between the groups first, then the `Esc` line, because Escape closes every box CRIME has — and
+gaps between the groups first, then the `Esc` line, because Escape closes every box Varde has — and
 only then an entry, whose loss the last row says out loud (R31.30's rule, for R31.30's reason). No
 entry stops answering the keyboard for being undrawn.
 Scenarios: `features/cheatsheet.feature`.
@@ -436,7 +436,7 @@ Scenarios: `features/cheatsheet.feature`.
 
 Open:
 
-- ✅ Q36 — **Resolved: `Ctrl+Space` works in every pane CRIME interprets**, not only where the
+- ✅ Q36 — **Resolved: `Ctrl+Space` works in every pane Varde interprets**, not only where the
   double-tap is unavailable. One binding that is the same on every terminal, and a way through if
   the double-tap misfires. This was found by running the TUI, where Ctrl+Space did nothing on
   Ghostty. Superseded in one place by R6.1: in a hosted pane it reaches the child, because the
@@ -493,10 +493,10 @@ absent when the comment was made in Review view.
 **R8.2** **ISSUE blocks**; NOTE, SUGGESTION and COMMENT are context (Q26). Any ISSUE makes the
 verdict `changes-requested`, otherwise `commented`.
 **R8.3** An **empty review cannot be submitted** — refused with a message (Q27).
-**R8.4** Submitting writes `.crime/reviews/NNNN.json`, sequentially numbered.
+**R8.4** Submitting writes `.varde/reviews/NNNN.json`, sequentially numbered.
 **R8.5** Submitting **sends** the review into the AI pane — inline summary plus the artifact path,
 and the prompt is submitted, not left for the user to press enter (Q25).
-**R8.6** If no AI session is running, CRIME launches `[ai] command` first, then sends.
+**R8.6** If no AI session is running, Varde launches `[ai] command` first, then sends.
 **R8.7** After submitting, the comments **clear**, ready for the next pass.
 **R8.8** Retention: the last **50** reviews, configurable; older ones pruned on submit.
 **R8.9** Submitting **confirms first**, because sending clears whatever the AI's CLI is showing —
@@ -519,7 +519,7 @@ which can be a half-written message. Declining leaves the prompt untouched and t
 
 ### Why a file *and* an injection
 
-The artifact keeps the hand-off **CLI-agnostic** — CRIME must work with any AI CLI, not just Claude
+The artifact keeps the hand-off **CLI-agnostic** — Varde must work with any AI CLI, not just Claude
 Code, and there is no cross-vendor protocol for "here is a review". The injection is what makes it
 feel integrated: the AI acts on submit rather than discovering the file later. Checked against the
 installed Claude Code CLI: `--resume`/`--continue` spawn a *new process* attached to old history;
@@ -554,10 +554,10 @@ move focus (Q50).
 **R10.4** **Right-click does nothing** (Q51). No context menus; every action stays reachable from the
 toolbar and the keyboard.
 **R10.5** Clicks inside the terminal pane are **forwarded to the running program when it has enabled
-mouse reporting** (Q45), **in the encoding that program asked for**, and handled by CRIME otherwise.
+mouse reporting** (Q45), **in the encoding that program asked for**, and handled by Varde otherwise.
 This is what keeps vim, htop and lazygit usable inside the pane.
 **R10.6** Pane dividers are **draggable**, and sizes persist per project in `state.json` (Q48).
-**R10.7** CRIME implements **its own selection and clipboard copy** (Q46), because enabling mouse
+**R10.7** Varde implements **its own selection and clipboard copy** (Q46), because enabling mouse
 capture disables the terminal emulator's native drag-to-select.
 **R10.8** In Review view, **dragging the gutter** selects the line range for a comment, then a picker
 takes the type and body (Q52) — this is how R8.1's line-range anchoring is driven by mouse.
@@ -574,7 +574,7 @@ the grid at a time — a URL the terminal wrapped is not recognised.
 - ✅ Right-clicking does nothing
 - ✅ Clicks reach a program in the encoding it asked for
 - ✅ The wheel reaches a program in the encoding it asked for
-- ✅ Clicks at a shell prompt are handled by CRIME
+- ✅ Clicks at a shell prompt are handled by Varde
 - ✅ Clicking a link in the terminal with the jump modifier opens it in the browser
 - ✅ Clicking plain text with the jump modifier opens nothing
 - ✅ Dragging a pane divider resizes the panes
@@ -743,7 +743,7 @@ punctuation — breaking R14.1's existing scenarios. The same rule keeps a Markd
 **R14.7** The syntax set is **every language syntect ships in `two-face`'s extended set** — bat's,
 around 220 syntaxes — not Sublime's 75 defaults. TypeScript, TSX, JSX, Vue, Svelte, Kotlin, Swift,
 Zig, Dart, TOML, Terraform, Nix, Elixir, protobuf, Dockerfile, GraphQL and SCSS are reached by that
-one choice rather than by an arm per language, and CRIME's own `config.toml` and `Cargo.toml` are
+one choice rather than by an arm per language, and Varde's own `config.toml` and `Cargo.toml` are
 coloured. R14.2 is unchanged: an extension genuinely unknown to the set still renders plain.
 Behaviour covers one language per newly reached family, not one per language — enumerating 220
 through scenarios is the coverage-chasing the test strategy forbids.
@@ -792,7 +792,7 @@ one list that lives beside the router answering them. Inside the box and not in 
 the keys worth naming here are the ones that get somebody through a long list, and a right-aligned
 caption under a scrolling list is not where anyone looks for them. `Ctrl+N`/`Ctrl+P` was bound and
 unnamed for exactly as long as it took to ask for it back. The arrows are named too — the only list
-in CRIME that spends a label on them — because they and `Ctrl+N`/`Ctrl+P` move by different things,
+in Varde that spends a label on them — because they and `Ctrl+N`/`Ctrl+P` move by different things,
 and that difference is the thing to be readable.
 **R21.12** A **click selects the hit under the pointer**, which is the other half of R21.9's wheel: a
 list scrolled to a hit no key sequence reached comfortably is a hit that has to be markable where it
@@ -834,7 +834,7 @@ Scenarios live in `features/buffers.feature`. Asked for explicitly without a tab
 **R19.1** Opening a file **keeps what is already open**. Unsaved edits survive, which is why the
 single-buffer dirty guards on opening could go.
 **R19.2** What is open shows as a **mark in the file tree** and as a **strip of dots on the editor's
-bottom edge**. No tab bar. The mark is a rule, not a colour choice — `crime::mark` returns
+bottom edge**. No tab bar. The mark is a rule, not a colour choice — `varde::mark` returns
 `Current`, `CurrentDirty`, `Dirty`, `Open` or `None`, and scenarios assert on that. Rendering:
 **filled** when it holds something you care about (the one you are in, or unsaved work), **hollow**
 otherwise; **yellow** for unsaved, cyan for current, dim for the rest.
@@ -894,10 +894,10 @@ Scenarios live in `features/quitting.feature`. Answers Q55.
 which is why it **refuses while the buffer in front of you has unsaved edits** — and never because a
 *different* buffer does, which had made one unsaved file enough to lock every clean buffer open.
 `:q!` discards them. `:wq` writes then closes.
-**R15.2** Leaving CRIME is **not on the `:` line at all**: Ctrl+Q and the palette's `q` are the
+**R15.2** Leaving Varde is **not on the `:` line at all**: Ctrl+Q and the palette's `q` are the
 gestures for it — unambiguous, wanted from anywhere, and so no confirmation is needed beyond the
 dirty check. Keeping it off `:` is what stops a mistyped clear-up from taking the session with it,
-which is the whole reason `:qa` is the clear-up and not vim's quit-all. Ctrl+Q is CRIME's in the panes CRIME interprets only; in a hosted pane it reaches
+which is the whole reason `:qa` is the clear-up and not vim's quit-all. Ctrl+Q is Varde's in the panes Varde interprets only; in a hosted pane it reaches
 the child, like every key not on the reserved list. Same for R21.1's `Ctrl+F`. The palette is the
 gesture that works from everywhere.
 **R15.3** Per-project state is written on the way out, forced or not.
@@ -918,7 +918,7 @@ Answers Q53 and Q54.
 in the tree a drag moves the **row selection** — a filename is not text you copy character by
 character.
 **R16.2** Copying uses the system clipboard, falling back to **OSC 52** so it still reaches the
-machine the user is sitting at when CRIME runs over SSH.
+machine the user is sitting at when Varde runs over SSH.
 **R16.3** Copying with nothing selected does nothing.
 **R16.4** **What was copied pastes back as it was**, into the buffer it came from or another one:
 a paste that reaches the open buffer is **one edit, in whatever mode the buffer is in**, and its
@@ -962,35 +962,35 @@ all do the same work. Two of them did not, and the palette route silently skippe
 
 Scenarios live in `features/configuration.feature`.
 
-**R9.1** Global config lives in `~/.crime/config.toml`, created at install.
-**R9.2** Project config and state live in `<project>/.crime/`, created on first start there. **A Bare
+**R9.1** Global config lives in `~/.varde/config.toml`, created at install.
+**R9.2** Project config and state live in `<project>/.varde/`, created on first start there. **A Bare
 workspace has neither**: its state lives in the Sidecar, and it has **no project configuration layer
-at all** — built-in defaults and `~/.crime/config.toml` and nothing else — so a `.crime/config.toml`
+at all** — built-in defaults and `~/.varde/config.toml` and nothing else — so a `.varde/config.toml`
 that happens to sit in the folder is not read, and nothing is seeded anywhere. A key written into a
 directory deleted at exit is worse than a key never written, which is R9.7's argument read the other
 way (`features/bare_workspace.feature`).
 **R9.3** Config is **TOML**; per-user state is `state.json` (machine-written, so JSON) (Q33, Q1/Q30).
 **R9.4** The effective config is a **deep merge**, project winning key by key; unset keys fall through
 to global, then to built-in defaults (Q29).
-**R9.5** A config file that does not parse **stops CRIME from starting**, with an error naming the
+**R9.5** A config file that does not parse **stops Varde from starting**, with an error naming the
 file and the line (Q32). **The error says which of three faults it was**, because they send the reader
 to three different places: TOML that does not parse, a value of the wrong type, and an entry no layer
 ever completed. The words live in the error, not at the edge — one sentence for all three is how a
 deserialize fault about a missing key came to wear the parse fault's words and send whoever read it
 hunting a syntax error that was not there.
-**R9.6** CRIME **never writes git ignore rules** and never edits the project's `.gitignore` (Q1).
-**R9.7** Starting **seeds `<project>/.crime/config.toml`** when nothing is there, and **leaves any
+**R9.6** Varde **never writes git ignore rules** and never edits the project's `.gitignore` (Q1).
+**R9.7** Starting **seeds `<project>/.varde/config.toml`** when nothing is there, and **leaves any
 file that is there alone** — a reader's own settings survive every start (Q38). **Every key in the
 seeded file is commented out**, table headers apart: a seeded file holding live values would make
 "the project sets nothing" false on a project's first run, and would freeze one binary's numbers
 into a file that outlives it, so a later correction to the shipped defaults would arrive and change
 nothing. The headers are live because uncommenting `tab_width` under a commented `[editor]` sets a
 top-level key nothing reads, and an empty table merges nothing. **The core decides whether to seed**:
-the layer the edge read off `.crime/config.toml` is already an input to starting, and it is absent on
+the layer the edge read off `.varde/config.toml` is already an input to starting, and it is absent on
 exactly the folders with no file to lose, so the promise is a plain `Effect::WriteFile` under a
 condition a scenario can reach rather than an `if` in `main.rs` no scenario covers. **Absent means
 absent**: the edge hands an *empty* layer for a file it found and could not read — not UTF-8, or
-write-only — because reading every failure as "nothing is there" would seed over settings CRIME
+write-only — because reading every failure as "nothing is there" would seed over settings Varde
 could not parse, which is a delete rather than the one-session fallback it looks like. An empty
 layer merges nothing, so the effective config is the same either way and the file survives to be
 fixed in another editor. What the file names is every scalar the shipped defaults spell —
@@ -1012,20 +1012,20 @@ than numbers to tune, and are left out for theirs.
 - ✅ A project setting overrides only the key it names
 - ✅ Global settings apply when the project sets nothing
 - ✅ A setting neither config names falls back to its default
-- ✅ A malformed project config stops CRIME from starting
-- ✅ A malformed global config stops CRIME from starting
+- ✅ A malformed project config stops Varde from starting
+- ✅ A malformed global config stops Varde from starting
 
-Accepted trade-off on R9.5: a broken `~/.crime/config.toml` locks the user out of CRIME until they
+Accepted trade-off on R9.5: a broken `~/.varde/config.toml` locks the user out of Varde until they
 fix it in another editor. Chosen deliberately over defaults-with-a-warning. This is why the error
 must name file *and* line — that precision is the escape hatch.
 
 Open:
 
-- ❓ Q31 — Behaviour when `~/.crime/` is missing entirely (user never ran the installer). Create it on
+- ❓ Q31 — Behaviour when `~/.varde/` is missing entirely (user never ran the installer). Create it on
   demand, or treat it as a broken install?
-- ✅ Q38 — Does creating `<project>/.crime/` also seed a `config.toml`? **Yes, with every key
+- ✅ Q38 — Does creating `<project>/.varde/` also seed a `config.toml`? **Yes, with every key
   commented out** (R9.7). Discoverability won: `editor.tab_width` was layered, merged and read on
-  every start for its whole life while no `.crime/config.toml` existed on any disk to name it, so
+  every start for its whole life while no `.varde/config.toml` existed on any disk to name it, so
   the key was configurable and unfindable at the same time. Commenting the keys out is what keeps
   the other half of the question answered too — "the project sets nothing" stays honest, because a
   file of comments contributes nothing to the merge.
@@ -1038,8 +1038,8 @@ Open:
 
 Scenarios live in `features/story_authoring.feature`.
 
-**R22.1** A Story is authored by the **hosted AI writing an artifact**, not by CRIME parsing what the
-CLI printed. `:story` pastes a prompt; the existing file watcher picks up `.crime/stories/…json`
+**R22.1** A Story is authored by the **hosted AI writing an artifact**, not by Varde parsing what the
+CLI printed. `:story` pastes a prompt; the existing file watcher picks up `.varde/stories/…json`
 (Q55, `docs/adr/0006-stories-arrive-as-an-artifact.md`).
 **R22.2** A bare `:story` means **uncommitted-vs-HEAD when the tree is dirty**; otherwise
 `origin/HEAD` → the upstream branch → `init.defaultBranch` → a probe for `main`, then `master` (Q56).
@@ -1057,18 +1057,18 @@ wrong on a slow run and slow on a fast one — the same reasoning that made `Eve
 fixed delay. A CLI that dies is detected by `AiExited`, which every site that stops holding a pane
 already queues.
 **R22.8** A malformed artifact is **refused whole**, never salvaged in part (Q58).
-**R22.9** Artifacts are named `.crime/stories/<base12>-<head12>.json`, with `-worktree` as the head
+**R22.9** Artifacts are named `.varde/stories/<base12>-<head12>.json`, with `-worktree` as the head
 for a dirty range. Retention is **ten** — stories are 30–70KB against a review's 1KB.
 **R22.10** A Story **dies with its range** and is never updated to follow the code
 (`docs/adr/0005-a-story-dies-with-its-range.md`).
 **R22.11** *(added with the faster-authoring spec)* A Step names its Site's **file, side, kind and
 line range, and nothing else** — the copy of the code it used to carry was 23–35% of every measured
-artifact and pure transcription. CRIME reads the text itself, **once, when the Story arrives**: the
+artifact and pure transcription. Varde reads the text itself, **once, when the Story arrives**: the
 core parses, holds the artifact, and asks the edge for each Site's current text; the edge answers and
 only then is the set walkable. Filling on every load would compare each file against itself and make
 the stale check vacuous. Old-side Sites read from the Story's recorded base, new-side from the working
 tree — what staleness already compares against. The field stays **optional rather than gone**, and a
-set that transcribed its own text keeps it, so the sets already in `.crime/stories/` still load.
+set that transcribed its own text keeps it, so the sets already in `.varde/stories/` still load.
 
 - ✅ A bare story command on a dirty tree offers uncommitted against HEAD
 - ✅ A bare story command on a clean tree uses the default branch
@@ -1093,7 +1093,7 @@ set that transcribed its own text keeps it, so the sets already in `.crime/stori
 - ✅ An old-side step is filled from the base, a new-side one from the working tree
 - ✅ A step whose code moves after the story arrived still says what its site used to hold
 - ✅ Re-reading a story set does not refill it against the code as it reads now
-- ✅ A story set is not walkable until CRIME has read what its sites hold
+- ✅ A story set is not walkable until Varde has read what its sites hold
 
 **Q55 — Artifact, or parse the CLI's output? Resolved: artifact.** Rejected: reading the pane's text,
 which would need a branch per provider and is forbidden by ADR 0004; and a structured protocol, which
@@ -1123,7 +1123,7 @@ Scenarios live in `features/story_spine.feature`.
 view is untouched — the list is joined, never replaced.
 **R23.2** **Coverage is never a ratio** — a count of unclaimed hunks and a list of where they are
 (Q59).
-**R23.3** The unit is the **hunk as CRIME computed it**, with CRIME's own pinned diff options, so both
+**R23.3** The unit is the **hunk as Varde computed it**, with Varde's own pinned diff options, so both
 sides of the subtraction agree and hunk-index instability never arises.
 **R23.4** A Site claims a hunk by **overlap**, not containment; a `context`-kind Site claims nothing.
 Containment would make any hunk taller than a pane permanently unclaimable.
@@ -1166,7 +1166,7 @@ a set with overlaps, and reporting a gap as an error.
 
 **Scenarios that must arrive through a diff, never a field.** Coverage and staleness are exactly the
 shape the hollow-assertion sweep found: a `Given` that writes what the `Then` reads. So a scenario
-supplies **the two sides of a file as DocStrings** and CRIME hunks them itself, via a pure `src/`
+supplies **the two sides of a file as DocStrings** and Varde hunks them itself, via a pure `src/`
 function over `git2::Patch::from_buffers` — no repository, no filesystem, bytes in and hunks out.
 Rejected: a hunk table in the Given (the arithmetic would be over a fiction and hunk boundaries would
 never be tested) and a fixture repository (banned outright).
@@ -1191,7 +1191,7 @@ under a keypress.
 **R24.4** The band carries the **claim** and, when present, the **cited values**. Why, flow and nudge
 are one keypress away in the `d` overlay: a step's prose is ~16 wrapped lines against an editor pane
 of 37 columns by 19 rows, so a step does not fit and the design is what pays.
-**R24.5** A value with nowhere to point is **displayed as invented**. CRIME cites and jumps (`g`); it
+**R24.5** A value with nowhere to point is **displayed as invented**. Varde cites and jumps (`g`); it
 verifies nothing and needs no per-language parser.
 **R24.6** Staleness has **three distinct members** — `FileMissing`, `RangeOutOfBounds`, `TextChanged`
 — because they want different words and only the last can show what the Site used to hold.
@@ -1424,13 +1424,13 @@ per R26.11.
 ## F27 — Risk is computed for the workspace — **DEFINED**
 
 Scenarios live in `features/risk_figure.feature`. The vocabulary is `CONTEXT.md`'s "Paying down
-risk" section. Why CRIME may redraw without input while a job runs is argued in
+risk" section. Why Varde may redraw without input while a job runs is argued in
 `docs/adr/0009-a-spinner-is-bounded-by-its-job.md`.
 
 **R27.1** Opening a workspace **starts the analysis without being asked**. The figure being there
 when you want it is the whole point; a figure you have to request is a figure nobody requests. **A
 Bare workspace is the exception** (`features/bare_workspace.feature`): the figure would be measured
-into a Sidecar deleted at exit, so opening CRIME in a large repository to read one file analyses
+into a Sidecar deleted at exit, so opening Varde in a large repository to read one file analyses
 nothing and the pane reads `nothing-analysed` until R27.13's recompute is asked for. Saying
 `computing` there would name a job nobody asked for and that will never answer, so only a job **in
 flight** is `computing`.
@@ -1462,7 +1462,7 @@ stale answer labelled.
 **R27.9** **A save marks the figure stale and starts nothing.** Re-analysis happens when the commit
 moves, when it is asked for, and after an Iteration. Analysing per keystroke-batch is exactly what
 "never parse per frame" was written about.
-**R27.10** The figure is **cached against the commit it was computed at**, written to `.crime/risk.json`
+**R27.10** The figure is **cached against the commit it was computed at**, written to `.varde/risk.json`
 as **the library's own shape** — path, name, start line, **every recorded metric** (cyclomatic and
 cognitive complexity, the maintainability index and lines), plus the commit and which metric produced
 it. All four are recorded even though only the primary one is displayed, because R29.9's third
@@ -1470,9 +1470,9 @@ condition is over *any other recorded metric* and a Gate that only ever sees two
 blind spots. The analyser is pinned pre-1.0; its types may not reach the file format.
 **R27.11** **A recompute supersedes one in flight** rather than queueing: two analyses of two
 different workspace states cannot both still be true.
-**R27.12** **CRIME writes no git ignore rule** — F9's rule, unchanged. The figure file, the snapshot
+**R27.12** **Varde writes no git ignore rule** — F9's rule, unchanged. The figure file, the snapshot
 directory and the sentinel are per-user derived data and belong in *this repo's* `.gitignore`
-(alongside `.crime/state.json`), which is a commit in ticket 04 and not a behaviour.
+(alongside `.varde/state.json`), which is a commit in ticket 04 and not a behaviour.
 
 **R27.13** The recompute has **a gesture of its own**: an action on the Risk pane, beside the loop's.
 Without one, a Stale figure is a dead end until the commit moves — and the entry-points table below is
@@ -1560,11 +1560,11 @@ whole interface.
 
 ## F29 — The Refactor loop — **DEFINED**
 
-Scenarios live in `features/refactor_loop.feature`. The decision that CRIME measures rather than
-believing the session is argued in `docs/adr/0010-crime-owns-the-test-gate.md`;
+Scenarios live in `features/refactor_loop.feature`. The decision that Varde measures rather than
+believing the session is argued in `docs/adr/0010-varde-owns-the-test-gate.md`;
 `docs/adr/0004-hosted-panes-are-transparent.md` is why it has no alternative.
 
-**R29.1** CRIME hands the session a **Scope and a goal** and decides for itself whether the pass was
+**R29.1** Varde hands the session a **Scope and a goal** and decides for itself whether the pass was
 good. One generic prompt as a constant, interpolating the Scope, where the figures are written, the
 worst few Functions, the target, and an instruction to obey whatever convention file the repo holds.
 It also carries **what a good split is**: the figure is the symptom rather than the goal, every
@@ -1573,7 +1573,7 @@ place or named after where it was cut from is structural scattering and a failed
 well-named extractions beat many small ones, and a function that cannot be split that way is left
 alone and said so rather than shredded. The row action's one-shot ask (R28.14) carries the same
 instruction in one sentence, because it is the one with no Gate behind it.
-**R29.2** **The test command is never in the prompt**, because CRIME runs the tests. That removes the
+**R29.2** **The test command is never in the prompt**, because Varde runs the tests. That removes the
 most project-specific string in the system from a prompt that has to work on any workspace.
 **R29.3** **No provider is named**, in code or prompt. Delivery reuses the hand-off review submission
 and story confirmation already use, including holding the prompt until the session has spoken.
@@ -1581,9 +1581,9 @@ and story confirmation already use, including holding the prompt until the sessi
 from the project's shape. It lives under `risk` because the Gate is its only consumer.
 **R29.5** **A test command that cannot be determined refuses the loop.** A Gate that reports a pass
 having run nothing is the one failure mode worse than no Gate.
-**R29.6** **Completion is a filesystem fact**: the session writes `.crime/refactor-done`, seen by the
-watcher that already exists, and CRIME **deletes it before each Iteration begins** so a leftover
-cannot instantly complete the next one. Its contents are ignored — CRIME measures.
+**R29.6** **Completion is a filesystem fact**: the session writes `.varde/refactor-done`, seen by the
+watcher that already exists, and Varde **deletes it before each Iteration begins** so a leftover
+cannot instantly complete the next one. Its contents are ignored — Varde measures.
 **R29.7** **Silence is never completion, and the wait has no timeout.** A session thinking for forty
 seconds looks exactly like one that finished, and timing out means measuring a half-written edit. The
 exits are the stop action and the cap. The pane therefore **says what it is waiting for**: an
@@ -1625,7 +1625,7 @@ the workspace where the last accepted Iteration left it — nothing half-applied
 fighting. Contrast R27.11: two analyses supersede, because only the newer answer can still be true.
 
 **R29.19** **A loop with no figure yet is refused**, the way R29.5 refuses a missing test command: the
-Gate takes its baseline from the figure CRIME last measured, so a loop started while nothing has been
+Gate takes its baseline from the figure Varde last measured, so a loop started while nothing has been
 measured is judged against zero and can only ever read as `no-improvement` — it would revert an
 honest first pass and stop. Refused rather than queued behind the analysis: a start that silently
 waits is a start the user cannot tell from a hang, and the recompute is one gesture away in the same
@@ -1686,7 +1686,7 @@ forbids — is argued in `docs/adr/0011-a-language-server-is-a-second-hosted-chi
 and its `args`, and **no branch in `src/` names a server**. The falsifiable form is a grep: search for
 any server's command name and every hit is inside the built-in defaults string or a test fixture.
 **R31.2** **A server is a row in a config file, and nowhere else** (ADR 0018). The rows ship as the
-template `~/.crime/config.toml` is seeded with, and a start that finds no global file reads the
+template `~/.varde/config.toml` is seeded with, and a start that finds no global file reads the
 template as that layer, so a fresh install works with nothing configured; a global file naming no
 `[lsp.*]` row starts no server at all. F9's deep merge means a project
 overriding one language leaves the others alone for free — **and a project naming one *key* of a
@@ -1699,7 +1699,7 @@ lookup cannot see sub-tables.
 **R31.3** **A language named in no layer has no server, and that is a state the core expresses** rather
 than an absence it infers from a failed lookup. The scenario proves the difference by **enumerating**:
 a configured language is listed and an unconfigured one is not, which a naive failed lookup cannot
-satisfy. A malformed server entry stops CRIME from starting
+satisfy. A malformed server entry stops Varde from starting
 naming file and line, which is R9.5 unchanged and is why that scenario passes on the commit that
 writes it — the requirement is genuinely already met, and the scenario exists so that breaking R9.5
 breaks it.
@@ -1740,13 +1740,13 @@ is also what makes a dying server exact rather than conservative — `lsp::gone`
 mark on every file the dead server *served*, so a Vue server exiting took the TypeScript server's
 type errors with it. A path left with no publisher at all stops being a path anything has spoken
 about, which is what keeps Review view reading *not measured* rather than announcing a dead server's
-file clean. **CRIME says it can be told them**, in the `capabilities` of `initialize`: a push is the one
+file clean. **Varde says it can be told them**, in the `capabilities` of `initialize`: a push is the one
 thing a server sends unasked, and a server may hold it back from a client that never claimed it —
 `typescript-language-server` does exactly that, and a file with every error withheld reads as a clean
-file rather than as a server saying nothing. It is the only capability CRIME claims, because
+file rather than as a server saying nothing. It is the only capability Varde claims, because
 everything else it wants it asks for by name.
 
-- ✅ CRIME says it can be told diagnostics, because it draws them
+- ✅ Varde says it can be told diagnostics, because it draws them
 - ✅ Two servers publishing about one file both mark it, and each replaces only its own set
 - ✅ One server calling the file clean does not clear what the other said
 - ✅ A server that dies takes its own marks and leaves the other server's
@@ -1775,7 +1775,7 @@ may not read.
 opened.** Naming it is what needs an effect the feature did not have: a notice is a `&'static str`
 slug the edge words, which cannot carry a path, so `Effect::NotifyAbout` says the slug *and* the
 thing the message must name. That is not the new effect R31.12 forbids — R31.12 is about the jump,
-and a refusal that names nothing is a key that did nothing. Every other pane in CRIME is bounded by the root — the tree, Review view, the project
+and a refusal that names nothing is a key that did nothing. Every other pane in Varde is bounded by the root — the tree, Review view, the project
 search, a Risk Scope — and a Buffer outside it is a Buffer the tree cannot mark, the review cannot
 see and the watcher does not watch. Refusing *and saying where it went* is the difference between a
 decision and nothing happening. The rejected alternative was opening it read-only: it is the more
@@ -1804,7 +1804,7 @@ core returns the window as an effect on every change while inserting — a timer
 and the edge, which holds the only clock, answers with one event when it expires. So the number is a
 value a scenario can see, the way `RunSearch`'s 150 ms — chosen inside `main.rs` — is not.
 **R31.17** **Review view shows, per changed file, how many errors and warnings its server reports, and
-a total of each.** This is where language intelligence pays for itself in the product CRIME actually is: the
+a total of each.** This is where language intelligence pays for itself in the product Varde actually is: the
 workspace exists to review code an AI wrote, and "does it compile" is the first question a reviewer
 has and the last one a diff answers. Same shape as F30 — a per-file figure over the files under
 review — with diagnostics instead of Risk. Scope is a count and a total, deliberately **not a
@@ -1858,15 +1858,15 @@ clears that language's diagnostics and its outstanding requests — a diagnostic
 dead server is the gutter making a claim about the present out of a conversation that ended. This is
 `ai_running`'s failure in a second shape, and the ADR records the split of what the core may hold from
 what only the edge may observe. **And a lost server's own words are kept.** Its stderr goes to
-`.crime/lsp-<language>.log`, truncated per spawn, and both notices name the file: the two servers that
-died on one machine in one week each said why in one line, and CRIME threw both away, so "no
+`.varde/lsp-<language>.log`, truncated per spawn, and both notices name the file: the two servers that
+died on one machine in one week each said why in one line, and Varde threw both away, so "no
 diagnostics until it is restarted" was true and cost a debugging session anyway.
 
 - ✅ A fresh install has a server for the common languages, and the configured languages can be enumerated
 - ✅ Project over global over default, key by key, and arguments travel with the command
-- ✅ A language named in no layer has no server; a malformed entry stops CRIME from starting
+- ✅ A language named in no layer has no server; a malformed entry stops Varde from starting
 - ✅ A layer names one key of a shipped language, or of one the layer below introduced, and keeps the rest
-- ✅ A language no layer ever gave a command stops CRIME from starting, naming the file it came from
+- ✅ A language no layer ever gave a command stops Varde from starting, naming the file it came from
 - ✅ Opening a file starts its server, completes the handshake, and only then sends the document
 - ✅ One server per language across buffers; a second language starts its own
 - ✅ A capability the server declined is never asked for
@@ -1878,7 +1878,7 @@ diagnostics until it is restarted" was true and cost a debugging session anyway.
 - ✅ Hover shows type and documentation, says so when nothing is known, and is not shown after the cursor moves
 - ✅ A long hover wraps before it is measured, and does not cover the symbol it describes
 - ✅ Markdown in a hover is rendered, a fence is highlighted and cut to the box, and plain text is left alone
-- ✅ A hover taller than the pane is capped and says it was cut; CRIME declares it can read markdown
+- ✅ A hover taller than the pane is capped and says it was cut; Varde declares it can read markdown
 - ✅ A pointer resting half a second on a symbol asks the same hover, in either mode; the box describes where the pointer is and goes when it leaves (`features/hover_dwell.feature`)
 - ✅ Go-to-definition in the same file, in another file, several, none, and outside the root
 - ✅ Candidates are offered, moved through, accepted, and dismissed leaving the text as typed
@@ -1890,11 +1890,11 @@ diagnostics until it is restarted" was true and cost a debugging session anyway.
 - ✅ No server configured: nothing spawned, and the editor behaves as today
 - ✅ A server that fails to start, and one that exits, leave the Buffer unchanged
 
-**R31.21** **A server that is not installed can be installed from the palette, and CRIME composes
+**R31.21** **A server that is not installed can be installed from the palette, and Varde composes
 nothing.** The palette's second face lists the languages configuration names, one row each, carrying
 the command that serves it and whether that command is on this machine. A key on a row **types that
 language's configured install command into the terminal and does not run it** — the tree's actions
-already work this way, and the reason transfers: an install has consequences on a machine CRIME does
+already work this way, and the reason transfers: an install has consequences on a machine Varde does
 not own. The command is one more key in the `[lsp.<language>]` table, shipped as TOML data in
 `DEFAULTS` exactly as the server names are, so it is overridable by a file, inspectable as a string
 and extensible without a release. `docs/adr/0012-an-install-command-is-configuration.md` argues why
@@ -1910,27 +1910,27 @@ key is a small table — `install.macos`, `install.linux`, `install.windows` —
 binary was built for, which is handed in on `Startup` the way `running_version` already is, so that a
 Linux row is specifiable on a Mac. Several servers are genuinely not packaged anywhere, and inventing
 a plausible command for them is worse than admitting the gap: the row says nothing is configured, and
-one line of TOML fixes it for that machine and every future CRIME on it.
+one line of TOML fixes it for that machine and every future Varde on it.
 
 **R31.23** **Whether a command is on this machine is the edge's fact, probed when the list is opened.**
 A claim about the filesystem and this process's environment, so written by `tell_core` and never by
 `update` — the same split R31.20 draws for whether a server is running. Re-probed on opening the list
 rather than cached at startup, because the premise of the list is that what it describes is about to
 change. **An install is observed, never believed:** nothing reads the terminal's output, which
-ADR-0004 forbids anyway, and what changes CRIME's behaviour is the probe finding the command on a
+ADR-0004 forbids anyway, and what changes Varde's behaviour is the probe finding the command on a
 later pass. *Amended by ADR 0018: an install taken from Tools reports its exit status through a
 sentinel the watcher sees, a non-zero status reads `install-failed` on its row, and a zero is a
 re-check of that row. The program an install starts with, or the one after `sudo`, is probed with
 the commands: a row whose command and package manager are both missing reads `needs-installer`,
 names the package manager, and taking it writes nothing and runs nothing. A row may carry
 `configures`, the keys its install makes true: once that install exits 0, each one
-`~/.crime/config.toml` leaves blank or absent is written as the row spells it, `~` unexpanded, and a
+`~/.varde/config.toml` leaves blank or absent is written as the row spells it, `~` unexpanded, and a
 key the reader set is never overwritten.*
 
 **R31.24** **A command that appears is a reason to forget that it was missing, which is why there is
 no restart.** A failed spawn writes a `Gone` conversation and `sync` skips any language that has one,
 deliberately, so a second file of that language does not re-run a binary that is not there — which
-also means the language is written off for the session. So the probe finding a command CRIME holds a
+also means the language is written off for the session. So the probe finding a command Varde holds a
 `Gone` conversation for **drops the conversation**, and the next pass spawns it exactly as a fresh
 start would. One case survives and it is real: an installer that appends its directory to a shell
 profile is invisible to a process that inherited its environment at launch. That is the **only**
@@ -1947,7 +1947,7 @@ and declining leaves the workspace exactly as it was.
 - ✅ A global config overrides a shipped install command
 - ✅ A language with no command for this OS says so and offers nothing
 - ✅ A row already installed and answering refuses rather than offering again
-- ✅ A server CRIME watched die reads as `stopped`, not `installed`, and nothing is spawned to
+- ✅ A server Varde watched die reads as `stopped`, not `installed`, and nothing is spawned to
   find that out
 - ✅ A `stopped` row offers its install command rather than refusing as already installed, and
   offers nothing where this OS has no command
@@ -1979,8 +1979,8 @@ fresh install works with nothing configured", and its scenario proves only that 
 *configured* — which is how three of the ten shipped languages came to name a command that cannot
 serve a file on a normal machine. The promise is hereby the stronger one: **for every language
 `DEFAULTS` names, installing the server is the whole of what the reader does.** No path to paste, no
-flag to discover, no `initializationOptions` to research. That is a requirement about CRIME, not about
-the servers: where a server needs something to run, CRIME either ships it as data (R31.1's rule, and
+flag to discover, no `initializationOptions` to research. That is a requirement about Varde, not about
+the servers: where a server needs something to run, Varde either ships it as data (R31.1's rule, and
 ADR 0012's) or the edge resolves it and tells the core (R31.23's split). A language that cannot meet
 this yet is a language whose row says so — R31.22's honest blank generalised — and never a language
 that reads as configured and answers nothing.
@@ -1997,13 +1997,13 @@ Three known failures define the work, each measured against the real server rath
   `tsserver.js` in `initializationOptions.tsserver.path`, which is the same directory the fact already
   finds with one more path segment on the end, so both servers are served by one declared name and no
   second fact.
-- **A server that asks the client a question CRIME cannot answer is refused, and the refusal is data.**
+- **A server that asks the client a question Varde cannot answer is refused, and the refusal is data.**
   A server may ask the *client* to relay a request to a second server it does not itself hold, and
   waits for the answer — every feature `@vue/language-server` has, diagnostics included, is behind one
-  such question. **CRIME does not run the second server**, and ticket 19 records the measurement that
+  such question. **Varde does not run the second server**, and ticket 19 records the measurement that
   settled it: on a fresh install the relay is worth nothing, because the companion needs a TypeScript
   plugin that installing either server does not bring, and without it a full relay and a plain refusal
-  produce byte-for-byte the same answers. So what CRIME does is refuse — out loud, which is the rule
+  produce byte-for-byte the same answers. So what Varde does is refuse — out loud, which is the rule
   `queries::reply` sets and `received` already keeps for a server's *requests* — and the asker then
   answers with everything it can answer alone. The question arrives as a notification, so the protocol
   has no reply of its own for it and only the sender knows the method the answer comes back on: the
@@ -2016,7 +2016,7 @@ type error at all — a third state between `installed` and `missing` that this 
 and the same silence as "configured and answers nothing" in a smaller shape, since half of what a
 reader opened the file for is absent with nothing on screen saying so. So `[lsp.<language>].partial`
 names, in the reader's words, what the server still cannot do, and the row reads `partly-working` and
-carries those words. **Declared, not observed**: nothing CRIME can watch tells a server with less to
+carries those words. **Declared, not observed**: nothing Varde can watch tells a server with less to
 say from a file with less wrong in it, and a limitation is a fact about a server, so it is
 configuration for exactly the reason a command is. It is behind `stopped` — a server that is not
 running answers nothing, which is not "partly" — and behind `missing` and `missing-requirement`, which
@@ -2036,7 +2036,7 @@ claim stopped being true.
 - ✅ A missing command is a missing command, whatever it would only partly do
 - ✅ The shipped Vue row, with its SDK found, reads `installed`
 
-**R31.26** **An initialization option is a config key, and CRIME reads none of it.** `[lsp.<language>]`
+**R31.26** **An initialization option is a config key, and Varde reads none of it.** `[lsp.<language>]`
 carries an `initialization_options` table, passed verbatim as the `initializationOptions` of
 `initialize`. R31.1's rule is the whole argument for why it is a key rather than a match on language —
 a toolchain's layout in an arm is a server's name in an arm with more in it — and the three properties
@@ -2055,12 +2055,12 @@ needs `initializationOptions.tsserver.path` and will not answer `initialize` wit
 `@vue/language-server` needs its SDK directory in `args` — both are project-local paths, so no layer of
 `DEFAULTS` may spell one. What ships instead is a *name* for the path, resolved by the edge, which is
 R31.27. An invented path that does not exist is worse than none: a server failing on a
-configured-looking value reads as CRIME's bug rather than as a row to fix.
+configured-looking value reads as Varde's bug rather than as a row to fix.
 
 - ✅ Configured initialization options reach the `initialize` request verbatim
 - ✅ A language with no initialization options sends `null`
 - ✅ A project config overrides a global's initialization options
-- ✅ A malformed `initialization_options` stops CRIME naming a file and a line
+- ✅ A malformed `initialization_options` stops Varde naming a file and a line
 - ✅ An option naming a fact the edge could not find stops the spawn (R31.27)
 - ✅ A shipped default names the SDK the TypeScript server will not start without
 - ✅ A workspace with no TypeScript of its own starts no TypeScript server
@@ -2136,7 +2136,7 @@ server that dies on the first `didOpen`.
   never reach a project that has no Vue in it. It is rejected because it is a bigger mechanism than
   the problem: `initialize` happens once per language, before the second file is opened, so the
   condition would have to either restart a server when a `.vue` file appears or make the options a
-  function of the buffer set, and nothing else in this feature needs either. It also puts CRIME back
+  function of the buffer set, and nothing else in this feature needs either. It also puts Varde back
   to *reading* an option table to decide when it applies, which is exactly what R31.26 promises it
   never does. One boolean on the fact, read only by the gate, keeps the option opaque.
 - **A container below the top level that lost a part is dropped whole.** Per-key dropping is right for
@@ -2184,7 +2184,7 @@ never told about is a question it cannot answer.
   that may never answer, which a `settled` flag would have left outstanding forever.
 - **An error is remembered rather than reported on the spot**, so it is empty-handed for the
   arbitration without being lost: the empty hand says which kind of nothing it was, worst first —
-  CRIME's own refusal, then a server's error, then a server that simply knows nothing here. Each is
+  Varde's own refusal, then a server's error, then a server that simply knows nothing here. Each is
   true of strictly less than the one before it. Reporting a refusal as ignorance is an error
   surfacing as a domain answer, which the error-handling rule forbids.
 - **A question whose last outstanding server dies is answered by nobody, which is an answer.** Its
@@ -2202,7 +2202,7 @@ never told about is a question it cannot answer.
   declared, **optional** fact (R31.27), because that plugin is named on the row every TypeScript
   project shares. Neither is Vue-shaped: grep `src/` and every hit is in `DEFAULTS`, a fixture or a
   comment. **Measured by running it** in the project the defect was reported from, with an empty
-  `.crime/`: `gd` on `issuesFor` in a `.vue` file lands on
+  `.varde/`: `gd` on `issuesFor` in a `.vue` file lands on
   `intervals.ts:40:17` — column 17 being the `i` of `export function issuesFor(`
   — `K` answers with the signature and the doc comment, and in a scratch workspace a type error
   (`4:7 Type 'number' is not assignable to type 'string'`) and a template mistake
@@ -2222,12 +2222,12 @@ never told about is a question it cannot answer.
   plugin is
 - ✅ A machine with no Vue server still starts TypeScript for a TypeScript project
 
-**R31.29** **A question CRIME declined to relay says so, rather than reporting the server as knowing
+**R31.29** **A question Varde declined to relay says so, rather than reporting the server as knowing
 nothing.** `no-definition` says *the language server knows of no definition* and `nothing-known-here`
-says *the language server knows nothing about the symbol under the cursor*. When CRIME refused the
+says *the language server knows nothing about the symbol under the cursor*. When Varde refused the
 question the server needed answered — R31.19's refuse-out-loud, which is what gets a Volar-shaped
 server past a question nobody will answer — both sentences are false, and they are the sentences that
-sent the reader looking at their own install instead of at CRIME. One slug for both keys, because it
+sent the reader looking at their own install instead of at Varde. One slug for both keys, because it
 is one refusal, and R31.25's whole subject is a language that reads as working and answers nothing.
 
 **The condition is a refusal that actually happened, never a configuration that permits one.** The
@@ -2237,10 +2237,10 @@ first attempt keyed it on `[lsp.<language>].unanswerable` being present, which b
 first one was. **Measured on the wire** (`vue-language-server` behind a `tee`, driven from cold):
 
 ```
-CRIME -> textDocument/didOpen
+Varde -> textDocument/didOpen
 server -> tsserver/request  [[1, "_vue:projectInfo", {"file": ".../App.vue"}]]
-CRIME -> tsserver/response  [[1, null]]            <- the refusal
-CRIME -> textDocument/definition
+Varde -> tsserver/response  [[1, null]]            <- the refusal
+Varde -> textDocument/definition
 server -> id 2 result []                           <- and every answer after it
 ```
 
@@ -2255,7 +2255,7 @@ server that could have relayed and did not is a server that knows nothing here.
 
 ⛔ **A scenario that asserts a real server answered.** That needs the server installed on whatever
 machine runs the suite, which is the fixture folder and the real terminal `AGENTS.md` keeps out of the
-behaviour suite. What is scenariable is what CRIME *sends* and what it *shipped*: that a fresh install
+behaviour suite. What is scenariable is what Varde *sends* and what it *shipped*: that a fresh install
 sends a Vue server the arguments it needs, that an edge-resolved path reaches the message, that a
 relayed request goes where configuration said. Whether the server on the other end is happy is
 verified by running it, like every other edge fact.
@@ -2310,11 +2310,11 @@ filtering the reply again would be "a second opinion, and the one that cannot se
 matched on". The reasoning is sound and the premise is false: a server does not answer *the
 completions for `wor`*, it answers with everything in scope at that position, marks the reply
 `isIncomplete`, and expects the client to keep filtering and re-ranking — which is what
-`filterText` and `sortText` are for, and CRIME kept neither. The second opinion the comment refused
+`filterText` and `sortText` are for, and Varde kept neither. The second opinion the comment refused
 to give is the opinion the server asked for. So both fields are kept; the word being typed is
 matched against `filterText` where a server gave one and the label otherwise, scored by
 `src/filter.rs` — the same function the tree's filter box narrows with, because a completion list
-that matches differently from every other list in CRIME is a difference nobody could predict; a
+that matches differently from every other list in Varde is a difference nobody could predict; a
 backspace
 widens it back to the whole reply, since nothing was discarded; and a word that matches nothing
 closes the list, which is R31.14's promise of never showing an empty box reached by a shorter road.
@@ -2324,7 +2324,7 @@ from, because what a completion overwrites and what the list is narrowed by must
 characters. The debounce keeps doing its job underneath — a fresh request still goes out and still
 replaces the list.
 
-**Order is the server's where the server gave one, and CRIME's ranking only where it did not.**
+**Order is the server's where the server gave one, and Varde's ranking only where it did not.**
 `sortText` is the field the protocol provides for a server to rank its own reply, so a reply carrying
 it is left in that order and never re-ranked; only a reply that named no order is put closest-first.
 And it must be *every* item or none: the protocol says `sortText` defaults to the label, so a mixed
@@ -2343,11 +2343,11 @@ decision exists to avoid.
 
 ⛔ **A scenario that the renderer honoured the row and the column.** That is the one thing a view
 model cannot see, and it is exactly how the height defect hid: the core placed the box correctly and
-the renderer overrode it. Verified by running CRIME against a server answering three hundred
+the renderer overrode it. Verified by running Varde against a server answering three hundred
 candidates and reading the frame back — the box below the line being typed, its left border in the
 cursor's own column, and the lines around it still there.
 
-**Q59 — is the restart CRIME re-executing itself, or CRIME exiting and telling the user? Resolved:
+**Q59 — is the restart Varde re-executing itself, or Varde exiting and telling the user? Resolved:
 it exits.** Re-executing would inherit *this* process's environment — the very environment the
 installer's new directory is missing from — so it would answer the one situation the question exists
 for by not answering it. There is therefore no `Effect::Restart`: answering yes is `Event::Quit`,
@@ -2369,7 +2369,7 @@ a piece to a span in one place for both. Three consequences follow from the box 
 row count, which the wrapping rule already established:
 
 **Plain text stays plain.** `MarkupKind::PlainText` is the server saying the `*` in its reply is an
-asterisk. Rendering it anyway is CRIME inventing formatting the server denied having, so that shape
+asterisk. Rendering it anyway is Varde inventing formatting the server denied having, so that shape
 keeps the hard wrap it always had — two paths, deliberately, and the only place in this feature where
 the protocol's own distinction is honoured rather than flattened.
 
@@ -2398,13 +2398,13 @@ the sweep already proves exhaustively, which the test strategy forbids.
 ⛔ **The Candidate list being one `Modal` variant.** R31.14 is enforced by the enum. A scenario
 asserting it would be testing what the compiler proves.
 ⛔ **The edge.** The reader thread, the `Content-Length` framing and the spawn are verified by running
-CRIME on a folder and watching the server come up, exactly as `pty.rs` is. No scenario covers the
+Varde on a folder and watching the server come up, exactly as `pty.rs` is. No scenario covers the
 edge, by design.
 ⛔ **A server's log — that it is written, that it is truncated, that the screen is never painted on.**
 The requirement is R31.20's last sentence and there is nothing in `src/` to assert about it: the file
 is opened and the child's stderr is redirected in the edge, and the core may not so much as name the
 path, since **nothing reads it back** — a core that parsed a server's log would be branching on which
-server it is, R31.1's forbidden arm. Verified the way the spawn already is, by running CRIME against a
+server it is, R31.1's forbidden arm. Verified the way the spawn already is, by running Varde against a
 server that logs on startup and one that dies on it, and by looking at the file.
 ⛔ **A test that runs a Language server.** The same discipline as never driving a real pty. Incoming
 messages are canned JSON; a suite that needs `rust-analyzer` installed is a suite that is red on
@@ -2417,16 +2417,16 @@ layer permanently. Whole-document formatting has come off this list: F32 specifi
 speaks —
 one `About`, five one-line arms, and no new transport. Range formatting stays out, because a
 selection is a second question with a second staleness rule and nobody has asked for it.
-⛔ **CRIME composing an install command, updating a server, or falling back to a second server when
+⛔ **Varde composing an install command, updating a server, or falling back to a second server when
 the configured one is missing.** The fallback stays forbidden for the reason the ADR gives — "tried
 A, falling back to B" is a provider preference expressed in control flow. Installing is no longer on
 this list: R31.21 below specifies it, and `docs/adr/0012-an-install-command-is-configuration.md`
 argues why an install command shipped as TOML data pays neither cost R31.1 was protecting against.
-What remains ⛔ is CRIME *composing* one: a match on language and OS inside the library is that
+What remains ⛔ is Varde *composing* one: a match on language and OS inside the library is that
 forbidden arm with a package manager's name in it as well as a server's.
 ⛔ **Writing anything into the user's config file, on install, on update, or ever.** The commands ship
 inside the binary as the bottom layer of the merge, which is the whole of "added automatically".
-Writing them to disk would clobber deliberate edits, freeze what it wrote against every later CRIME
+Writing them to disk would clobber deliberate edits, freeze what it wrote against every later Varde
 version, and make a self-update into a migration. Argued in ADR 0012.
 ⛔ **Per-language configuration beyond `command` and `args`** — no initialization options, no
 per-server settings blobs. Nothing has needed one yet, and the merge already handles the shape if
@@ -2446,7 +2446,7 @@ Scenarios live in `features/formatting.feature`, and the Language server half in
 `features/language_intelligence.feature`. The decisions are F31's, reused rather than restated:
 `docs/adr/0011-a-language-server-is-a-second-hosted-child.md` for where a tool's name may live, and
 `docs/adr/0012-an-install-command-is-configuration.md` for the install command — amended by this
-feature with the one thing it did not cover, which is CRIME *executing* a workspace-configured
+feature with the one thing it did not cover, which is Varde *executing* a workspace-configured
 command against the user's source. `CONTEXT.md`'s "Knowing what the code means" section holds the
 vocabulary.
 
@@ -2457,7 +2457,7 @@ now covering a third class of name: search `src/` for `prettier`, `black`, `rust
 package manager, and every hit is inside `startup::DEFAULTS`, a fixture or a comment. The shipped
 rows are what "Rust supports basic formatting for HTML, CSS, JavaScript, JSON and YAML" means: they
 are data in the bottom layer of F9's merge, so a project replaces one with a line of TOML, a reader
-can print what CRIME resolved, and a language nobody at CRIME has heard of is served without a
+can print what Varde resolved, and a language nobody at Varde has heard of is served without a
 release. The same three properties, for the same reason, as a server's command.
 **R32.2** **`:format` asks the Language server first and the configured command second**, and the
 order is the decision rather than an implementation detail: a server already holding this file's
@@ -2504,23 +2504,23 @@ silent and never raw: the slug carries the tone and the wording, and the command
 characters are stripped from everything a notice says out loud**, in one constructor
 (`Effect::notify_about`) that every built `NotifyAbout` goes through, which is R32.8's promise about
 an install string in a second place and for the same reason: a formatter's stderr, a path a server
-named and a file's own name are all text CRIME did not write, and raw ANSI in text bound for the
+named and a file's own name are all text Varde did not write, and raw ANSI in text bound for the
 status line can rewrite the screen. One funnel rather than four producers each remembering, because
 the fifth notice is the one that forgets — and in the core rather than at the edge, because what a
 notice says is the core's to decide and a test can see it there. That the terminal library happens to
 drop a control character before it reaches a cell is not the promise being kept; it is the promise
 being kept by somebody else.
 **R32.7** **A language nothing configures refuses out loud, naming the key to write** —
-`no-formatter-configured`, with `[formatter.<language>] in .crime/config.toml` as what the message
+`no-formatter-configured`, with `[formatter.<language>] in .varde/config.toml` as what the message
 names. The library is the only party that knows which names a message may interpolate (R31.27), and a
 refusal that says nothing is indistinguishable from a command that did nothing.
 **R32.8** **A command that is not installed is typed into the terminal, never run.**
 `Effect::SetTerminalInput` with the string configuration carried, exactly as `i` on a server row does
-and for exactly ADR 0012's reason: an install has consequences on a machine CRIME does not own, and
+and for exactly ADR 0012's reason: an install has consequences on a machine Varde does not own, and
 the person who owns it is sitting in front of the pane. **Focus goes with it** — the one rule at the
 end of `update` that every injection reaches, not a second one here, because an install waiting on
 the input line needs an Enter that lands in the same pane. So the `:format` that follows is a trip
-back to the editor first, which is the gesture R32.9's scenario walks rather than assuming. CRIME composes nothing, so **a row with no
+back to the editor first, which is the gesture R32.9's scenario walks rather than assuming. Varde composes nothing, so **a row with no
 install command for this operating system offers nothing** — it says the command is missing and
 leaves the input line alone, which is `[lsp.c]`'s macOS gap in a second place. Held by a row whose
 install command is for the *other* operating system, because a row with no install command at all
@@ -2553,7 +2553,7 @@ that do now hear what the project said rather than a number that could disagree 
 **R32.11** **A command that exits fine and prints nothing did not format the file empty.** Empty
 stdout is refused with `formatter-failed`, naming the command, and the Buffer is left exactly as it
 was. It is not a hypothetical: an in-place `--write` invocation is what R32.4 names as the shape
-CRIME does not support and the misconfiguration a hand-written row reaches first, and printing
+Varde does not support and the misconfiguration a hand-written row reaches first, and printing
 nothing is precisely what it does. Read as an answer it is the whole file deleted with no notice at
 all — worse than a refusal, and worse still with a Preview up, where `u` is refused outright and the
 text has no visible way back. The Buffer holding only whitespace is the one case where nothing is a
@@ -2580,7 +2580,7 @@ effects. `:w`, `:e` and `:q` are silent in the same state and are deliberately l
 they are one lane's finding, and a fourth refusal is a decision about the whole router.
 
 - ✅ A fresh install has a formatter for HTML, CSS, JavaScript, JSON, YAML and Rust
-- ✅ The project's own row beats the shipped one, and an entry with no command stops CRIME from starting
+- ✅ The project's own row beats the shipped one, and an entry with no command stops Varde from starting
 - ✅ The Buffer's text reaches the command on stdin, with `${file}` resolved in its arguments
 - ✅ What the command answers replaces the Buffer, in one press of undo
 - ✅ Formatting writes no file, and unsaved edits stay unsaved
@@ -2609,11 +2609,11 @@ rejected here for three reasons that compose: it is a large dependency surface, 
 0.x, and it would put formatting *policy* and tool names inside `src/` — which is R32.1 reversed, not
 merely expensive. Configuration plus one well-known multi-language command already covers what the
 ask names. **Reversible**: a bundled formatter would be one more `[formatter.<language>]` row whose
-command happens to be CRIME itself, and nothing above changes.
+command happens to be Varde itself, and nothing above changes.
 ⛔ **`textDocument/rangeFormatting`, and formatting a selection.** A second question with a second
 staleness rule — a selection can move while the reply is in flight, which is a third notion of stale
 and the one F31 was told not to invent.
-⛔ **Formatting on save.** `:w` is the one gesture in CRIME that is exactly what it says, and a write
+⛔ **Formatting on save.** `:w` is the one gesture in Varde that is exactly what it says, and a write
 that silently rewrote the file would be the "completion that quietly changes what you wrote" failure
 R31.15 refuses, one pane over. It is a config key away if anybody wants it.
 ⛔ **A formatter that rewrites the file in place.** Named in R32.4 as the cost of the stdin/stdout
@@ -2635,7 +2635,7 @@ buffers, their marks and the dot strip are all F19's, and this feature adds no f
 that F19 did not already have. `CONTEXT.md`'s "Corner" and "Row selection" are the vocabulary.
 
 **R33.1** The pane is **toggled from the palette**, one un-indented entry in the `Panes` group, keyed
-`g`. `g` is CRIME's own buffer gesture (`gt`/`gT` step buffers), so the palette's `g` opens the
+`g`. `g` is Varde's own buffer gesture (`gt`/`gT` step buffers), so the palette's `g` opens the
 list of what they step through.
 **R33.2** **No new key binding and no cheatsheet obligation**, for R28.2's reason exactly: focus is
 directional, so the pane is reachable by geometry, and a palette row is discoverable because the
@@ -2652,7 +2652,7 @@ where a precedence between them would have to be written down, and there is noth
 **R33.5** The **directional gestures reach it exactly as they reach the Risk list** (R28.5), both ways
 round, because the geometry is the Corner's rather than any one occupant's.
 **R33.6** **Visibility persists** in F9's per-user state file, under a key naming the Corner's
-occupant. **A session saved by an older CRIME still opens as it was left**: the legacy key naming the
+occupant. **A session saved by an older Varde still opens as it was left**: the legacy key naming the
 Risk list's own visibility is read when the new one says nothing.
 **R33.7** The pane lists **every open buffer, one row per file, in the order the dot strip draws
 them** — one list, so the rows and the dots cannot come to be in different orders. A previewed file
@@ -2947,9 +2947,9 @@ no player — naming which one, and opening Tools on the speech row that install
 it exactly as it would in Tools (ADR 0018). Nothing is typed onto the terminal's input line. A
 `voice` naming a file that is not there is `no-voice`, the same as a blank one. Silence is not an
 acceptable failure here, because silence is also what success sounds like before the first word.
-**R35.10** **Nothing appears in the workspace when CRIME speaks.** The stream is written outside the
+**R35.10** **Nothing appears in the workspace when Varde speaks.** The stream is written outside the
 workspace root, the file tree is unchanged, `git status` is unchanged, and a project search finds
-nothing new. It is deleted when the player exits and again when CRIME exits.
+nothing new. It is deleted when the player exits and again when Varde exits.
 **R35.11** The synthesizer is a **resident child**, started when the first markdown buffer opens
 rather than on the first keypress, because loading a voice costs about as long as the budget for the
 whole gesture. It is a third hosted child in the sense ADR 0011 means.
@@ -3038,7 +3038,7 @@ for it, and a line that is not there has no gutter row to mark.
 implemented: `side` (the mirror is a mirror of the pane's right edge; a left one would be a second
 layout for one feature), `scale` and `renderCharacters` (a cell is the smallest mark there is — the
 block shapes *are* the render, and R36.2 is the only scale a terminal has), `autohide` and
-`showSlider: mouseover` (a terminal has no hover state to hide behind, and CRIME's one hover
+`showSlider: mouseover` (a terminal has no hover state to hide behind, and Varde's one hover
 affordance is a dwell that opens a box). `enabled` is R36.8.
 
 ## F38 — Terminal splits — **DEFINED**
@@ -3053,12 +3053,12 @@ after it, not at the end.
 asked of the OS at the moment of the split — and in the workspace root only when the OS will not say.
 **R38.3** How many shells the strip holds is **told by the edge**, never counted by the core: a split
 whose shell failed to start leaves the keyboard where it was, and a split whose shell exited is gone,
-the keyboard falling back to the last one that remains. The last shell exiting is still how CRIME
+the keyboard falling back to the last one that remains. The last shell exiting is still how Varde
 ends.
 **R38.4** `Alt+h`/`Alt+l` step **through the splits before leaving the strip**, and stop at the ends
 rather than wrapping. A click in a split moves the keyboard to it. Every other gesture — keys, paste,
 a drag to select, the wheel — is about the split with the keyboard.
-**R38.5** A command CRIME **pushes** at the terminal — a tree action, an install line — goes to a
+**R38.5** A command Varde **pushes** at the terminal — a tree action, an install line — goes to a
 shell **whose prompt is waiting**, and the keyboard with it: the focused split if it is idle, else the
 first idle one. Never to a split running a foreground job, where it would be the job's input. Which
 is which is **told by the edge**, from the pty's foreground process group. With every split busy a
@@ -3081,7 +3081,7 @@ checkout install and keeps F-self-update exactly — manifest comparison, no net
 is a binary install and asks for this repository's latest Release **once**, never on a timer.
 **R39.2** **The edge fetches, the core decides.** The body comes back unread; the core parses it,
 compares its Version by the same `semver` ordering as the manifest, and picks the Asset named
-`crime-<os>-<arch>`. Only a strictly newer Version with an Asset and a checksum list names the
+`varde-<os>-<arch>`. Only a strictly newer Version with an Asset and a checksum list names the
 Update in the version tag and is remembered.
 **R39.3** A failed request, a body that does not parse, a Version that is not newer and a Release
 with no Asset for this platform are all **silent**: no Update in the tag, no notice. The edge logs a failed
@@ -3090,9 +3090,9 @@ request.
 checksum list, replace the binary at its resolved path and **Relaunch** — refused with
 `unsaved-changes` exactly as quitting is, and a second `:update` after that refusal relaunches
 without fetching. Each failed step is its own notice.
-**R39.5** `crime --deps` prints the dependency table one line per program, with no folder and no
+**R39.5** `varde --deps` prints the dependency table one line per program, with no folder and no
 terminal, so `install.sh` asks the binary rather than reading the source. The table is the rows
-`~/.crime/config.toml` names, or the template's when there is no file (ADR 0018).
+`~/.varde/config.toml` names, or the template's when there is no file (ADR 0018).
 **R39.6** The four Asset names are pinned by a unit test that names `.github/workflows/release.yml`,
 and the workflow names the test.
 
@@ -3169,7 +3169,7 @@ alternatives and are named in `docs/stack.md`.
 `.scratch/risk-and-refactor-loop/spec.md` and the thirteen tickets under it. Two decisions were hard
 enough to reverse that they became ADRs: `0009-a-spinner-is-bounded-by-its-job.md` (the one deliberate
 exception to draw-only-when-something-changed, bounded by construction) and
-`0010-crime-owns-the-test-gate.md` (why CRIME runs the tests rather than believing the session — a
+`0010-varde-owns-the-test-gate.md` (why Varde runs the tests rather than believing the session — a
 consequence of `0004-hosted-panes-are-transparent.md`, which forbids reading what a pane prints).
 `CONTEXT.md`'s "Paying down risk" section is the vocabulary every scenario uses.
 
@@ -3236,7 +3236,7 @@ the `.feature` files carried over unchanged, which was the point of writing the 
 
 ```
 features/*.feature     the spec — 87 scenarios, all undefined
-tests/cucumber.rs      the runner + CrimeWorld; step definitions go here
+tests/cucumber.rs      the runner + VardeWorld; step definitions go here
 src/lib.rs             pure logic, empty for now
 docs/example-map.md    this file — rules, answers, rationale
 docs/stack.md          crates and why each is load-bearing

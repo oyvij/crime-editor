@@ -1,20 +1,20 @@
 Feature: Authoring a story set for a branch
 
-  The review CRIME is built for is the review of a branch. `:story?` lists the branches of whatever
+  The review Varde is built for is the review of a branch. `:story?` lists the branches of whatever
   repository the folder is — local and remote-tracking, deduped by short name, most recent commit
   first — and picking one checks it out and authors a Story set for what that branch introduced.
 
   Picking a branch checks it out because a Step's staleness is judged by reading what its Site's
   lines currently hold on disk: a Story set for a branch that is not checked out would report every
-  Step stale. CRIME does not check the original branch back out afterwards — a second checkout can
+  Step stale. Varde does not check the original branch back out afterwards — a second checkout can
   fail if files were touched during the review, leaving the reviewer somewhere neither they nor
-  CRIME chose. Story view says which branch it is on and which one was left instead.
+  Varde chose. Story view says which branch it is on and which one was left instead.
 
-  A dirty working tree is refused up front with an instruction to commit, because CRIME never
+  A dirty working tree is refused up front with an instruction to commit, because Varde never
   checks out over work nobody has saved.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
 
   Scenario: Picking a branch checks it out and authors a story for what it introduced
     Given the project is a git repository
@@ -44,12 +44,12 @@ Feature: Authoring a story set for a branch
     And I pick the branch "feature"
     Then the story view is on the branch "feature" and left the branch "main"
 
-  Scenario: CRIME's own directory is not the reviewer's uncommitted work
+  Scenario: Varde's own directory is not the reviewer's uncommitted work
     Given the project is a git repository
     And the working tree contains:
       | path              | git status |
-      | .crime/state.json | untracked  |
-      | .crime/risk.json  | untracked  |
+      | .varde/state.json | untracked  |
+      | .varde/risk.json  | untracked  |
     And the repository has branches:
       | name    | kind  | seconds |
       | feature | local | 300     |

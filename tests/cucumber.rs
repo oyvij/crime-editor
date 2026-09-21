@@ -1,26 +1,26 @@
-use crime::editor::{span_text, Buffer};
-use crime::format;
-use crime::keys::{self, Drafts};
-use crime::lsp::{self, About, Ask, Candidate, Candidates, Gone};
-use crime::mouse::Encoding;
-use crime::review::{self, GitFile, GitStatus};
-use crime::risk::{self, Figures, Function, Kind, Metrics, Scope, Space};
-use crime::startup::{
-    self, Config, Formatter, PathStatus, Server, Startup, StartupError, Unanswerable,
-};
-use crime::story;
-use crime::tools;
-use crime::tree::{self, Entry};
-use crime::tree_actions::{Action, Target};
-use crime::{
-    layout, mouse, reading, update, DiffLine, Direction, Effect, Event, Modal, Pane, Place,
-    ReplaceFailed, Selection, State, Tap, View, PALETTE,
-};
 use cucumber::{gherkin::Step, given, then, when, World};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use unicode_width::UnicodeWidthStr;
+use varde::editor::{span_text, Buffer};
+use varde::format;
+use varde::keys::{self, Drafts};
+use varde::lsp::{self, About, Ask, Candidate, Candidates, Gone};
+use varde::mouse::Encoding;
+use varde::review::{self, GitFile, GitStatus};
+use varde::risk::{self, Figures, Function, Kind, Metrics, Scope, Space};
+use varde::startup::{
+    self, Config, Formatter, PathStatus, Server, Startup, StartupError, Unanswerable,
+};
+use varde::story;
+use varde::tools;
+use varde::tree::{self, Entry};
+use varde::tree_actions::{Action, Target};
+use varde::{
+    layout, mouse, reading, update, DiffLine, Direction, Effect, Event, Modal, Pane, Place,
+    ReplaceFailed, Selection, State, Tap, View, PALETTE,
+};
 
 /// Where the pointer is when a scenario clicks or scrolls, in the pane's own
 /// grid. A scenario never cares which cell it is, only that the child is told
@@ -33,7 +33,7 @@ const POINTER: Place = Place { line: 3, column: 7 };
 /// `terminal_input` and `executed` model the terminal, which lives at the edge:
 /// the World applies the effects `update` returns, exactly as the binary will.
 #[derive(Debug, Default, World)]
-pub struct CrimeWorld {
+pub struct VardeWorld {
     state: State,
     /// The edge's own pointer, kept across steps rather than made fresh per
     /// gesture: a drag held against a pane's edge is remembered there, and the
@@ -114,13 +114,13 @@ pub struct CrimeWorld {
     splits: Vec<usize>,
     /// The tokens a `… is highlighted` step last produced, by line — the shape
     /// the highlighter answers in.
-    highlighted: Vec<Vec<crime::highlight::Token>>,
+    highlighted: Vec<Vec<varde::highlight::Token>>,
     highlighted_source: String,
     /// The diff's two sides, each highlighted whole, exactly as the edge parses
     /// them when it reads a diff. Empty where a side could not be read.
     diff_sides: (
-        Vec<Vec<crime::highlight::Token>>,
-        Vec<Vec<crime::highlight::Token>>,
+        Vec<Vec<varde::highlight::Token>>,
+        Vec<Vec<varde::highlight::Token>>,
     ),
     exited: bool,
     relaunched: bool,
@@ -290,8 +290,8 @@ pub struct CrimeWorld {
     named: Vec<String>,
 }
 
-impl CrimeWorld {
-    /// One file's two sides and the hunks between them, at CRIME's pinned
+impl VardeWorld {
+    /// One file's two sides and the hunks between them, at Varde's pinned
     /// options — for the poll and for an arriving artifact alike, so the two
     /// never describe the same file differently. Identical bytes on both
     /// sides diff to no hunks, so a bare "holds:" fixture with no "held:"
@@ -730,7 +730,7 @@ impl CrimeWorld {
                     true => {
                         if handshake && self.lsp_answers.contains(&language) {
                             // Declaring what it can do, because a capability is
-                            // the server's own answer about itself and CRIME
+                            // the server's own answer about itself and Varde
                             // asks for nothing it was not offered. A server
                             // that declines one is configured by the Scenario
                             // that is about declining.
@@ -764,7 +764,7 @@ impl CrimeWorld {
             // The edge holds one status line, so a withdrawal leaves
             // nothing showing rather than the notice before it.
             Effect::ClearNotice => self.notices.clear(),
-            // What the edge does: build the stream under `~/.crime/tmp` and
+            // What the edge does: build the stream under `~/.varde/tmp` and
             // play it. No path crosses the seam, so none is modelled — what a
             // scenario can see is that words reached a voice.
             Effect::Speak { utterances, speed } => {
@@ -836,8 +836,8 @@ impl CrimeWorld {
             // What the edge does: assemble the sources and scan them.
             Effect::RunSearch(query) => {
                 let disk = self.project.clone();
-                let sources = crime::search::sources(&self.state, disk);
-                let results = crime::search::scan(&query, &sources);
+                let sources = varde::search::sources(&self.state, disk);
+                let results = varde::search::scan(&query, &sources);
                 let (state, effects) = update(&self.state, Event::Searched(results));
                 self.state = state;
                 self.apply(effects);
@@ -885,7 +885,7 @@ impl CrimeWorld {
                     .to_string_lossy()
                     .into_owned();
                 let lines = (1..=3)
-                    .map(|number| crime::DiffLine {
+                    .map(|number| varde::DiffLine {
                         new_line: Some(number),
                         old_line: None,
                         removed: false,
@@ -1006,7 +1006,7 @@ impl CrimeWorld {
                 self.send_now(Event::Branches(branching));
             }
             // The world plays the edge reading its modelled disk: the file as
-            // a step last left it, or as CRIME was started on.
+            // a step last left it, or as Varde was started on.
             Effect::ReadGlobalConfig {
                 path,
                 kind,
@@ -1172,30 +1172,30 @@ fn parse_action(name: &str) -> Action {
 }
 
 #[given(expr = "the workspace root is {string}")]
-fn workspace_root(world: &mut CrimeWorld, root: String) {
+fn workspace_root(world: &mut VardeWorld, root: String) {
     world.state.root = PathBuf::from(&root);
     world.startup.root = PathBuf::from(root);
 }
 
 #[given(expr = "the project has no {string} folder")]
-fn project_lacks_folder(world: &mut CrimeWorld, name: String) {
+fn project_lacks_folder(world: &mut VardeWorld, name: String) {
     world.dirs.remove(&world.startup.root.join(name));
 }
 
 #[then(expr = "the project has a {string} folder")]
-fn project_has_folder(world: &mut CrimeWorld, name: String) {
+fn project_has_folder(world: &mut VardeWorld, name: String) {
     assert!(world.dirs.contains(&world.startup.root.join(name)));
 }
 
 #[given(expr = "the project has a {string}")]
-fn project_has_file(world: &mut CrimeWorld, name: String) {
+fn project_has_file(world: &mut VardeWorld, name: String) {
     world
         .files
         .insert(world.startup.root.join(name), "untouched".to_string());
 }
 
 #[then(expr = "the project {string} is unchanged")]
-fn project_file_unchanged(world: &mut CrimeWorld, name: String) {
+fn project_file_unchanged(world: &mut VardeWorld, name: String) {
     let path = world.startup.root.join(&name);
     assert!(
         !world.wrote.contains(&path),
@@ -1205,73 +1205,73 @@ fn project_file_unchanged(world: &mut CrimeWorld, name: String) {
 }
 
 #[given(expr = "the project {string} records the last view as {string}")]
-fn state_records_view(world: &mut CrimeWorld, path: String, view: String) {
-    assert_eq!(path, ".crime/state.json");
+fn state_records_view(world: &mut VardeWorld, path: String, view: String) {
+    assert_eq!(path, ".varde/state.json");
     world.startup.state_json = Some(format!("{{\"last_view\": \"{view}\"}}"));
 }
 
 #[given("the global config is:")]
-fn global_config(world: &mut CrimeWorld, step: &Step) {
+fn global_config(world: &mut VardeWorld, step: &Step) {
     world.startup.global_config = Some(step.docstring().expect("docstring").trim().to_string());
 }
 
 #[given("the project config is:")]
-fn project_config(world: &mut CrimeWorld, step: &Step) {
+fn project_config(world: &mut VardeWorld, step: &Step) {
     world.startup.project_config = Some(step.docstring().expect("docstring").trim().to_string());
 }
 
 #[given(expr = "the global config is empty")]
-fn global_config_empty(world: &mut CrimeWorld) {
+fn global_config_empty(world: &mut VardeWorld) {
     world.startup.global_config = Some(String::new());
 }
 
 #[given(expr = "there is no global config")]
-fn no_global_config(world: &mut CrimeWorld) {
+fn no_global_config(world: &mut VardeWorld) {
     world.startup.global_config = None;
 }
 
 #[given(expr = "the project has no config file")]
-fn no_project_config(world: &mut CrimeWorld) {
+fn no_project_config(world: &mut VardeWorld) {
     world.startup.project_config = None;
 }
 
 // ---- Staying up to date: the checkout's Version against the Running version ----
 
-#[given(expr = "CRIME's checkout is at {string}")]
-fn checkout_at(world: &mut CrimeWorld, path: String) {
+#[given(expr = "Varde's checkout is at {string}")]
+fn checkout_at(world: &mut VardeWorld, path: String) {
     world.startup.checkout = Some(PathBuf::from(path));
 }
 
 #[given(expr = "the Running version is {string}")]
-fn running_version(world: &mut CrimeWorld, version: String) {
+fn running_version(world: &mut VardeWorld, version: String) {
     world.startup.running_version = version;
 }
 
 #[given("the checkout manifest is:")]
-fn checkout_manifest(world: &mut CrimeWorld, step: &Step) {
+fn checkout_manifest(world: &mut VardeWorld, step: &Step) {
     world.startup.checkout_manifest = Some(step.docstring().expect("docstring").trim().to_string());
 }
 
 /// The edge still found a directory above the binary — there is just nothing in
 /// it, which is the case the core has to rule out.
 #[given(expr = "there is no checkout manifest")]
-fn no_checkout_manifest(world: &mut CrimeWorld) {
+fn no_checkout_manifest(world: &mut VardeWorld) {
     world.startup.checkout_manifest = None;
 }
 
 #[then(expr = "an Update to {string} is available")]
-fn update_offered_to(world: &mut CrimeWorld, version: String) {
+fn update_offered_to(world: &mut VardeWorld, version: String) {
     assert_eq!(world.state.update, Some(version));
 }
 
-#[given(expr = "CRIME was built for {string} on {string}")]
-fn built_for_platform(world: &mut CrimeWorld, os: String, arch: String) {
+#[given(expr = "Varde was built for {string} on {string}")]
+fn built_for_platform(world: &mut VardeWorld, os: String, arch: String) {
     world.startup.os = os;
     world.startup.arch = arch;
 }
 
-#[then(expr = "CRIME asks for the latest Release")]
-fn asks_for_release(world: &mut CrimeWorld) {
+#[then(expr = "Varde asks for the latest Release")]
+fn asks_for_release(world: &mut VardeWorld) {
     assert!(
         world.startup_effects.contains(&Effect::CheckRelease {
             url: startup::RELEASE_URL.to_string()
@@ -1281,8 +1281,8 @@ fn asks_for_release(world: &mut CrimeWorld) {
     );
 }
 
-#[then(expr = "CRIME does not ask for a Release")]
-fn asks_for_no_release(world: &mut CrimeWorld) {
+#[then(expr = "Varde does not ask for a Release")]
+fn asks_for_no_release(world: &mut VardeWorld) {
     assert!(
         !world
             .startup_effects
@@ -1294,7 +1294,7 @@ fn asks_for_no_release(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the story sets were read from {string}")]
-fn story_sets_read_at_start(world: &mut CrimeWorld, dir: String) {
+fn story_sets_read_at_start(world: &mut VardeWorld, dir: String) {
     assert!(
         world.startup_effects.contains(&Effect::ReadStories {
             dir: world.startup.root.join(dir),
@@ -1306,7 +1306,7 @@ fn story_sets_read_at_start(world: &mut CrimeWorld, dir: String) {
 }
 
 #[then(expr = "no story sets were read")]
-fn no_story_sets_read_at_start(world: &mut CrimeWorld) {
+fn no_story_sets_read_at_start(world: &mut VardeWorld) {
     assert!(
         !world
             .startup_effects
@@ -1318,7 +1318,7 @@ fn no_story_sets_read_at_start(world: &mut CrimeWorld) {
 }
 
 #[when("the latest Release answers:")]
-fn release_answers(world: &mut CrimeWorld, step: &Step) {
+fn release_answers(world: &mut VardeWorld, step: &Step) {
     let body = step.docstring().expect("docstring").to_string();
     world.send(Event::ReleaseAnswered(Some(body)));
 }
@@ -1326,8 +1326,8 @@ fn release_answers(world: &mut CrimeWorld, step: &Step) {
 /// Through the event the edge sends, so what is remembered is what the core
 /// made of an answer rather than a Release the scenario wrote into the state.
 #[given(expr = "a newer Release for this platform has been found")]
-fn newer_release_found(world: &mut CrimeWorld) {
-    let asset = format!("crime-{}-{}", world.startup.os, world.startup.arch);
+fn newer_release_found(world: &mut VardeWorld) {
+    let asset = format!("varde-{}-{}", world.startup.os, world.startup.arch);
     world.send(Event::ReleaseAnswered(Some(format!(
         r#"{{"tag_name": "v9.0.0", "assets": [
             {{"name": "{asset}", "browser_download_url": "https://example.test/{asset}"}},
@@ -1340,8 +1340,8 @@ fn newer_release_found(world: &mut CrimeWorld) {
     );
 }
 
-#[then(expr = "CRIME fetches the remembered Release")]
-fn fetches_release(world: &mut CrimeWorld) {
+#[then(expr = "Varde fetches the remembered Release")]
+fn fetches_release(world: &mut VardeWorld) {
     let release = world.state.release.clone().expect("a remembered Release");
     assert_eq!(
         world.replacing,
@@ -1352,19 +1352,19 @@ fn fetches_release(world: &mut CrimeWorld) {
     );
 }
 
-#[then(expr = "CRIME does not fetch a Release")]
-fn fetches_no_release(world: &mut CrimeWorld) {
+#[then(expr = "Varde does not fetch a Release")]
+fn fetches_no_release(world: &mut VardeWorld) {
     assert!(world.replacing.is_empty(), "fetched: {:?}", world.replacing);
 }
 
 #[given(expr = "the binary has been replaced")]
 #[when(expr = "the binary has been replaced")]
-fn binary_replaced(world: &mut CrimeWorld) {
+fn binary_replaced(world: &mut VardeWorld) {
     world.send(Event::BinaryReplaced(Ok(())));
 }
 
 #[when(expr = "replacing the binary fails at the {word} step")]
-fn replacing_fails(world: &mut CrimeWorld, at: String) {
+fn replacing_fails(world: &mut VardeWorld, at: String) {
     let failed = match at.as_str() {
         "download" => ReplaceFailed::Download,
         "no-asset" => ReplaceFailed::NoAsset,
@@ -1376,34 +1376,34 @@ fn replacing_fails(world: &mut CrimeWorld, at: String) {
 }
 
 #[then(expr = "the binary is known to be replaced")]
-fn known_replaced(world: &mut CrimeWorld) {
+fn known_replaced(world: &mut VardeWorld) {
     assert!(world.state.replaced);
 }
 
 #[then(expr = "the binary is not known to be replaced")]
-fn not_known_replaced(world: &mut CrimeWorld) {
+fn not_known_replaced(world: &mut VardeWorld) {
     assert!(!world.state.replaced);
 }
 
-#[then(expr = "CRIME relaunches")]
-fn relaunches(world: &mut CrimeWorld) {
+#[then(expr = "Varde relaunches")]
+fn relaunches(world: &mut VardeWorld) {
     assert!(world.relaunched);
 }
 
-#[then(expr = "CRIME does not relaunch")]
-fn does_not_relaunch(world: &mut CrimeWorld) {
+#[then(expr = "Varde does not relaunch")]
+fn does_not_relaunch(world: &mut VardeWorld) {
     assert!(!world.relaunched);
 }
 
 #[when(expr = "the request for the latest Release fails")]
-fn release_request_fails(world: &mut CrimeWorld) {
+fn release_request_fails(world: &mut VardeWorld) {
     world.send(Event::ReleaseAnswered(None));
 }
 
 #[then(
     expr = "the remembered Release is {string} with the Asset {string} and the checksums {string}"
 )]
-fn release_remembered(world: &mut CrimeWorld, version: String, asset: String, checksums: String) {
+fn release_remembered(world: &mut VardeWorld, version: String, asset: String, checksums: String) {
     assert_eq!(
         world.state.release,
         Some(startup::Release {
@@ -1415,68 +1415,68 @@ fn release_remembered(world: &mut CrimeWorld, version: String, asset: String, ch
 }
 
 #[then(expr = "no Release is remembered")]
-fn no_release_remembered(world: &mut CrimeWorld) {
+fn no_release_remembered(world: &mut VardeWorld) {
     assert_eq!(world.state.release, None);
 }
 
 #[then(expr = "no Update is available")]
-fn no_update_offered(world: &mut CrimeWorld) {
+fn no_update_offered(world: &mut VardeWorld) {
     assert_eq!(world.state.update, None, "an Update was offered");
 }
 
-#[then(expr = "CRIME's checkout is known to be {string}")]
-fn checkout_known(world: &mut CrimeWorld, path: String) {
+#[then(expr = "Varde's checkout is known to be {string}")]
+fn checkout_known(world: &mut VardeWorld, path: String) {
     assert_eq!(world.state.checkout, Some(PathBuf::from(path)));
 }
 
-#[then(expr = "CRIME's checkout is not known")]
-fn checkout_not_known(world: &mut CrimeWorld) {
+#[then(expr = "Varde's checkout is not known")]
+fn checkout_not_known(world: &mut VardeWorld) {
     assert_eq!(world.state.checkout, None);
 }
 
-#[then(expr = "CRIME started")]
-fn crime_started(world: &mut CrimeWorld) {
-    assert!(world.error.is_none(), "CRIME refused to start");
+#[then(expr = "Varde started")]
+fn varde_started(world: &mut VardeWorld) {
+    assert!(world.error.is_none(), "Varde refused to start");
 }
 
 #[then(expr = "no notice was raised")]
-fn no_notice(world: &mut CrimeWorld) {
+fn no_notice(world: &mut VardeWorld) {
     assert!(world.notices.is_empty(), "notices: {:?}", world.notices);
 }
 
-#[when(expr = "I ask CRIME to update from the command line")]
-fn ask_to_update(world: &mut CrimeWorld) {
+#[when(expr = "I ask Varde to update from the command line")]
+fn ask_to_update(world: &mut VardeWorld) {
     world.send(Event::Rebuild);
 }
 
-#[when(expr = "I ask CRIME for help from the command line")]
-fn ask_for_help(world: &mut CrimeWorld) {
+#[when(expr = "I ask Varde for help from the command line")]
+fn ask_for_help(world: &mut VardeWorld) {
     world.send(Event::ToggleCheatsheet);
 }
 
 #[given(expr = "the key reminder is hidden")]
-fn reminder_hidden(world: &mut CrimeWorld) {
+fn reminder_hidden(world: &mut VardeWorld) {
     world.state.cheatsheet = false;
 }
 
 #[given(expr = "the project {string} records the key reminder as hidden")]
-fn state_records_reminder(world: &mut CrimeWorld, path: String) {
-    assert_eq!(path, ".crime/state.json");
+fn state_records_reminder(world: &mut VardeWorld, path: String) {
+    assert_eq!(path, ".varde/state.json");
     world.startup.state_json = Some("{\"cheatsheet\": false}".to_string());
 }
 
 #[then(expr = "the key reminder is shown")]
-fn reminder_shown(world: &mut CrimeWorld) {
+fn reminder_shown(world: &mut VardeWorld) {
     assert!(world.state.cheatsheet);
 }
 
 #[then(expr = "the key reminder is not shown")]
-fn reminder_not_shown(world: &mut CrimeWorld) {
+fn reminder_not_shown(world: &mut VardeWorld) {
     assert!(!world.state.cheatsheet);
 }
 
 #[then(expr = "the remembered key reminder is {string}")]
-fn reminder_remembered(world: &mut CrimeWorld, state: String) {
+fn reminder_remembered(world: &mut VardeWorld, state: String) {
     let saved = world
         .startup
         .state_json
@@ -1494,33 +1494,33 @@ fn reminder_remembered(world: &mut CrimeWorld, state: String) {
 }
 
 #[when(expr = "I dim the editor from the command line")]
-fn dim_editor(world: &mut CrimeWorld) {
+fn dim_editor(world: &mut VardeWorld) {
     world.send(Event::ToggleField);
 }
 
 #[given(expr = "the editor field is off")]
-fn field_off(world: &mut CrimeWorld) {
+fn field_off(world: &mut VardeWorld) {
     world.state.editor_field = false;
 }
 
 #[given(expr = "the project {string} records the editor field as off")]
-fn state_records_field(world: &mut CrimeWorld, path: String) {
-    assert_eq!(path, ".crime/state.json");
+fn state_records_field(world: &mut VardeWorld, path: String) {
+    assert_eq!(path, ".varde/state.json");
     world.startup.state_json = Some("{\"editor_field\": false}".to_string());
 }
 
 #[then(expr = "the editor field is shown")]
-fn field_shown(world: &mut CrimeWorld) {
+fn field_shown(world: &mut VardeWorld) {
     assert!(world.state.editor_field);
 }
 
 #[then(expr = "the editor field is not shown")]
-fn field_hidden(world: &mut CrimeWorld) {
+fn field_hidden(world: &mut VardeWorld) {
     assert!(!world.state.editor_field);
 }
 
 #[then(expr = "the remembered editor field is {string}")]
-fn field_remembered(world: &mut CrimeWorld, state: String) {
+fn field_remembered(world: &mut VardeWorld, state: String) {
     let saved = world
         .startup
         .state_json
@@ -1538,7 +1538,7 @@ fn field_remembered(world: &mut CrimeWorld, state: String) {
 }
 
 #[then(expr = "the user is told there is nothing to update from")]
-fn told_nothing_to_update(world: &mut CrimeWorld) {
+fn told_nothing_to_update(world: &mut VardeWorld) {
     assert_eq!(world.notices, vec!["nothing-to-update".to_string()]);
 }
 
@@ -1548,10 +1548,10 @@ fn told_nothing_to_update(world: &mut CrimeWorld) {
 /// starting ever writes those paths, so leaving them out costs the promise
 /// nothing.
 #[then(expr = "no file was written")]
-fn nothing_written(world: &mut CrimeWorld) {
+fn nothing_written(world: &mut VardeWorld) {
     let seeds = [
-        world.startup.root.join(".crime/config.toml"),
-        world.startup.crime_home.join(startup::CONFIG_FILE),
+        world.startup.root.join(".varde/config.toml"),
+        world.startup.varde_home.join(startup::CONFIG_FILE),
     ];
     let wrote: Vec<&PathBuf> = world
         .wrote
@@ -1561,18 +1561,18 @@ fn nothing_written(world: &mut CrimeWorld) {
     assert!(wrote.is_empty(), "written: {wrote:?}");
 }
 
-#[given(expr = "CRIME started in the project")]
-#[when(expr = "CRIME starts in the project")]
-fn crime_starts(world: &mut CrimeWorld) {
+#[given(expr = "Varde started in the project")]
+#[when(expr = "Varde starts in the project")]
+fn varde_starts(world: &mut VardeWorld) {
     // A scenario that says nothing about the OS still needs one, since the
     // install command a row offers is looked up under it. A fixed value rather
     // than this machine's: a suite whose rows read differently on Linux is a
     // suite that fails somewhere nobody is looking. Scenarios that care say
-    // "CRIME was built for" themselves, which runs before this.
+    // "Varde was built for" themselves, which runs before this.
     if world.startup.os.is_empty() {
         world.startup.os = "macos".to_string();
     }
-    world.startup.crime_home = Path::new(HOME).join(crime::CRIME_DIR);
+    world.startup.varde_home = Path::new(HOME).join(varde::VARDE_DIR);
     // The world plays git, and the edge asks it before starting.
     world.startup.repo = world.state.repo.clone();
     match startup::start(&world.startup) {
@@ -1590,7 +1590,7 @@ fn crime_starts(world: &mut CrimeWorld) {
 /// path: "a file appeared" would pass on an empty one, and the file's whole
 /// job is the keys it names.
 #[then(expr = "the project {string} was seeded")]
-fn project_file_was_seeded(world: &mut CrimeWorld, name: String) {
+fn project_file_was_seeded(world: &mut VardeWorld, name: String) {
     let path = world.startup.root.join(&name);
     assert!(world.wrote.contains(&path), "written: {:?}", world.wrote);
     assert_eq!(
@@ -1600,45 +1600,45 @@ fn project_file_was_seeded(world: &mut CrimeWorld, name: String) {
 }
 
 #[then(expr = "the global config was seeded from the template")]
-fn global_file_was_seeded(world: &mut CrimeWorld) {
-    let path = world.startup.crime_home.join(startup::CONFIG_FILE);
+fn global_file_was_seeded(world: &mut VardeWorld) {
+    let path = world.startup.varde_home.join(startup::CONFIG_FILE);
     assert!(world.wrote.contains(&path), "written: {:?}", world.wrote);
     assert_eq!(world.files.get(&path), Some(&startup::template()));
 }
 
 #[then(expr = "the global config is unchanged")]
-fn global_file_unchanged(world: &mut CrimeWorld) {
-    let path = world.startup.crime_home.join(startup::CONFIG_FILE);
+fn global_file_unchanged(world: &mut VardeWorld) {
+    let path = world.startup.varde_home.join(startup::CONFIG_FILE);
     assert!(!world.wrote.contains(&path), "written: {:?}", world.wrote);
 }
 
 /// The seeded text itself, read back off the modelled disk and handed to a
 /// second start as the project's layer. Feeding the constant in directly would
-/// prove the constant harmless; this proves the file CRIME actually laid down
+/// prove the constant harmless; this proves the file Varde actually laid down
 /// is, which is the promise "every key is commented out" is really making.
-#[when(expr = "CRIME starts again with the config file it seeded")]
-fn starts_again_with_the_seeded_config(world: &mut CrimeWorld) {
-    let path = world.startup.root.join(".crime/config.toml");
+#[when(expr = "Varde starts again with the config file it seeded")]
+fn starts_again_with_the_seeded_config(world: &mut VardeWorld) {
+    let path = world.startup.root.join(".varde/config.toml");
     let seeded = world.files.get(&path).cloned().expect("a seeded config");
     world.startup.project_config = Some(seeded);
-    crime_starts(world);
+    varde_starts(world);
 }
 
 #[then(expr = "the effective setting {string} is {string}")]
-fn effective_setting(world: &mut CrimeWorld, key: String, expected: String) {
-    let config = world.config.as_ref().expect("CRIME started");
+fn effective_setting(world: &mut VardeWorld, key: String, expected: String) {
+    let config = world.config.as_ref().expect("Varde started");
     assert_eq!(config.get(&key).as_deref(), Some(expected.as_str()));
 }
 
 // ---- F31: which command serves which language ----
 
-fn servers(world: &CrimeWorld) -> BTreeMap<String, Server> {
-    world.config.as_ref().expect("CRIME started").servers()
+fn servers(world: &VardeWorld) -> BTreeMap<String, Server> {
+    world.config.as_ref().expect("Varde started").servers()
 }
 
 #[then(expr = "a language server is configured for {string}")]
 #[then(expr = "the configured languages include {string}")]
-fn language_is_configured(world: &mut CrimeWorld, language: String) {
+fn language_is_configured(world: &mut VardeWorld, language: String) {
     let configured = servers(world);
     assert!(
         configured.contains_key(&language),
@@ -1649,7 +1649,7 @@ fn language_is_configured(world: &mut CrimeWorld, language: String) {
 
 #[then(expr = "the configured languages do not include {string}")]
 #[then(expr = "there is no language server configured for {string}")]
-fn language_is_not_configured(world: &mut CrimeWorld, language: String) {
+fn language_is_not_configured(world: &mut VardeWorld, language: String) {
     assert_eq!(
         servers(world).get(&language),
         None,
@@ -1658,7 +1658,7 @@ fn language_is_not_configured(world: &mut CrimeWorld, language: String) {
 }
 
 #[then(expr = "the configured server command for {string} is {string}")]
-fn server_command_is(world: &mut CrimeWorld, language: String, expected: String) {
+fn server_command_is(world: &mut VardeWorld, language: String, expected: String) {
     let server = servers(world)
         .remove(&language)
         .unwrap_or_else(|| panic!("no server for {language}"));
@@ -1666,7 +1666,7 @@ fn server_command_is(world: &mut CrimeWorld, language: String, expected: String)
 }
 
 #[then(expr = "the configured server arguments for {string} are:")]
-fn server_arguments_are(world: &mut CrimeWorld, language: String, step: &Step) {
+fn server_arguments_are(world: &mut VardeWorld, language: String, step: &Step) {
     let server = servers(world)
         .remove(&language)
         .unwrap_or_else(|| panic!("no server for {language}"));
@@ -1685,7 +1685,7 @@ fn server_arguments_are(world: &mut CrimeWorld, language: String, step: &Step) {
 /// server *configures nothing else* either — the allowlist is the two effects
 /// starting already returns, and the restored view it arrives in.
 #[then(expr = "no language server was started")]
-fn no_language_server_started(world: &mut CrimeWorld) {
+fn no_language_server_started(world: &mut VardeWorld) {
     assert!(
         world.lsp_started.is_empty(),
         "a server was started: {:?}",
@@ -1712,12 +1712,12 @@ fn no_language_server_started(world: &mut CrimeWorld) {
     );
 }
 
-#[then(expr = "CRIME refuses to start")]
-fn refuses_to_start(world: &mut CrimeWorld) {
-    assert!(world.error.is_some(), "CRIME started");
+#[then(expr = "Varde refuses to start")]
+fn refuses_to_start(world: &mut VardeWorld) {
+    assert!(world.error.is_some(), "Varde started");
 }
 
-fn config_error(world: &CrimeWorld) -> &crime::startup::ConfigError {
+fn config_error(world: &VardeWorld) -> &varde::startup::ConfigError {
     match world.error.as_ref().expect("an error") {
         StartupError::Config(error) => error,
         other => panic!("expected a config error, got {other:?}"),
@@ -1725,12 +1725,12 @@ fn config_error(world: &CrimeWorld) -> &crime::startup::ConfigError {
 }
 
 #[then(expr = "the error names the file {string}")]
-fn error_names_file(world: &mut CrimeWorld, file: String) {
+fn error_names_file(world: &mut VardeWorld, file: String) {
     assert_eq!(config_error(world).file, file);
 }
 
 #[then(expr = "the error names line {int}")]
-fn error_names_line(world: &mut CrimeWorld, line: usize) {
+fn error_names_line(world: &mut VardeWorld, line: usize) {
     assert_eq!(config_error(world).line, line);
 }
 
@@ -1738,7 +1738,7 @@ fn error_names_line(world: &mut CrimeWorld, line: usize) {
 /// edge prints: the wording is pinned by a unit test beside `Display`, and a
 /// suite that failed on rewording would teach people to ignore it.
 #[then(expr = "the fault is {string}")]
-fn fault_is(world: &mut CrimeWorld, expected: String) {
+fn fault_is(world: &mut VardeWorld, expected: String) {
     let actual = match &config_error(world).fault {
         startup::ConfigFault::NotToml => "not-toml",
         startup::ConfigFault::WrongType(_) => "wrong-type",
@@ -1750,7 +1750,7 @@ fn fault_is(world: &mut CrimeWorld, expected: String) {
 }
 
 #[then(expr = "the error names the rows {string} and {string}")]
-fn error_names_rows(world: &mut CrimeWorld, first: String, second: String) {
+fn error_names_rows(world: &mut VardeWorld, first: String, second: String) {
     match &config_error(world).fault {
         startup::ConfigFault::ClaimedTwice { rows, .. } => assert_eq!(rows, &[first, second]),
         other => panic!("expected an extension claimed twice, got {other:?}"),
@@ -1758,7 +1758,7 @@ fn error_names_rows(world: &mut CrimeWorld, first: String, second: String) {
 }
 
 #[then(expr = "the reason is {string}")]
-fn reason_is(world: &mut CrimeWorld, reason: String) {
+fn reason_is(world: &mut VardeWorld, reason: String) {
     match world.error.as_ref().expect("an error") {
         StartupError::Path(actual) => assert_eq!(*actual, reason),
         other => panic!("expected a path error, got {other:?}"),
@@ -1769,44 +1769,44 @@ fn reason_is(world: &mut CrimeWorld, reason: String) {
 
 #[given(expr = "the folder {string} exists")]
 #[given(expr = "the folder {string} exists and is empty")]
-fn folder_exists(world: &mut CrimeWorld, path: String) {
+fn folder_exists(world: &mut VardeWorld, path: String) {
     world.disk.insert(PathBuf::from(path), Vec::new());
 }
 
 #[given(expr = "{string} does not exist")]
-fn path_missing(world: &mut CrimeWorld, _path: String) {
+fn path_missing(world: &mut VardeWorld, _path: String) {
     world.startup.path_status = PathStatus::Missing;
 }
 
 #[given(expr = "{string} is a file")]
-fn path_is_file(world: &mut CrimeWorld, _path: String) {
+fn path_is_file(world: &mut VardeWorld, _path: String) {
     world.startup.path_status = PathStatus::NotAFolder;
 }
 
 #[given(expr = "the folder {string} cannot be read")]
-fn path_unreadable(world: &mut CrimeWorld, _path: String) {
+fn path_unreadable(world: &mut VardeWorld, _path: String) {
     world.startup.path_status = PathStatus::Unreadable;
 }
 
-#[when(expr = "CRIME opens {string}")]
-fn crime_opens(world: &mut CrimeWorld, path: String) {
+#[when(expr = "Varde opens {string}")]
+fn varde_opens(world: &mut VardeWorld, path: String) {
     world.startup.root = PathBuf::from(&path);
     let entries = world
         .disk
         .get(&world.startup.root)
         .cloned()
         .unwrap_or_default();
-    crime_starts(world);
+    varde_starts(world);
     if world.error.is_none() {
         world.state.contents.insert(PathBuf::from(path), entries);
     }
 }
 
-/// On disk before CRIME starts, so what the tree shows is what the folder held
+/// On disk before Varde starts, so what the tree shows is what the folder held
 /// rather than what a step put there afterwards. The idiom `the workspace
 /// folder contains:` already uses, one file at a time.
 #[given(expr = "the workspace folder holds the file {string}")]
-fn workspace_folder_holds_file(world: &mut CrimeWorld, name: String) {
+fn workspace_folder_holds_file(world: &mut VardeWorld, name: String) {
     let root = world.state.root.clone();
     put_on_disk(
         world,
@@ -1822,25 +1822,25 @@ fn workspace_folder_holds_file(world: &mut CrimeWorld, name: String) {
 /// and the process id. Handed in rather than built here: how the two parts are
 /// spelled into one directory name is edge work with no scenario, and what a
 /// scenario is about is that the library wrote *there* and not into the folder.
-const SIDECAR: &str = "/home/me/.crime/paths/%home%me%projects%theirs-4242";
+const SIDECAR: &str = "/home/me/.varde/paths/%home%me%projects%theirs-4242";
 
-/// The user's own directory, which `~` in a scenario names and `crime_home`
+/// The user's own directory, which `~` in a scenario names and `varde_home`
 /// below is under. The edge reads both; a scenario states them, so a path
 /// outside every workspace is a path a step can spell.
 const HOME: &str = "/home/me";
 
-#[given(expr = "CRIME started with no folder in {string}")]
-#[when(expr = "CRIME starts with no folder in {string}")]
-fn crime_starts_bare(world: &mut CrimeWorld, path: String) {
+#[given(expr = "Varde started with no folder in {string}")]
+#[when(expr = "Varde starts with no folder in {string}")]
+fn varde_starts_bare(world: &mut VardeWorld, path: String) {
     world.startup.sidecar = Some(PathBuf::from(SIDECAR));
-    crime_opens(world, path);
+    varde_opens(world, path);
 }
 
-/// The load-bearing absence: a folder CRIME was not given is a folder CRIME
-/// leaves alone. Every directory, not `.crime` by name — a site that missed the
+/// The load-bearing absence: a folder Varde was not given is a folder Varde
+/// leaves alone. Every directory, not `.varde` by name — a site that missed the
 /// accessor would create some other one and this would still catch it.
 #[then(expr = "no directory was created in the folder")]
-fn no_directory_in_folder(world: &mut CrimeWorld) {
+fn no_directory_in_folder(world: &mut VardeWorld) {
     let inside: Vec<&PathBuf> = world
         .dirs
         .iter()
@@ -1852,8 +1852,8 @@ fn no_directory_in_folder(world: &mut CrimeWorld) {
 /// The Sidecar is deleted at exit, so a review written into it is a review
 /// lost — and the folder is the one place a Bare workspace may not write at
 /// all. Both absences are held against every write, wherever it went.
-#[then(expr = "no file was written into the folder CRIME was started in")]
-fn nothing_written_into_folder(world: &mut CrimeWorld) {
+#[then(expr = "no file was written into the folder Varde was started in")]
+fn nothing_written_into_folder(world: &mut VardeWorld) {
     let inside: Vec<&PathBuf> = world
         .wrote
         .iter()
@@ -1863,7 +1863,7 @@ fn nothing_written_into_folder(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "no file was written into the Sidecar")]
-fn nothing_written_into_sidecar(world: &mut CrimeWorld) {
+fn nothing_written_into_sidecar(world: &mut VardeWorld) {
     let inside: Vec<&PathBuf> = world
         .wrote
         .iter()
@@ -1876,8 +1876,8 @@ fn nothing_written_into_sidecar(world: &mut CrimeWorld) {
 /// root the library came up with: a Bare workspace that made its Sidecar the
 /// workspace would move both sides of a root-relative assertion at once and
 /// pass while editing a copy of the file nobody can find.
-#[then(expr = "{string} was written into the folder CRIME was started in")]
-fn written_into_folder(world: &mut CrimeWorld, name: String) {
+#[then(expr = "{string} was written into the folder Varde was started in")]
+fn written_into_folder(world: &mut VardeWorld, name: String) {
     let path = world.startup.root.join(name);
     assert!(world.wrote.contains(&path), "written: {:?}", world.wrote);
 }
@@ -1887,8 +1887,8 @@ fn written_into_folder(world: &mut CrimeWorld, name: String) {
 /// kept while the key is still in a directory deleted at exit. Held against
 /// every write of a config file but the global one, wherever it went.
 #[then(expr = "no config file was seeded in the workspace")]
-fn no_config_seeded_in_workspace(world: &mut CrimeWorld) {
-    let global = world.startup.crime_home.join(startup::CONFIG_FILE);
+fn no_config_seeded_in_workspace(world: &mut VardeWorld) {
+    let global = world.startup.varde_home.join(startup::CONFIG_FILE);
     let seeded: Vec<&PathBuf> = world
         .wrote
         .iter()
@@ -1901,7 +1901,7 @@ fn no_config_seeded_in_workspace(world: &mut CrimeWorld) {
 /// the edge handed in, so an implementation that deleted some other directory
 /// of its own choosing fails here.
 #[then(expr = "the Sidecar was deleted")]
-fn sidecar_was_deleted(world: &mut CrimeWorld) {
+fn sidecar_was_deleted(world: &mut VardeWorld) {
     assert!(
         world.dirs_deleted.contains(&PathBuf::from(SIDECAR)),
         "deleted: {:?}",
@@ -1910,9 +1910,9 @@ fn sidecar_was_deleted(world: &mut CrimeWorld) {
 }
 
 /// The absence a project workspace is owed: the rule is that everything under
-/// CRIME's global directory can go, and a project's `.crime/` is not under it.
+/// Varde's global directory can go, and a project's `.varde/` is not under it.
 #[then(expr = "no directory was deleted")]
-fn no_directory_deleted(world: &mut CrimeWorld) {
+fn no_directory_deleted(world: &mut VardeWorld) {
     let deleted: Vec<&PathBuf> = world
         .dirs_deleted
         .iter()
@@ -1921,24 +1921,24 @@ fn no_directory_deleted(world: &mut CrimeWorld) {
     assert!(deleted.is_empty(), "deleted: {deleted:?}");
 }
 
-/// CRIME's own scratch, which every start sweeps and remakes before anything
+/// Varde's own scratch, which every start sweeps and remakes before anything
 /// can write into it (ADR 0014). Neither a workspace directory nor a Sidecar,
 /// so the absences those two promises are about are not about this one — and
 /// naming it here rather than dropping the effect keeps the sweep a value the
 /// suite can still see.
-fn is_scratch(world: &CrimeWorld, path: &Path) -> bool {
-    path == crime::tmp_dir(&world.startup.crime_home)
+fn is_scratch(world: &VardeWorld, path: &Path) -> bool {
+    path == varde::tmp_dir(&world.startup.varde_home)
 }
 
 /// A Bare workspace forgets everything, so the write on the way out is not
 /// made rather than made into a directory that is about to go.
 #[then(expr = "no state was saved")]
-fn no_state_saved(world: &mut CrimeWorld) {
+fn no_state_saved(world: &mut VardeWorld) {
     assert_eq!(world.startup.state_json, None);
 }
 
-#[then(expr = "CRIME's own directory is the Sidecar")]
-fn crime_dir_is_sidecar(world: &mut CrimeWorld) {
+#[then(expr = "Varde's own directory is the Sidecar")]
+fn varde_dir_is_sidecar(world: &mut VardeWorld) {
     assert!(
         world.dirs.contains(&PathBuf::from(SIDECAR)),
         "created: {:?}",
@@ -1947,17 +1947,17 @@ fn crime_dir_is_sidecar(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the workspace root is {string}")]
-fn workspace_root_should_be(world: &mut CrimeWorld, path: String) {
+fn workspace_root_should_be(world: &mut VardeWorld, path: String) {
     assert_eq!(world.state.root, PathBuf::from(path));
 }
 
 #[then(expr = "the workspace title is {string}")]
-fn workspace_title_should_be(world: &mut CrimeWorld, title: String) {
+fn workspace_title_should_be(world: &mut VardeWorld, title: String) {
     assert_eq!(world.state.title(), title);
 }
 
 #[then(expr = "the file tree is empty")]
-fn tree_is_empty(world: &mut CrimeWorld) {
+fn tree_is_empty(world: &mut VardeWorld) {
     assert!(tree::rows(&world.state).is_empty());
 }
 
@@ -1967,7 +1967,7 @@ fn tree_is_empty(world: &mut CrimeWorld) {
 /// own directory, which nothing in a workspace can reach. `~` is the only way
 /// a scenario can say "outside every workspace" and still be read against the
 /// same home the edge hands in.
-fn abs(world: &CrimeWorld, path: &str) -> PathBuf {
+fn abs(world: &VardeWorld, path: &str) -> PathBuf {
     match path.strip_prefix("~/") {
         Some(rest) => Path::new(HOME).join(rest),
         None => world.state.root.join(path),
@@ -1983,7 +1983,7 @@ fn pointer_at(
     (line, column): (usize, usize),
 ) -> (u16, u16) {
     let (area, gutter, scroll) = match pane {
-        Pane::Editor => (panes.editor, crime::gutter(state), state.editor_scroll),
+        Pane::Editor => (panes.editor, varde::gutter(state), state.editor_scroll),
         Pane::Tree => (panes.tree, 0, state.tree_scroll),
         Pane::Ai => (panes.ai, 0, 0),
         Pane::Risk | Pane::Buffers | Pane::History => (panes.corner, 0, 0),
@@ -1995,7 +1995,7 @@ fn pointer_at(
     )
 }
 
-fn put_on_disk(world: &mut CrimeWorld, folder: PathBuf, entry: Entry) {
+fn put_on_disk(world: &mut VardeWorld, folder: PathBuf, entry: Entry) {
     let entries = world.disk.entry(folder).or_default();
     if !entries.iter().any(|e| e.name == entry.name) {
         entries.push(entry);
@@ -2003,7 +2003,7 @@ fn put_on_disk(world: &mut CrimeWorld, folder: PathBuf, entry: Entry) {
 }
 
 #[given("the workspace folder contains:")]
-fn workspace_contains(world: &mut CrimeWorld, step: &Step) {
+fn workspace_contains(world: &mut VardeWorld, step: &Step) {
     let root = world.state.root.clone();
     let entries: Vec<Entry> = step
         .table()
@@ -2021,7 +2021,7 @@ fn workspace_contains(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[given(expr = "{string} contains {string}")]
-fn folder_contains(world: &mut CrimeWorld, folder: String, name: String) {
+fn folder_contains(world: &mut VardeWorld, folder: String, name: String) {
     // Saying what a folder contains also says the folder is there.
     let root = world.state.root.clone();
     put_on_disk(
@@ -2046,7 +2046,7 @@ fn folder_contains(world: &mut CrimeWorld, folder: String, name: String) {
 /// Every folder on the way is on disk as a folder, and none of them is
 /// expanded: the tree as it stands before anyone has walked into it.
 #[given(expr = "{string} is on disk under collapsed folders")]
-fn on_disk_under_collapsed(world: &mut CrimeWorld, path: String) {
+fn on_disk_under_collapsed(world: &mut VardeWorld, path: String) {
     let root = world.state.root.clone();
     let parts: Vec<String> = path.split('/').map(str::to_string).collect();
     let mut folder = root.clone();
@@ -2067,23 +2067,23 @@ fn on_disk_under_collapsed(world: &mut CrimeWorld, path: String) {
 }
 
 #[given(expr = "the project has no recorded tree state")]
-fn no_tree_state(world: &mut CrimeWorld) {
+fn no_tree_state(world: &mut VardeWorld) {
     world.state.expanded.clear();
 }
 
 #[given(expr = "the project state records {string} as expanded")]
-fn state_records_expanded(world: &mut CrimeWorld, folder: String) {
+fn state_records_expanded(world: &mut VardeWorld, folder: String) {
     world.startup.state_json = Some(format!("{{\"expanded\": [\"{folder}\"]}}"));
     let root = world.state.root.clone();
     let contents = world.state.contents.clone();
-    crime_starts(world);
+    varde_starts(world);
     world.state.root = root;
     world.state.contents = contents;
 }
 
 #[given(expr = "the file tree shows the collapsed folder {string}")]
 #[given(expr = "the folder {string} is collapsed")]
-fn tree_shows_collapsed(world: &mut CrimeWorld, folder: String) {
+fn tree_shows_collapsed(world: &mut VardeWorld, folder: String) {
     let root = world.state.root.clone();
     let path = abs(world, &folder);
     put_on_disk(
@@ -2100,13 +2100,13 @@ fn tree_shows_collapsed(world: &mut CrimeWorld, folder: String) {
 }
 
 #[given(expr = "the folder {string} is expanded")]
-fn folder_is_expanded(world: &mut CrimeWorld, folder: String) {
+fn folder_is_expanded(world: &mut VardeWorld, folder: String) {
     tree_shows_collapsed(world, folder.clone());
     expand(world, folder);
 }
 
 #[when(expr = "I expand {string}")]
-fn expand(world: &mut CrimeWorld, folder: String) {
+fn expand(world: &mut VardeWorld, folder: String) {
     let path = abs(world, &folder);
     let entries = world.disk.get(&path).cloned().unwrap_or_default();
     world.send(Event::Expand { path, entries });
@@ -2114,12 +2114,12 @@ fn expand(world: &mut CrimeWorld, folder: String) {
 
 #[given(expr = "I collapse the tree")]
 #[when(expr = "I collapse the tree")]
-fn collapse_the_tree(world: &mut CrimeWorld) {
+fn collapse_the_tree(world: &mut VardeWorld) {
     world.send(Event::CollapseTree);
 }
 
 #[when(expr = "the file tree is rendered")]
-fn render_tree(world: &mut CrimeWorld) {
+fn render_tree(world: &mut VardeWorld) {
     // What the edge does on startup: read the root, plus every folder that was
     // restored as expanded. Nothing else is read — the tree is lazy.
     let mut folders = vec![world.state.root.clone()];
@@ -2132,13 +2132,13 @@ fn render_tree(world: &mut CrimeWorld) {
 }
 
 #[given(expr = "git ignores {string}")]
-fn git_ignores(world: &mut CrimeWorld, name: String) {
+fn git_ignores(world: &mut VardeWorld, name: String) {
     let path = abs(world, &name);
     world.state.ignored.insert(path);
 }
 
 #[then("the file tree lists, in order:")]
-fn tree_lists_in_order(world: &mut CrimeWorld, step: &Step) {
+fn tree_lists_in_order(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -2153,7 +2153,7 @@ fn tree_lists_in_order(world: &mut CrimeWorld, step: &Step) {
     assert_eq!(actual, expected);
 }
 
-fn row_for(world: &CrimeWorld, path: &str) -> Option<tree::Row> {
+fn row_for(world: &VardeWorld, path: &str) -> Option<tree::Row> {
     let wanted = world.state.root.join(path);
     tree::rows(&world.state)
         .into_iter()
@@ -2161,7 +2161,7 @@ fn row_for(world: &CrimeWorld, path: &str) -> Option<tree::Row> {
 }
 
 #[given(expr = "the file tree shows {string}")]
-fn tree_shows_given(world: &mut CrimeWorld, path: String) {
+fn tree_shows_given(world: &mut VardeWorld, path: String) {
     let (folder, name) = path.rsplit_once('/').expect("a nested path");
     let folder = folder.to_string();
     folder_contains(world, folder.clone(), name.to_string());
@@ -2169,7 +2169,7 @@ fn tree_shows_given(world: &mut CrimeWorld, path: String) {
 }
 
 #[then(expr = "the file tree shows {string} as a folder")]
-fn tree_shows_as_folder(world: &mut CrimeWorld, path: String) {
+fn tree_shows_as_folder(world: &mut VardeWorld, path: String) {
     assert!(
         row_for(world, &path).expect("a row").is_dir,
         "{path} is listed as a file"
@@ -2177,12 +2177,12 @@ fn tree_shows_as_folder(world: &mut CrimeWorld, path: String) {
 }
 
 #[then(expr = "the file tree shows {string}")]
-fn tree_shows(world: &mut CrimeWorld, path: String) {
+fn tree_shows(world: &mut VardeWorld, path: String) {
     assert!(row_for(world, &path).is_some(), "missing {path}");
 }
 
 #[then(expr = "the file tree does not show {string}")]
-fn tree_does_not_show(world: &mut CrimeWorld, path: String) {
+fn tree_does_not_show(world: &mut VardeWorld, path: String) {
     assert!(
         row_for(world, &path).is_none(),
         "unexpectedly showing {path}"
@@ -2190,38 +2190,38 @@ fn tree_does_not_show(world: &mut CrimeWorld, path: String) {
 }
 
 #[then(expr = "{string} is expanded")]
-fn is_expanded(world: &mut CrimeWorld, folder: String) {
+fn is_expanded(world: &mut VardeWorld, folder: String) {
     assert!(world.state.expanded.contains(&abs(world, &folder)));
 }
 
 #[then(expr = "{string} is collapsed")]
-fn is_collapsed(world: &mut CrimeWorld, folder: String) {
+fn is_collapsed(world: &mut VardeWorld, folder: String) {
     assert!(!world.state.expanded.contains(&abs(world, &folder)));
 }
 
 #[then(expr = "{string} is dimmed")]
-fn is_dimmed(world: &mut CrimeWorld, path: String) {
+fn is_dimmed(world: &mut VardeWorld, path: String) {
     assert!(row_for(world, &path).expect("a row").dimmed);
 }
 
 #[then(expr = "{string} is not dimmed")]
-fn is_not_dimmed(world: &mut CrimeWorld, path: String) {
+fn is_not_dimmed(world: &mut VardeWorld, path: String) {
     assert!(!row_for(world, &path).expect("a row").dimmed);
 }
 
 #[given(expr = "{string} is created on disk")]
 #[when(expr = "{string} is created on disk")]
-fn created_on_disk(world: &mut CrimeWorld, path: String) {
+fn created_on_disk(world: &mut VardeWorld, path: String) {
     appeared_on_disk(world, &path, tree::Kind::File);
 }
 
 #[given(expr = "the folder {string} is created on disk")]
 #[when(expr = "the folder {string} is created on disk")]
-fn folder_created_on_disk(world: &mut CrimeWorld, path: String) {
+fn folder_created_on_disk(world: &mut VardeWorld, path: String) {
     appeared_on_disk(world, &path, tree::Kind::Folder);
 }
 
-fn appeared_on_disk(world: &mut CrimeWorld, path: &str, kind: tree::Kind) {
+fn appeared_on_disk(world: &mut VardeWorld, path: &str, kind: tree::Kind) {
     let (folder, name) = path.rsplit_once('/').expect("a nested path");
     let folder = abs(world, folder);
     put_on_disk(
@@ -2237,7 +2237,7 @@ fn appeared_on_disk(world: &mut CrimeWorld, path: &str, kind: tree::Kind) {
 }
 
 #[when(expr = "{string} is deleted on disk")]
-fn deleted_on_disk(world: &mut CrimeWorld, path: String) {
+fn deleted_on_disk(world: &mut VardeWorld, path: String) {
     let absolute = abs(world, &path);
     world.send(Event::FilesRemoved(vec![absolute]));
 }
@@ -2249,7 +2249,7 @@ fn deleted_on_disk(world: &mut CrimeWorld, path: String) {
 /// one) is decided once and not a second time here. A step that built a
 /// `Buffer` and inserted it was a step that could go green over a default
 /// `main.rs` never applies.
-fn open_buffer(world: &mut CrimeWorld, path: &str, contents: &str) -> PathBuf {
+fn open_buffer(world: &mut VardeWorld, path: &str, contents: &str) -> PathBuf {
     let absolute = abs(world, path);
     // What was opened is what is on disk: a jump reads the file again and the
     // buffer follows it, so a disk the scenario never described would read as
@@ -2268,7 +2268,7 @@ fn open_buffer(world: &mut CrimeWorld, path: &str, contents: &str) -> PathBuf {
 }
 
 #[given(expr = "{string} is open in the editor with no unsaved edits")]
-fn open_clean(world: &mut CrimeWorld, path: String) {
+fn open_clean(world: &mut VardeWorld, path: String) {
     // Whatever the scenario put on disk, and a stand-in for a file it never
     // described — the same rule "I open" follows.
     let contents = world
@@ -2283,12 +2283,12 @@ fn open_clean(world: &mut CrimeWorld, path: String) {
 /// what the buffer holds: a stand-in line would leave every one of them
 /// asserting the stand-in as well as what was typed.
 #[given(expr = "{string} is open in the editor holding nothing")]
-fn open_empty(world: &mut CrimeWorld, path: String) {
+fn open_empty(world: &mut VardeWorld, path: String) {
     open_buffer(world, &path, "");
 }
 
 #[given(expr = "{string} is open in the editor with unsaved edits")]
-fn open_dirty(world: &mut CrimeWorld, path: String) {
+fn open_dirty(world: &mut VardeWorld, path: String) {
     let absolute = open_buffer(world, &path, "on disk");
     world
         .state
@@ -2302,7 +2302,7 @@ fn open_dirty(world: &mut CrimeWorld, path: String) {
 /// holding text the disk does not is a stale one, and follows the disk the
 /// moment anything reads the file again.
 #[given(expr = "{string} is open in the editor with unsaved edits holding:")]
-fn open_dirty_holding(world: &mut CrimeWorld, path: String, step: &Step) {
+fn open_dirty_holding(world: &mut VardeWorld, path: String, step: &Step) {
     let draft = step
         .docstring()
         .expect("docstring")
@@ -2326,7 +2326,7 @@ fn open_dirty_holding(world: &mut CrimeWorld, path: String, step: &Step) {
 
 #[given(expr = "{string} is changed on disk")]
 #[when(expr = "{string} is changed on disk")]
-fn changed_on_disk(world: &mut CrimeWorld, path: String) {
+fn changed_on_disk(world: &mut VardeWorld, path: String) {
     let absolute = abs(world, &path);
     world.send(Event::FileChanged {
         path: absolute,
@@ -2335,12 +2335,12 @@ fn changed_on_disk(world: &mut CrimeWorld, path: String) {
 }
 
 #[when(expr = "I reload {string}")]
-fn reload(world: &mut CrimeWorld, path: String) {
+fn reload(world: &mut VardeWorld, path: String) {
     let absolute = abs(world, &path);
     world.send(Event::Reload(absolute));
 }
 
-fn buffer<'a>(world: &'a CrimeWorld, path: &str) -> &'a Buffer {
+fn buffer<'a>(world: &'a VardeWorld, path: &str) -> &'a Buffer {
     world
         .state
         .buffers
@@ -2349,24 +2349,24 @@ fn buffer<'a>(world: &'a CrimeWorld, path: &str) -> &'a Buffer {
 }
 
 #[then(expr = "the editor shows the version on disk")]
-fn shows_disk_version(world: &mut CrimeWorld) {
+fn shows_disk_version(world: &mut VardeWorld) {
     let buffer = world.state.buffers.values().next().expect("a buffer");
     assert_eq!(buffer.shown(), buffer.disk);
 }
 
 #[then(expr = "the editor still shows the unsaved edits")]
-fn shows_unsaved(world: &mut CrimeWorld) {
+fn shows_unsaved(world: &mut VardeWorld) {
     let buffer = world.state.buffers.values().next().expect("a buffer");
     assert_eq!(buffer.shown(), "my edits");
 }
 
 #[then(expr = "{string} is flagged as changed on disk")]
-fn is_flagged(world: &mut CrimeWorld, path: String) {
+fn is_flagged(world: &mut VardeWorld, path: String) {
     assert!(buffer(world, &path).changed_on_disk);
 }
 
 #[then(expr = "{string} is not flagged as changed on disk")]
-fn is_not_flagged(world: &mut CrimeWorld, path: String) {
+fn is_not_flagged(world: &mut VardeWorld, path: String) {
     assert!(!buffer(world, &path).changed_on_disk);
 }
 
@@ -2375,10 +2375,10 @@ fn is_not_flagged(world: &mut CrimeWorld, path: String) {
 /// that set is a file nothing will ever report a change to. Folders, never
 /// files — a watch on a file is lost when a tool replaces it by rename.
 #[then(expr = "{string} is followed for changes")]
-fn is_followed(world: &mut CrimeWorld, path: String) {
+fn is_followed(world: &mut VardeWorld, path: String) {
     let absolute = abs(world, &path);
     let parent = absolute.parent().expect("a parent").to_path_buf();
-    let watched = crime::watched_folders(&world.state);
+    let watched = varde::watched_folders(&world.state);
     assert!(
         watched.contains(&parent),
         "{parent:?} is watched by nobody, so {path} cannot follow its file; watching {watched:?}"
@@ -2386,7 +2386,7 @@ fn is_followed(world: &mut CrimeWorld, path: String) {
 }
 
 #[then(expr = "the notice is {string}")]
-fn notice_is(world: &mut CrimeWorld, expected: String) {
+fn notice_is(world: &mut VardeWorld, expected: String) {
     assert!(
         world.notices.contains(&expected),
         "notices: {:?}",
@@ -2397,12 +2397,12 @@ fn notice_is(world: &mut CrimeWorld, expected: String) {
 /// Through the real key router, so the picker's own bindings are what the
 /// scenario exercises rather than the event they happen to send.
 #[when(expr = "I resolve the divergence with {string}")]
-fn resolve_divergence(world: &mut CrimeWorld, key: String) {
+fn resolve_divergence(world: &mut VardeWorld, key: String) {
     route_key(world, &key, 0);
 }
 
 #[then(expr = "the unsaved edits were written to {string}")]
-fn unsaved_edits_written(world: &mut CrimeWorld, path: String) {
+fn unsaved_edits_written(world: &mut VardeWorld, path: String) {
     let absolute = abs(world, &path);
     assert_eq!(
         world.files.get(&absolute).map(String::as_str),
@@ -2414,7 +2414,7 @@ fn unsaved_edits_written(world: &mut CrimeWorld, path: String) {
 /// disk for the CLI to read, so a prompt that only names the file asks the AI
 /// to merge against something it cannot see.
 #[then(expr = "the prompt carries both versions")]
-fn prompt_carries_both_versions(world: &mut CrimeWorld) {
+fn prompt_carries_both_versions(world: &mut VardeWorld) {
     let sent = ai_sends(world);
     let prompt = sent.first().expect("a prompt");
     assert!(prompt.contains("my edits"), "no buffer version:\n{prompt}");
@@ -2427,47 +2427,47 @@ fn prompt_carries_both_versions(world: &mut CrimeWorld) {
 #[given(expr = "the terminal input is empty")]
 #[then(expr = "the terminal input is empty")]
 #[then(expr = "the terminal is offered nothing")]
-fn terminal_input_empty(world: &mut CrimeWorld) {
+fn terminal_input_empty(world: &mut VardeWorld) {
     assert_eq!(world.terminal_input, "");
 }
 
 #[given(expr = "the terminal input is {string}")]
-fn terminal_input_is(world: &mut CrimeWorld, text: String) {
+fn terminal_input_is(world: &mut VardeWorld, text: String) {
     world.terminal_input = text;
 }
 
 #[given(expr = "the file tree shows the folder {string}")]
-fn tree_shows_folder(world: &mut CrimeWorld, path: String) {
+fn tree_shows_folder(world: &mut VardeWorld, path: String) {
     world.target = Some(Target::Folder(PathBuf::from(path)));
 }
 
 #[given(expr = "the file tree shows the file {string}")]
-fn tree_shows_file(world: &mut CrimeWorld, path: String) {
+fn tree_shows_file(world: &mut VardeWorld, path: String) {
     world.target = Some(Target::File(PathBuf::from(path)));
 }
 
 #[given(expr = "I trigger {string} on that folder")]
 #[when(expr = "I trigger {string} on that folder")]
 #[when(expr = "I trigger {string} on that file")]
-fn trigger_on_target(world: &mut CrimeWorld, action: String) {
+fn trigger_on_target(world: &mut VardeWorld, action: String) {
     world.trigger(&action);
 }
 
 #[when(expr = "I trigger {string}")]
-fn trigger_bare(world: &mut CrimeWorld, action: String) {
+fn trigger_bare(world: &mut VardeWorld, action: String) {
     world.trigger(&action);
 }
 
 #[given(expr = "I enter the name {string}")]
 #[when(expr = "I enter the name {string}")]
-fn enter_name(world: &mut CrimeWorld, name: String) {
+fn enter_name(world: &mut VardeWorld, name: String) {
     world.send(Event::EnterName(name));
 }
 
 #[given(expr = "I press {string}")]
 #[when(expr = "I press {string}")]
 #[given(expr = "I pressed {string}")]
-fn press(world: &mut CrimeWorld, key: String) {
+fn press(world: &mut VardeWorld, key: String) {
     world.send(match key.as_str() {
         "Escape" => Event::Cancel,
         "Ctrl+Space" => Event::FallbackBinding,
@@ -2486,16 +2486,16 @@ fn press(world: &mut CrimeWorld, key: String) {
 }
 
 /// A real keypress, routed the way the edge routes it: converted losslessly and
-/// handed to the key router, which decides whether CRIME claims it or the
+/// handed to the key router, which decides whether Varde claims it or the
 /// child receives it. `I press` above sends the event a key stands for; this
 /// sends the key.
 #[when(expr = "I press the key {string}")]
-fn press_the_key(world: &mut CrimeWorld, key: String) {
+fn press_the_key(world: &mut VardeWorld, key: String) {
     route_key(world, &key, 0);
 }
 
 #[when(expr = "I press the key {string} and press it again after {int} ms")]
-fn press_the_key_twice(world: &mut CrimeWorld, key: String, gap: u64) {
+fn press_the_key_twice(world: &mut VardeWorld, key: String, gap: u64) {
     route_key(world, &key, 0);
     route_key(world, &key, gap);
 }
@@ -2547,7 +2547,7 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
     })
 }
 
-fn route_key(world: &mut CrimeWorld, key: &str, at_ms: u64) {
+fn route_key(world: &mut VardeWorld, key: &str, at_ms: u64) {
     let event = named_key(key).unwrap_or_else(|| plain_key(parse_char(key)));
     let mut drafts = std::mem::take(&mut world.drafts);
     for event in keys::on_key_event(&world.state, &mut drafts, event, at_ms) {
@@ -2574,32 +2574,32 @@ fn parse_view(name: &str) -> View {
 }
 
 #[given(expr = "the terminal reports modifier key events")]
-fn reports_modifiers(world: &mut CrimeWorld) {
+fn reports_modifiers(world: &mut VardeWorld) {
     world.state.reports_modifiers = true;
 }
 
 #[given(expr = "the terminal does not report modifier key events")]
-fn no_modifiers(world: &mut CrimeWorld) {
+fn no_modifiers(world: &mut VardeWorld) {
     world.state.reports_modifiers = false;
 }
 
 #[given(expr = "the double-tap window is {int} ms")]
-fn double_tap_window(world: &mut CrimeWorld, ms: u64) {
+fn double_tap_window(world: &mut VardeWorld, ms: u64) {
     world.state.double_tap_ms = ms;
 }
 
 #[given(expr = "the current view is {word}")]
-fn current_view_is(world: &mut CrimeWorld, view: String) {
+fn current_view_is(world: &mut VardeWorld, view: String) {
     world.state.view = parse_view(&view);
 }
 
 #[then(expr = "the current view is {word}")]
-fn current_view_should_be(world: &mut CrimeWorld, view: String) {
+fn current_view_should_be(world: &mut VardeWorld, view: String) {
     assert_eq!(world.state.view, parse_view(&view));
 }
 
 #[when(expr = "I press Ctrl and press Ctrl again after {int} ms")]
-fn double_tap(world: &mut CrimeWorld, gap: u64) {
+fn double_tap(world: &mut VardeWorld, gap: u64) {
     world.send(Event::Tapped {
         key: Tap::Ctrl,
         at_ms: 0,
@@ -2611,7 +2611,7 @@ fn double_tap(world: &mut CrimeWorld, gap: u64) {
 }
 
 #[when(expr = "I press Ctrl")]
-fn single_ctrl(world: &mut CrimeWorld) {
+fn single_ctrl(world: &mut VardeWorld) {
     world.send(Event::Tapped {
         key: Tap::Ctrl,
         at_ms: 0,
@@ -2619,22 +2619,22 @@ fn single_ctrl(world: &mut CrimeWorld) {
 }
 
 #[given(expr = "the view palette is shown")]
-fn open_palette(world: &mut CrimeWorld) {
+fn open_palette(world: &mut VardeWorld) {
     world.state.modal = Modal::Palette;
 }
 
 #[then(expr = "the view palette is shown")]
-fn palette_should_be_shown(world: &mut CrimeWorld) {
+fn palette_should_be_shown(world: &mut VardeWorld) {
     assert_eq!(world.state.modal, Modal::Palette);
 }
 
 #[then(expr = "the view palette is not shown")]
-fn palette_should_not_be_shown(world: &mut CrimeWorld) {
+fn palette_should_not_be_shown(world: &mut VardeWorld) {
     assert_ne!(world.state.modal, Modal::Palette);
 }
 
 #[then("the view palette offers:")]
-fn palette_offers(_world: &mut CrimeWorld, step: &Step) {
+fn palette_offers(_world: &mut VardeWorld, step: &Step) {
     let expected: Vec<(String, char, String)> = step
         .table()
         .expect("table")
@@ -2668,61 +2668,61 @@ fn palette_key(entry: &str) -> char {
 /// The palette is up for any click on one of its rows — the mouse hit-tests
 /// them only while it is — so a step that reaches for an entry opens it first
 /// rather than relying on the core to.
-fn pick_palette_entry(world: &mut CrimeWorld, entry: &str) {
+fn pick_palette_entry(world: &mut VardeWorld, entry: &str) {
     world.state.modal = Modal::Palette;
     world.send(Event::ClickPaletteEntry(palette_key(entry)));
 }
 
 #[when(expr = "I click the palette entry {string}")]
-fn click_palette_entry(world: &mut CrimeWorld, entry: String) {
+fn click_palette_entry(world: &mut VardeWorld, entry: String) {
     pick_palette_entry(world, &entry);
 }
 
 #[then(expr = "the view was not re-rendered")]
-fn not_rerendered(world: &mut CrimeWorld) {
+fn not_rerendered(world: &mut VardeWorld) {
     assert!(world.rendered.is_empty(), "rendered: {:?}", world.rendered);
 }
 
 #[given(expr = "the terminal is in {string}")]
-fn terminal_is_in(_world: &mut CrimeWorld, _dir: String) {
+fn terminal_is_in(_world: &mut VardeWorld, _dir: String) {
     // Intentionally inert: R3.3 makes injected paths absolute precisely so the
     // shell's current directory cannot change the outcome.
 }
 
 #[then(expr = "the terminal input is {string}")]
-fn terminal_input_should_be(world: &mut CrimeWorld, expected: String) {
+fn terminal_input_should_be(world: &mut VardeWorld, expected: String) {
     assert_eq!(world.terminal_input, expected);
 }
 
 #[then("the terminal input is:")]
-fn terminal_input_should_be_docstring(world: &mut CrimeWorld, step: &Step) {
+fn terminal_input_should_be_docstring(world: &mut VardeWorld, step: &Step) {
     let expected = step.docstring().expect("docstring").trim();
     assert_eq!(world.terminal_input, expected);
 }
 
 #[then(expr = "no command has been executed")]
-fn nothing_executed(world: &mut CrimeWorld) {
+fn nothing_executed(world: &mut VardeWorld) {
     assert!(world.executed.is_empty(), "executed: {:?}", world.executed);
 }
 
 #[then(expr = "the terminal has executed {string}")]
-fn terminal_executed(world: &mut CrimeWorld, expected: String) {
+fn terminal_executed(world: &mut VardeWorld, expected: String) {
     assert_eq!(world.executed, vec![expected]);
 }
 
 #[then(expr = "the name box is shown")]
-fn name_box_shown(world: &mut CrimeWorld) {
+fn name_box_shown(world: &mut VardeWorld) {
     assert!(matches!(world.state.modal, Modal::NameBox { .. }));
 }
 
 #[then(expr = "the name box is not shown")]
-fn name_box_not_shown(world: &mut CrimeWorld) {
+fn name_box_not_shown(world: &mut VardeWorld) {
     assert_eq!(world.state.modal, Modal::None);
 }
 
 #[tokio::main]
 async fn main() {
-    CrimeWorld::cucumber()
+    VardeWorld::cucumber()
         // Undefined and skipped steps must fail the build. Without this, a
         // mistyped step name reads as a pass. See AGENTS.md.
         .fail_on_skipped()
@@ -2731,22 +2731,22 @@ async fn main() {
 }
 
 #[when(expr = "I change the terminal input to {string}")]
-fn change_terminal_input(world: &mut CrimeWorld, text: String) {
+fn change_terminal_input(world: &mut VardeWorld, text: String) {
     world.terminal_input = text;
 }
 
 #[then(expr = "{string} is open in the editor")]
-fn is_open(world: &mut CrimeWorld, path: String) {
+fn is_open(world: &mut VardeWorld, path: String) {
     assert_eq!(world.opened, vec![PathBuf::from(path)]);
 }
 
 #[then(expr = "no file was opened in the editor")]
-fn nothing_opened(world: &mut CrimeWorld) {
+fn nothing_opened(world: &mut VardeWorld) {
     assert!(world.opened.is_empty(), "opened: {:?}", world.opened);
 }
 
 #[when(expr = "the AI creates {string}")]
-fn ai_creates(world: &mut CrimeWorld, path: String) {
+fn ai_creates(world: &mut VardeWorld, path: String) {
     world.send(Event::FilesAppeared(vec![(
         PathBuf::from(path),
         tree::Kind::File,
@@ -2754,7 +2754,7 @@ fn ai_creates(world: &mut CrimeWorld, path: String) {
 }
 
 #[when(expr = "{int} files appear on disk from a branch checkout")]
-fn checkout_files(world: &mut CrimeWorld, count: usize) {
+fn checkout_files(world: &mut VardeWorld, count: usize) {
     let paths = (0..count)
         .map(|n| {
             (
@@ -2769,22 +2769,22 @@ fn checkout_files(world: &mut CrimeWorld, count: usize) {
 // ---- F7: review view ----
 
 #[given(expr = "the project is a git repository")]
-fn is_git_repo(world: &mut CrimeWorld) {
+fn is_git_repo(world: &mut VardeWorld) {
     world.state.repo = Some(Vec::new());
 }
 
 #[given(expr = "the project is not a git repository")]
-fn not_git_repo(world: &mut CrimeWorld) {
+fn not_git_repo(world: &mut VardeWorld) {
     world.state.repo = None;
 }
 
 #[given(expr = "the working tree has no changes")]
-fn no_changes(world: &mut CrimeWorld) {
+fn no_changes(world: &mut VardeWorld) {
     world.state.repo = Some(Vec::new());
 }
 
 #[given("the working tree contains:")]
-fn working_tree_contains(world: &mut CrimeWorld, step: &Step) {
+fn working_tree_contains(world: &mut VardeWorld, step: &Step) {
     let files: Vec<GitFile> = step
         .table()
         .expect("table")
@@ -2819,12 +2819,12 @@ fn working_tree_contains(world: &mut CrimeWorld, step: &Step) {
 #[given(expr = "I open Review view")]
 #[given(expr = "I opened Review view")]
 #[when(expr = "I open Review view")]
-fn open_review_view(world: &mut CrimeWorld) {
+fn open_review_view(world: &mut VardeWorld) {
     world.send(Event::OpenReviewView);
 }
 
 #[given("the review list shows:")]
-fn review_list_seed(world: &mut CrimeWorld, step: &Step) {
+fn review_list_seed(world: &mut VardeWorld, step: &Step) {
     let files = step
         .table()
         .expect("table")
@@ -2839,7 +2839,7 @@ fn review_list_seed(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then("the review list shows:")]
-fn review_list_shows(world: &mut CrimeWorld, step: &Step) {
+fn review_list_shows(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -2855,19 +2855,19 @@ fn review_list_shows(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "the review list is empty")]
-fn review_list_empty(world: &mut CrimeWorld) {
+fn review_list_empty(world: &mut VardeWorld) {
     assert!(review::list(&world.state).is_empty());
 }
 
 #[then(expr = "the review view state is {string}")]
-fn review_view_state(world: &mut CrimeWorld, expected: String) {
+fn review_view_state(world: &mut VardeWorld, expected: String) {
     assert_eq!(review::view_state(&world.state), expected);
 }
 
 // ---- F8: submitting ----
 
 #[given(expr = "{string} is changed at revision {string}")]
-fn changed_at_revision(world: &mut CrimeWorld, path: String, _revision: String) {
+fn changed_at_revision(world: &mut VardeWorld, path: String, _revision: String) {
     world.state.repo = Some(vec![GitFile {
         path,
         status: GitStatus::Modified,
@@ -2885,7 +2885,7 @@ fn blob_oid(content: &str) -> String {
 
 #[given(expr = "{string} is shown in the diff holding:")]
 #[when(expr = "{string} is shown in the diff holding:")]
-fn shown_in_diff_holding(world: &mut CrimeWorld, file: String, step: &Step) {
+fn shown_in_diff_holding(world: &mut VardeWorld, file: String, step: &Step) {
     let content = step
         .docstring()
         .expect("docstring")
@@ -2911,7 +2911,7 @@ fn shown_in_diff_holding(world: &mut CrimeWorld, file: String, step: &Step) {
 }
 
 #[given(expr = "{string} is shown in the diff as deleted, having held:")]
-fn shown_in_diff_as_deleted(world: &mut CrimeWorld, file: String, step: &Step) {
+fn shown_in_diff_as_deleted(world: &mut VardeWorld, file: String, step: &Step) {
     let content = step
         .docstring()
         .expect("docstring")
@@ -2937,7 +2937,7 @@ fn shown_in_diff_as_deleted(world: &mut CrimeWorld, file: String, step: &Step) {
 }
 
 #[given(expr = "an AI session is running in the AI pane")]
-fn ai_running(world: &mut CrimeWorld) {
+fn ai_running(world: &mut VardeWorld) {
     world.ai_pane = true;
     world.tell_core();
     // A session that is up has printed something; a just-started one has not,
@@ -2946,32 +2946,32 @@ fn ai_running(world: &mut CrimeWorld) {
 }
 
 #[given(expr = "no AI session is running in the AI pane")]
-fn ai_not_running(world: &mut CrimeWorld) {
+fn ai_not_running(world: &mut VardeWorld) {
     world.ai_pane = false;
     world.tell_core();
 }
 
 #[given(expr = "the AI CLI cannot be started")]
 #[when(expr = "the AI CLI cannot be started")]
-fn ai_cannot_start(world: &mut CrimeWorld) {
+fn ai_cannot_start(world: &mut VardeWorld) {
     world.ai_spawn_fails = true;
 }
 
 #[given(expr = "the AI CLI can be started")]
 #[when(expr = "the AI CLI can be started")]
-fn ai_can_start(world: &mut CrimeWorld) {
+fn ai_can_start(world: &mut VardeWorld) {
     world.ai_spawn_fails = false;
 }
 
 #[given(expr = "the effective setting {string} is {string}")]
-fn set_effective_setting(world: &mut CrimeWorld, key: String, value: String) {
+fn set_effective_setting(world: &mut VardeWorld, key: String, value: String) {
     assert_eq!(key, "ai.command");
     world.state.ai_command = value;
 }
 
 #[given(expr = "I drag the gutter of {string} from line {int} to line {int}")]
 #[when(expr = "I drag the gutter of {string} from line {int} to line {int}")]
-fn drag_gutter(world: &mut CrimeWorld, file: String, from_line: u32, to_line: u32) {
+fn drag_gutter(world: &mut VardeWorld, file: String, from_line: u32, to_line: u32) {
     world.send(Event::DragGutter {
         file,
         from_line,
@@ -2985,7 +2985,7 @@ fn drag_gutter(world: &mut CrimeWorld, file: String, from_line: u32, to_line: u3
 /// which letters pick a type, and which key files rather than starting a new
 /// line — is what these scenarios are about.
 #[when(expr = "I choose the type {word} and enter {string}")]
-fn choose_type(world: &mut CrimeWorld, kind: String, body: String) {
+fn choose_type(world: &mut VardeWorld, kind: String, body: String) {
     pick_comment_type(world, kind);
     type_in_comment_body(world, body);
     file_comment(world);
@@ -2993,7 +2993,7 @@ fn choose_type(world: &mut CrimeWorld, kind: String, body: String) {
 
 #[given(expr = "I pick the comment type {word}")]
 #[when(expr = "I pick the comment type {word}")]
-fn pick_comment_type(world: &mut CrimeWorld, kind: String) {
+fn pick_comment_type(world: &mut VardeWorld, kind: String) {
     let letter = match kind.as_str() {
         "ISSUE" => "i",
         "NOTE" => "n",
@@ -3006,7 +3006,7 @@ fn pick_comment_type(world: &mut CrimeWorld, kind: String) {
 
 #[given(expr = "I type {string} in the comment body")]
 #[when(expr = "I type {string} in the comment body")]
-fn type_in_comment_body(world: &mut CrimeWorld, text: String) {
+fn type_in_comment_body(world: &mut VardeWorld, text: String) {
     for key in text.chars() {
         route_key(world, &key.to_string(), 0);
     }
@@ -3014,25 +3014,25 @@ fn type_in_comment_body(world: &mut CrimeWorld, text: String) {
 
 #[given(expr = "I press {word} in the comment body")]
 #[when(expr = "I press {word} in the comment body")]
-fn press_in_comment_body(world: &mut CrimeWorld, key: String) {
+fn press_in_comment_body(world: &mut VardeWorld, key: String) {
     route_key(world, &key, 0);
 }
 
 #[given(expr = "I press the {word} arrow in the comment body")]
 #[when(expr = "I press the {word} arrow in the comment body")]
-fn arrow_in_comment_body(world: &mut CrimeWorld, direction: String) {
+fn arrow_in_comment_body(world: &mut VardeWorld, direction: String) {
     route_key(world, &direction, 0);
 }
 
 #[given(expr = "I move a word left in the comment body")]
 #[when(expr = "I move a word left in the comment body")]
-fn word_left_in_comment_body(world: &mut CrimeWorld) {
+fn word_left_in_comment_body(world: &mut VardeWorld) {
     route_key(world, "Alt+Left", 0);
 }
 
 #[given(expr = "I file the comment")]
 #[when(expr = "I file the comment")]
-fn file_comment(world: &mut CrimeWorld) {
+fn file_comment(world: &mut VardeWorld) {
     route_key(world, "Ctrl+s", 0);
 }
 
@@ -3042,7 +3042,7 @@ fn file_comment(world: &mut CrimeWorld) {
 /// since the first newline in it was read as the key that filed the comment.
 #[given("I paste into the comment body:")]
 #[when("I paste into the comment body:")]
-fn paste_into_comment_body(world: &mut CrimeWorld, step: &Step) {
+fn paste_into_comment_body(world: &mut VardeWorld, step: &Step) {
     let text = step
         .docstring()
         .expect("docstring")
@@ -3055,14 +3055,14 @@ fn paste_into_comment_body(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then("the comment body holds:")]
-fn comment_body_holds(world: &mut CrimeWorld, step: &Step) {
+fn comment_body_holds(world: &mut VardeWorld, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
     let body = world.state.comment.as_ref().expect("the box has a body");
     assert_eq!(body.shown(), expected);
 }
 
 #[then("the filed comment's body is:")]
-fn filed_comment_body(world: &mut CrimeWorld, step: &Step) {
+fn filed_comment_body(world: &mut VardeWorld, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
     let comment = world.state.comments.first().expect("a comment");
     assert_eq!(comment.body, expected);
@@ -3070,17 +3070,17 @@ fn filed_comment_body(world: &mut CrimeWorld, step: &Step) {
 
 #[given(expr = "I add an ISSUE on {string} lines {int} to {int} saying {string}")]
 #[when(expr = "I add an ISSUE on {string} lines {int} to {int} saying {string}")]
-fn add_issue(world: &mut CrimeWorld, file: String, from: u32, to: u32, body: String) {
+fn add_issue(world: &mut VardeWorld, file: String, from: u32, to: u32, body: String) {
     add_comment(world, "ISSUE", file, from, to, body);
 }
 
 #[given(expr = "I add a {word} on {string} lines {int} to {int} saying {string}")]
 #[when(expr = "I add a {word} on {string} lines {int} to {int} saying {string}")]
-fn add_typed(world: &mut CrimeWorld, kind: String, file: String, from: u32, to: u32, body: String) {
+fn add_typed(world: &mut VardeWorld, kind: String, file: String, from: u32, to: u32, body: String) {
     add_comment(world, &kind, file, from, to, body);
 }
 
-fn add_comment(world: &mut CrimeWorld, kind: &str, file: String, from: u32, to: u32, body: String) {
+fn add_comment(world: &mut VardeWorld, kind: &str, file: String, from: u32, to: u32, body: String) {
     world.send(Event::AddComment {
         file,
         from_line: from,
@@ -3092,12 +3092,12 @@ fn add_comment(world: &mut CrimeWorld, kind: &str, file: String, from: u32, to: 
 
 #[given(expr = "the review holds no comments")]
 #[then(expr = "the review holds no comments")]
-fn review_empty(world: &mut CrimeWorld) {
+fn review_empty(world: &mut VardeWorld) {
     assert!(world.state.comments.is_empty());
 }
 
 #[then("the review holds a comment:")]
-fn review_holds_comment(world: &mut CrimeWorld, step: &Step) {
+fn review_holds_comment(world: &mut VardeWorld, step: &Step) {
     let comment = world.state.comments.first().expect("a comment");
     let rows = &step.table().expect("table").rows;
     // Two shapes: a vertical list of (field, value) rows, or a header row of
@@ -3131,7 +3131,7 @@ fn review_holds_comment(world: &mut CrimeWorld, step: &Step) {
 
 #[given(expr = "I commented {string} on the current step with {string}")]
 #[when(expr = "I comment {string} on the current step with {string}")]
-fn comment_on_current_step(world: &mut CrimeWorld, kind: String, body: String) {
+fn comment_on_current_step(world: &mut VardeWorld, kind: String, body: String) {
     world.send(Event::Key('c'));
     pick_comment_type(world, kind);
     type_in_comment_body(world, body);
@@ -3142,7 +3142,7 @@ fn comment_on_current_step(world: &mut CrimeWorld, kind: String, body: String) {
 /// the comment either way, so asserting on it would pass without a single row
 /// being drawn. This asks where the row *sits* — under the line it covers.
 #[then(expr = "the code shows a comment on line {int} of {string}")]
-fn code_shows_comment_on_line(world: &mut CrimeWorld, line: u32, file: String) {
+fn code_shows_comment_on_line(world: &mut VardeWorld, line: u32, file: String) {
     assert_eq!(
         story::shown_file(&world.state),
         file,
@@ -3161,7 +3161,7 @@ fn code_shows_comment_on_line(world: &mut CrimeWorld, line: u32, file: String) {
 }
 
 #[then(expr = "the comment's revision is the blob oid of what {string} held")]
-fn comment_revision_is_blob_oid(world: &mut CrimeWorld, file: String) {
+fn comment_revision_is_blob_oid(world: &mut VardeWorld, file: String) {
     let content = world
         .diff_contents
         .get(&file)
@@ -3172,7 +3172,7 @@ fn comment_revision_is_blob_oid(world: &mut CrimeWorld, file: String) {
 }
 
 #[then(expr = "the two comments record different revisions")]
-fn two_comments_record_different_revisions(world: &mut CrimeWorld) {
+fn two_comments_record_different_revisions(world: &mut VardeWorld) {
     assert_eq!(world.state.comments.len(), 2, "expected two comments");
     assert_ne!(
         world.state.comments[0].revision,
@@ -3181,45 +3181,45 @@ fn two_comments_record_different_revisions(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the comment records no story")]
-fn comment_records_no_story(world: &mut CrimeWorld) {
+fn comment_records_no_story(world: &mut VardeWorld) {
     let comment = world.state.comments.last().expect("a comment");
     assert!(comment.story.is_none());
 }
 
 #[given(expr = "I submit the review")]
 #[when(expr = "I submit the review")]
-fn submit_review(world: &mut CrimeWorld) {
+fn submit_review(world: &mut VardeWorld) {
     world.send(Event::SubmitReview);
 }
 
 #[given(expr = "I confirm the submission")]
 #[when(expr = "I confirm the submission")]
-fn confirm_submission(world: &mut CrimeWorld) {
+fn confirm_submission(world: &mut VardeWorld) {
     world.send(Event::ConfirmSubmit);
 }
 
 #[when(expr = "I decline the submission")]
-fn decline_submission(world: &mut CrimeWorld) {
+fn decline_submission(world: &mut VardeWorld) {
     world.send(Event::Cancel);
 }
 
 #[then(expr = "the submission confirmation is shown")]
-fn confirmation_shown(world: &mut CrimeWorld) {
+fn confirmation_shown(world: &mut VardeWorld) {
     assert_eq!(world.state.modal, Modal::ConfirmSubmit);
 }
 
 #[then(expr = "the submission confirmation is not shown")]
-fn confirmation_not_shown(world: &mut CrimeWorld) {
+fn confirmation_not_shown(world: &mut VardeWorld) {
     assert_ne!(world.state.modal, Modal::ConfirmSubmit);
 }
 
 #[when(expr = "the AI session is ready for input")]
-fn ai_spoke(world: &mut CrimeWorld) {
+fn ai_spoke(world: &mut VardeWorld) {
     world.send(Event::AiSpoke);
 }
 
 #[then(expr = "the prompt reached the AI as one paste, with its line breaks intact")]
-fn prompt_as_one_paste(world: &mut CrimeWorld) {
+fn prompt_as_one_paste(world: &mut VardeWorld) {
     let sent = ai_sends(world);
     let [prompt] = sent.as_slice() else {
         panic!("expected one send, got {sent:?}")
@@ -3232,12 +3232,12 @@ fn prompt_as_one_paste(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the review verdict is {string}")]
-fn review_verdict(world: &mut CrimeWorld, expected: String) {
+fn review_verdict(world: &mut VardeWorld, expected: String) {
     assert_eq!(world.state.last_verdict.as_deref(), Some(expected.as_str()));
 }
 
 #[then(expr = "the file {string} exists")]
-fn file_exists(world: &mut CrimeWorld, path: String) {
+fn file_exists(world: &mut VardeWorld, path: String) {
     assert!(
         world.files.contains_key(&abs(world, &path)),
         "missing {path}"
@@ -3245,7 +3245,7 @@ fn file_exists(world: &mut CrimeWorld, path: String) {
 }
 
 #[then(expr = "the file {string} does not exist")]
-fn file_absent(world: &mut CrimeWorld, path: String) {
+fn file_absent(world: &mut VardeWorld, path: String) {
     assert!(
         !world.files.contains_key(&abs(world, &path)),
         "still there: {path}"
@@ -3254,7 +3254,7 @@ fn file_absent(world: &mut CrimeWorld, path: String) {
 
 /// Whatever reached the AI's child, as text. The review injection is the only
 /// thing these scenarios send it.
-fn ai_sends(world: &CrimeWorld) -> Vec<String> {
+fn ai_sends(world: &VardeWorld) -> Vec<String> {
     world
         .keys_sent
         .iter()
@@ -3264,14 +3264,14 @@ fn ai_sends(world: &CrimeWorld) -> Vec<String> {
 }
 
 #[then(expr = "the AI pane was sent a prompt containing {string}")]
-fn prompt_contains(world: &mut CrimeWorld, needle: String) {
+fn prompt_contains(world: &mut VardeWorld, needle: String) {
     let sent = ai_sends(world);
     let prompt = sent.first().expect("a prompt");
     assert!(prompt.contains(&needle), "prompt was:\n{prompt}");
 }
 
 #[then(expr = "the prompt was submitted to the AI")]
-fn prompt_submitted(world: &mut CrimeWorld) {
+fn prompt_submitted(world: &mut VardeWorld) {
     let sent = ai_sends(world);
     let [prompt] = sent.as_slice() else {
         panic!("expected one send, got {sent:?}")
@@ -3280,22 +3280,22 @@ fn prompt_submitted(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "no prompt was sent to the AI")]
-fn no_prompt(world: &mut CrimeWorld) {
+fn no_prompt(world: &mut VardeWorld) {
     assert!(ai_sends(world).is_empty(), "{:?}", world.keys_sent);
 }
 
 #[then(expr = "no new AI session was started")]
-fn no_ai_started(world: &mut CrimeWorld) {
+fn no_ai_started(world: &mut VardeWorld) {
     assert!(world.ai_spawned.is_empty());
 }
 
 #[then(expr = "an AI session was started with {string}")]
-fn ai_started_with(world: &mut CrimeWorld, command: String) {
+fn ai_started_with(world: &mut VardeWorld, command: String) {
     assert_eq!(world.ai_spawned, vec![command]);
 }
 
 #[then(expr = "the AI was started again with {string}")]
-fn ai_started_again_with(world: &mut CrimeWorld, command: String) {
+fn ai_started_again_with(world: &mut VardeWorld, command: String) {
     assert_eq!(
         world.ai_spawned.last().map(String::as_str),
         Some(command.as_str()),
@@ -3305,22 +3305,22 @@ fn ai_started_again_with(world: &mut CrimeWorld, command: String) {
 }
 
 #[then(expr = "the review is not submitted")]
-fn not_submitted(world: &mut CrimeWorld) {
+fn not_submitted(world: &mut VardeWorld) {
     assert!(world.files.is_empty() && ai_sends(world).is_empty());
 }
 
 #[then(expr = "the reviewer is told the review is empty")]
-fn told_empty(world: &mut CrimeWorld) {
+fn told_empty(world: &mut VardeWorld) {
     assert_eq!(world.notices, vec!["review-empty".to_string()]);
 }
 
 #[given(expr = "the retention limit is {int} reviews")]
-fn retention_limit(world: &mut CrimeWorld, limit: usize) {
+fn retention_limit(world: &mut VardeWorld, limit: usize) {
     world.state.retention_limit = limit;
 }
 
 #[given(expr = "{string} holds {int} reviews numbered {word} to {word}")]
-fn seed_reviews(world: &mut CrimeWorld, dir: String, _count: usize, first: String, last: String) {
+fn seed_reviews(world: &mut VardeWorld, dir: String, _count: usize, first: String, last: String) {
     let (first, last): (u32, u32) = (first.parse().unwrap(), last.parse().unwrap());
     for number in first..=last {
         // Both sides: a scenario that seeds before starting is stating what the
@@ -3334,7 +3334,7 @@ fn seed_reviews(world: &mut CrimeWorld, dir: String, _count: usize, first: Strin
 }
 
 #[then(expr = "{string} holds {int} reviews")]
-fn holds_reviews(world: &mut CrimeWorld, dir: String, expected: usize) {
+fn holds_reviews(world: &mut VardeWorld, dir: String, expected: usize) {
     let prefix = abs(world, &dir);
     let count = world
         .files
@@ -3360,22 +3360,22 @@ fn parse_pane(name: &str) -> Pane {
 }
 
 #[given(expr = "the {word} pane has focus")]
-fn pane_has_focus(world: &mut CrimeWorld, pane: String) {
+fn pane_has_focus(world: &mut VardeWorld, pane: String) {
     world.state.focus = parse_pane(&pane);
 }
 
 #[then(expr = "the {word} pane has focus")]
-fn pane_should_have_focus(world: &mut CrimeWorld, pane: String) {
+fn pane_should_have_focus(world: &mut VardeWorld, pane: String) {
     assert_eq!(world.state.focus, parse_pane(&pane));
 }
 
 #[then(expr = "the {word} pane still has focus")]
-fn pane_still_has_focus(world: &mut CrimeWorld, pane: String) {
+fn pane_still_has_focus(world: &mut VardeWorld, pane: String) {
     assert_eq!(world.state.focus, parse_pane(&pane));
 }
 
 #[when(expr = "I click in the {word} pane")]
-fn click_pane(world: &mut CrimeWorld, pane: String) {
+fn click_pane(world: &mut VardeWorld, pane: String) {
     // A click is a press and a release: the press is ours, and the release is
     // what a child that asked for mouse events gets.
     let pane = parse_pane(&pane);
@@ -3384,7 +3384,7 @@ fn click_pane(world: &mut CrimeWorld, pane: String) {
 }
 
 #[when(expr = "I click at line {int} column {int} in the editor")]
-fn click_text(world: &mut CrimeWorld, line: usize, column: usize) {
+fn click_text(world: &mut VardeWorld, line: usize, column: usize) {
     world.click(Pane::Editor, (line, column), terminput::KeyModifiers::NONE);
 }
 
@@ -3396,7 +3396,7 @@ const JUMP: terminput::KeyModifiers = terminput::KeyModifiers::CTRL;
 /// The toggle sits in the gutter, which `pointer_at` measures *past* — so the
 /// column is named here, against the same constant the renderer draws it at.
 #[when(expr = "I click the fold toggle on row {int} in the editor")]
-fn click_fold_toggle(world: &mut CrimeWorld, row: usize) {
+fn click_fold_toggle(world: &mut VardeWorld, row: usize) {
     let panes = world.panes();
     let column = panes.editor.x + 1 + layout::TOGGLE_COLUMN;
     let at = panes.editor.y + 1 + (row - 1 - world.state.editor_scroll) as u16;
@@ -3420,12 +3420,12 @@ fn click_fold_toggle(world: &mut CrimeWorld, row: usize) {
 }
 
 #[when(expr = "I click at line {int} column {int} in the editor with the jump modifier held")]
-fn jump_click_text(world: &mut CrimeWorld, line: usize, column: usize) {
+fn jump_click_text(world: &mut VardeWorld, line: usize, column: usize) {
     world.click(Pane::Editor, (line, column), JUMP);
 }
 
 #[when(expr = "I click on {string} in the {word} pane with the jump modifier held")]
-fn jump_click_text_in_pane(world: &mut CrimeWorld, text: String, pane: String) {
+fn jump_click_text_in_pane(world: &mut VardeWorld, text: String, pane: String) {
     let pane = parse_pane(&pane);
     let lines = world.pane_lines(pane);
     let index = lines
@@ -3438,23 +3438,23 @@ fn jump_click_text_in_pane(world: &mut CrimeWorld, text: String, pane: String) {
 }
 
 #[then(expr = "the browser opens {string}")]
-fn browser_opens(world: &mut CrimeWorld, url: String) {
+fn browser_opens(world: &mut VardeWorld, url: String) {
     assert_eq!(world.browser, vec![url]);
 }
 
 #[then("the browser opens nothing")]
-fn browser_opens_nothing(world: &mut CrimeWorld) {
+fn browser_opens_nothing(world: &mut VardeWorld) {
     assert!(world.browser.is_empty(), "opened: {:?}", world.browser);
 }
 
 #[given(expr = "I hold the jump modifier over line {int} column {int} in the editor")]
 #[when(expr = "I hold the jump modifier over line {int} column {int} in the editor")]
-fn hold_over_text(world: &mut CrimeWorld, line: usize, column: usize) {
+fn hold_over_text(world: &mut VardeWorld, line: usize, column: usize) {
     world.point(Pane::Editor, Some((line, column)), JUMP);
 }
 
 #[when(expr = "I point at line {int} column {int} in the editor")]
-fn point_at_text(world: &mut CrimeWorld, line: usize, column: usize) {
+fn point_at_text(world: &mut VardeWorld, line: usize, column: usize) {
     world.point(
         Pane::Editor,
         Some((line, column)),
@@ -3463,39 +3463,39 @@ fn point_at_text(world: &mut CrimeWorld, line: usize, column: usize) {
 }
 
 #[then(expr = "the editor underlines line {int} columns {int} to {int}")]
-fn underlines(world: &mut CrimeWorld, line: usize, from: usize, to: usize) {
-    assert_eq!(crime::link(&world.state), Some((line, from, to)));
+fn underlines(world: &mut VardeWorld, line: usize, from: usize, to: usize) {
+    assert_eq!(varde::link(&world.state), Some((line, from, to)));
 }
 
 #[then("the editor underlines nothing")]
-fn underlines_nothing(world: &mut CrimeWorld) {
-    assert_eq!(crime::link(&world.state), None);
+fn underlines_nothing(world: &mut VardeWorld) {
+    assert_eq!(varde::link(&world.state), None);
 }
 
 #[when(expr = "I right-click in the {word} pane")]
-fn right_click(world: &mut CrimeWorld, pane: String) {
+fn right_click(world: &mut VardeWorld, pane: String) {
     world.send(Event::RightClick(parse_pane(&pane)));
 }
 
 #[then(expr = "nothing happened")]
-fn nothing_happened(world: &mut CrimeWorld) {
+fn nothing_happened(world: &mut VardeWorld) {
     assert!(world.opened.is_empty() && world.scrolled.is_empty() && world.clipboard.is_none());
 }
 
 #[when(expr = "I click the row {string}")]
-fn click_row(world: &mut CrimeWorld, path: String) {
+fn click_row(world: &mut VardeWorld, path: String) {
     let absolute = abs(world, &path);
     world.send(Event::ClickRow(absolute));
 }
 
 #[given(expr = "the file tree shows the expanded folder {string}")]
-fn tree_shows_expanded(world: &mut CrimeWorld, folder: String) {
+fn tree_shows_expanded(world: &mut VardeWorld, folder: String) {
     folder_is_expanded(world, folder);
 }
 
 #[given(expr = "I scroll {word} with the pointer over the {word} pane")]
 #[when(expr = "I scroll {word} with the pointer over the {word} pane")]
-fn scroll_over(world: &mut CrimeWorld, direction: String, pane: String) {
+fn scroll_over(world: &mut VardeWorld, direction: String, pane: String) {
     world.send(Event::Scroll {
         pane: parse_pane(&pane),
         direction: parse_direction(&direction),
@@ -3508,7 +3508,7 @@ fn scroll_over(world: &mut CrimeWorld, direction: String, pane: String) {
 /// one notch lands — spelling each one out is the same step six times.
 #[given(expr = "I scroll {word} {int} times with the pointer over the {word} pane")]
 #[when(expr = "I scroll {word} {int} times with the pointer over the {word} pane")]
-fn scroll_over_times(world: &mut CrimeWorld, direction: String, times: usize, pane: String) {
+fn scroll_over_times(world: &mut VardeWorld, direction: String, times: usize, pane: String) {
     for _ in 0..times {
         scroll_over(world, direction.clone(), pane.clone());
     }
@@ -3516,7 +3516,7 @@ fn scroll_over_times(world: &mut CrimeWorld, direction: String, times: usize, pa
 
 #[given(expr = "I scroll {word} with the pointer over the file tree pane")]
 #[when(expr = "I scroll {word} with the pointer over the file tree pane")]
-fn scroll_over_tree(world: &mut CrimeWorld, direction: String) {
+fn scroll_over_tree(world: &mut VardeWorld, direction: String) {
     world.send(Event::Scroll {
         pane: Pane::Tree,
         direction: parse_direction(&direction),
@@ -3535,14 +3535,14 @@ fn parse_direction(name: &str) -> Direction {
 }
 
 #[then(expr = "the {word} pane scrolled {word}")]
-fn pane_scrolled(world: &mut CrimeWorld, pane: String, direction: String) {
+fn pane_scrolled(world: &mut VardeWorld, pane: String, direction: String) {
     assert!(world
         .scrolled
         .contains(&(parse_pane(&pane), parse_direction(&direction))));
 }
 
 #[then(expr = "the {word} pane did not scroll")]
-fn pane_did_not_scroll(world: &mut CrimeWorld, pane: String) {
+fn pane_did_not_scroll(world: &mut VardeWorld, pane: String) {
     let pane = parse_pane(&pane);
     assert!(!world.scrolled.iter().any(|(which, _)| *which == pane));
     // The panes the core scrolls itself leave no effect behind, so the offset
@@ -3555,7 +3555,7 @@ fn pane_did_not_scroll(world: &mut CrimeWorld, pane: String) {
 }
 
 #[given(expr = "the {word} program asked for bracketed paste")]
-fn program_asked_for_bracketed_paste(world: &mut CrimeWorld, pane: String) {
+fn program_asked_for_bracketed_paste(world: &mut VardeWorld, pane: String) {
     match parse_pane(&pane) {
         Pane::Ai => {
             world.ai_pane = true;
@@ -3567,7 +3567,7 @@ fn program_asked_for_bracketed_paste(world: &mut CrimeWorld, pane: String) {
 }
 
 #[given(expr = "the {word} program asked for {string} mouse reporting")]
-fn program_asked_for_mouse(world: &mut CrimeWorld, pane: String, encoding: String) {
+fn program_asked_for_mouse(world: &mut VardeWorld, pane: String, encoding: String) {
     let encoding = match encoding.as_str() {
         "no" => Encoding::None,
         "legacy" => Encoding::Legacy,
@@ -3588,7 +3588,7 @@ fn program_asked_for_mouse(world: &mut CrimeWorld, pane: String, encoding: Strin
 // point, and the bytes of each are pinned in the mouse router's unit tests.
 #[then(expr = "the click reached the {word} program in {string} encoding")]
 #[then(expr = "the scroll reached the {word} program in {string} encoding")]
-fn reached_in_encoding(world: &mut CrimeWorld, pane: String, encoding: String) {
+fn reached_in_encoding(world: &mut VardeWorld, pane: String, encoding: String) {
     let pane = parse_pane(&pane);
     let prefix: &[u8] = match encoding.as_str() {
         "legacy" => b"\x1b[M",
@@ -3608,7 +3608,7 @@ fn reached_in_encoding(world: &mut CrimeWorld, pane: String, encoding: String) {
 }
 
 #[then(expr = "nothing reached the {word} program")]
-fn nothing_reached(world: &mut CrimeWorld, pane: String) {
+fn nothing_reached(world: &mut VardeWorld, pane: String) {
     let pane = parse_pane(&pane);
     assert!(
         !world.keys_sent.iter().any(|(which, _)| *which == pane),
@@ -3618,21 +3618,21 @@ fn nothing_reached(world: &mut CrimeWorld, pane: String) {
 }
 
 #[given(expr = "the cursor is on line {int}")]
-fn cursor_on_line(world: &mut CrimeWorld, line: usize) {
+fn cursor_on_line(world: &mut VardeWorld, line: usize) {
     let path = world.state.current_buffer.clone().expect("an open buffer");
     world
         .state
         .buffers
         .get_mut(&path)
         .expect("an open buffer")
-        .go_to_place(crime::Place { line, column: 1 });
+        .go_to_place(varde::Place { line, column: 1 });
 }
 
 /// Where the cursor ended up, for a jump that was asked for by a row rather
 /// than typed: the buffer clamps to what it holds, so a file too short for the
 /// line would answer line 1 and this would fail rather than pass quietly.
 #[then(expr = "the cursor is on line {int}")]
-fn cursor_should_be_on_line(world: &mut CrimeWorld, line: usize) {
+fn cursor_should_be_on_line(world: &mut VardeWorld, line: usize) {
     let path = world.state.current_buffer.clone().expect("an open buffer");
     assert_eq!(
         world.state.buffers.get(&path).expect("an open buffer").line,
@@ -3643,35 +3643,35 @@ fn cursor_should_be_on_line(world: &mut CrimeWorld, line: usize) {
 // ---- Folding a block away ----
 
 #[then(expr = "the editor hides lines {int} to {int}")]
-fn hides_lines(world: &mut CrimeWorld, from: usize, to: usize) {
-    let hidden = crime::fold::hidden(&world.state);
+fn hides_lines(world: &mut VardeWorld, from: usize, to: usize) {
+    let hidden = varde::fold::hidden(&world.state);
     for line in from..=to {
         assert!(hidden.contains(&line), "line {line} is drawn: {hidden:?}");
     }
 }
 
 #[then(expr = "the editor hides no lines")]
-fn hides_no_lines(world: &mut CrimeWorld) {
-    let hidden = crime::fold::hidden(&world.state);
+fn hides_no_lines(world: &mut VardeWorld) {
+    let hidden = varde::fold::hidden(&world.state);
     assert!(hidden.is_empty(), "{hidden:?}");
 }
 
 #[then(expr = "the fold toggle on line {int} is {word}")]
-fn fold_toggle_is(world: &mut CrimeWorld, line: usize, state: String) {
-    let toggle = crime::fold::toggles(&world.state)
+fn fold_toggle_is(world: &mut VardeWorld, line: usize, state: String) {
+    let toggle = varde::fold::toggles(&world.state)
         .get(&line)
         .copied()
         .unwrap_or_else(|| panic!("line {line} carries no fold toggle"));
     let named = match toggle {
-        crime::fold::Toggle::Open => "open",
-        crime::fold::Toggle::Folded => "folded",
+        varde::fold::Toggle::Open => "open",
+        varde::fold::Toggle::Folded => "folded",
     };
     assert_eq!(named, state);
 }
 
 #[then(expr = "line {int} carries no fold toggle")]
-fn no_fold_toggle(world: &mut CrimeWorld, line: usize) {
-    let toggles = crime::fold::toggles(&world.state);
+fn no_fold_toggle(world: &mut VardeWorld, line: usize) {
+    let toggles = varde::fold::toggles(&world.state);
     assert!(!toggles.contains_key(&line), "{toggles:?}");
 }
 
@@ -3680,22 +3680,22 @@ fn no_fold_toggle(world: &mut CrimeWorld, line: usize) {
 /// surface draws, which is what a scenario about framing has to say.
 #[then(expr = "the editor view starts at line {int}")]
 #[then(expr = "the editor view starts at row {int}")]
-fn editor_view_starts(world: &mut CrimeWorld, first: usize) {
+fn editor_view_starts(world: &mut VardeWorld, first: usize) {
     assert_eq!(world.state.editor_scroll + 1, first);
 }
 
 #[then(expr = "the editor view starts at column {int}")]
-fn editor_view_starts_at_column(world: &mut CrimeWorld, column: usize) {
+fn editor_view_starts_at_column(world: &mut VardeWorld, column: usize) {
     assert_eq!(world.state.editor_hscroll + 1, column);
 }
 
 #[then(expr = "the file tree view starts at row {int}")]
-fn tree_view_starts(world: &mut CrimeWorld, row: usize) {
+fn tree_view_starts(world: &mut VardeWorld, row: usize) {
     assert_eq!(world.state.tree_scroll + 1, row);
 }
 
 #[given(expr = "the screen is {int} rows by {int} columns")]
-fn screen_is(world: &mut CrimeWorld, rows: u16, columns: u16) {
+fn screen_is(world: &mut VardeWorld, rows: u16, columns: u16) {
     world.send(Event::Resized {
         width: columns,
         height: rows,
@@ -3703,19 +3703,19 @@ fn screen_is(world: &mut CrimeWorld, rows: u16, columns: u16) {
 }
 
 #[given(expr = "{string} is open in the editor with {int} lines")]
-fn open_with_lines(world: &mut CrimeWorld, path: String, lines: usize) {
+fn open_with_lines(world: &mut VardeWorld, path: String, lines: usize) {
     let contents: Vec<String> = (1..=lines).map(|line| format!("line {line}")).collect();
     open_buffer(world, &path, &contents.join("\n"));
 }
 
 #[given(expr = "{string} is open in the editor with {int} lines of {int} characters")]
-fn open_with_wide_lines(world: &mut CrimeWorld, path: String, lines: usize, width: usize) {
+fn open_with_wide_lines(world: &mut VardeWorld, path: String, lines: usize, width: usize) {
     let contents: Vec<String> = (0..lines).map(|_| "x".repeat(width)).collect();
     open_buffer(world, &path, &contents.join("\n"));
 }
 
 #[given(expr = "{string} is open in the editor holding a {int}-character line above a short one")]
-fn open_with_long_line(world: &mut CrimeWorld, path: String, width: usize) {
+fn open_with_long_line(world: &mut VardeWorld, path: String, width: usize) {
     let contents = format!("{}\nend", "x".repeat(width));
     open_buffer(world, &path, &contents);
 }
@@ -3724,13 +3724,13 @@ fn open_with_long_line(world: &mut CrimeWorld, path: String, width: usize) {
 /// the case the sideways gesture exists for, since a fence is laid out one row
 /// per source line and never wrapped (ADR 0007).
 #[given(expr = "{string} is open in the editor holding a code fence {int} characters wide")]
-fn open_with_wide_fence(world: &mut CrimeWorld, path: String, width: usize) {
+fn open_with_wide_fence(world: &mut VardeWorld, path: String, width: usize) {
     let contents = format!("```rust\n{}\n```\n", "x".repeat(width));
     open_buffer(world, &path, &contents);
 }
 
 #[given(expr = "the workspace folder holds {int} files")]
-fn folder_holds(world: &mut CrimeWorld, count: usize) {
+fn folder_holds(world: &mut VardeWorld, count: usize) {
     let entries = (1..=count)
         .map(|index| Entry {
             name: format!("file-{index:02}.js"),
@@ -3742,19 +3742,19 @@ fn folder_holds(world: &mut CrimeWorld, count: usize) {
 }
 
 #[given(expr = "the divider between the file tree and the editor is at column {int}")]
-fn divider_at(world: &mut CrimeWorld, column: u32) {
+fn divider_at(world: &mut VardeWorld, column: u32) {
     world.state.tree_divider = column;
 }
 
 #[given(expr = "I drag that divider to column {int}")]
 #[when(expr = "I drag that divider to column {int}")]
-fn drag_divider(world: &mut CrimeWorld, column: u32) {
+fn drag_divider(world: &mut VardeWorld, column: u32) {
     world.send(Event::DragDivider(column));
 }
 
 #[given(expr = "I drag the AI pane's edge to column {int}")]
 #[when(expr = "I drag the AI pane's edge to column {int}")]
-fn drag_ai_edge(world: &mut CrimeWorld, column: u16) {
+fn drag_ai_edge(world: &mut VardeWorld, column: u16) {
     let panes = world.panes();
     let mut pointer = mouse::Pointer::default();
     for (kind, at) in [
@@ -3787,9 +3787,9 @@ fn drag_ai_edge(world: &mut CrimeWorld, column: u16) {
 /// The row is 1-based, the way a scenario counts rows of a pane.
 #[given(expr = "I drag the minimap to row {int}")]
 #[when(expr = "I drag the minimap to row {int}")]
-fn drag_minimap(world: &mut CrimeWorld, row: u16) {
+fn drag_minimap(world: &mut VardeWorld, row: u16) {
     let panes = world.panes();
-    let strip = crime::minimap::strip(&world.state, panes.editor);
+    let strip = varde::minimap::strip(&world.state, panes.editor);
     let mut pointer = mouse::Pointer::default();
     for kind in [mouse::Kind::LeftDown, mouse::Kind::LeftDrag] {
         let outcome = mouse::on_mouse(
@@ -3814,15 +3814,15 @@ fn drag_minimap(world: &mut CrimeWorld, row: u16) {
 /// rather than the field, the same way the drag step does.
 #[given(expr = "I move the pointer onto the minimap")]
 #[when(expr = "I move the pointer onto the minimap")]
-fn pointer_onto_minimap(world: &mut CrimeWorld) {
+fn pointer_onto_minimap(world: &mut VardeWorld) {
     let panes = world.panes();
-    let strip = crime::minimap::strip(&world.state, panes.editor);
+    let strip = varde::minimap::strip(&world.state, panes.editor);
     move_pointer(world, strip.x, strip.y);
 }
 
 #[given(expr = "I move the pointer into the editor's text")]
 #[when(expr = "I move the pointer into the editor's text")]
-fn pointer_into_text(world: &mut CrimeWorld) {
+fn pointer_into_text(world: &mut VardeWorld) {
     let panes = world.panes();
     move_pointer(
         world,
@@ -3831,7 +3831,7 @@ fn pointer_into_text(world: &mut CrimeWorld) {
     );
 }
 
-fn move_pointer(world: &mut CrimeWorld, column: u16, row: u16) {
+fn move_pointer(world: &mut VardeWorld, column: u16, row: u16) {
     let panes = world.panes();
     let outcome = mouse::on_mouse(
         &world.state,
@@ -3850,18 +3850,18 @@ fn move_pointer(world: &mut CrimeWorld, column: u16, row: u16) {
 }
 
 #[then(expr = "the minimap slider is lit")]
-fn minimap_slider_lit(world: &mut CrimeWorld) {
-    assert!(crime::minimap::lit(&world.state));
+fn minimap_slider_lit(world: &mut VardeWorld) {
+    assert!(varde::minimap::lit(&world.state));
 }
 
 #[then(expr = "the minimap slider is quiet")]
-fn minimap_slider_quiet(world: &mut CrimeWorld) {
-    assert!(!crime::minimap::lit(&world.state));
+fn minimap_slider_quiet(world: &mut VardeWorld) {
+    assert!(!varde::minimap::lit(&world.state));
 }
 
 #[then(expr = "the minimap mirrors lines {int} through {int}")]
-fn minimap_mirrors(world: &mut CrimeWorld, first: usize, last: usize) {
-    assert_eq!(crime::minimap::mirrored(&world.state), Some((first, last)));
+fn minimap_mirrors(world: &mut VardeWorld, first: usize, last: usize) {
+    assert_eq!(varde::minimap::mirrored(&world.state), Some((first, last)));
 }
 
 /// A scenario about the editor's own geometry says this rather than carrying
@@ -3872,31 +3872,31 @@ fn minimap_mirrors(world: &mut CrimeWorld, first: usize, last: usize) {
 /// Apart from the `Then` below on purpose — one step that set the flag and then
 /// asserted it would be an assertion that cannot fail.
 #[given(expr = "the minimap is turned off")]
-fn minimap_turned_off(world: &mut CrimeWorld) {
+fn minimap_turned_off(world: &mut VardeWorld) {
     world.state.minimap = false;
 }
 
 #[then(expr = "the minimap is hidden")]
-fn minimap_hidden(world: &mut CrimeWorld) {
-    assert_eq!(crime::minimap::mirrored(&world.state), None);
-    assert_eq!(crime::minimap::width(&world.state), 0);
+fn minimap_hidden(world: &mut VardeWorld) {
+    assert_eq!(varde::minimap::mirrored(&world.state), None);
+    assert_eq!(varde::minimap::width(&world.state), 0);
 }
 
 /// The columns the clamp lets a line of text reach — what the mirror costs,
 /// measured where it is paid.
 #[then(expr = "the editor shows {int} columns of text")]
-fn editor_text_columns(world: &mut CrimeWorld, columns: usize) {
-    assert_eq!(crime::fits(&world.state).2, columns);
+fn editor_text_columns(world: &mut VardeWorld, columns: usize) {
+    assert_eq!(varde::fits(&world.state).2, columns);
 }
 
 #[then(expr = "the AI pane is {int} columns wide")]
-fn ai_pane_width(world: &mut CrimeWorld, columns: u16) {
+fn ai_pane_width(world: &mut VardeWorld, columns: u16) {
     assert_eq!(world.panes().ai.width, columns);
 }
 
 #[given(expr = "I make the AI pane tall from the command line")]
 #[when(expr = "I make the AI pane tall from the command line")]
-fn make_ai_pane_tall(world: &mut CrimeWorld) {
+fn make_ai_pane_tall(world: &mut VardeWorld) {
     world.send(Event::ToggleTallAi);
 }
 
@@ -3905,113 +3905,113 @@ fn make_ai_pane_tall(world: &mut CrimeWorld) {
 /// What the edge tells: how many shells it holds, after a spawn or an exit.
 #[given(expr = "the terminal holds {int} shell(s)")]
 #[when(expr = "the terminal holds {int} shell(s)")]
-fn terminal_holds(world: &mut CrimeWorld, shells: usize) {
-    world.state.terminals.resize(shells, crime::Shell::Idle);
+fn terminal_holds(world: &mut VardeWorld, shells: usize) {
+    world.state.terminals.resize(shells, varde::Shell::Idle);
 }
 
 #[given(expr = "terminal {int} is running a process")]
-fn terminal_busy(world: &mut CrimeWorld, split: usize) {
-    world.state.terminals[split - 1] = crime::Shell::Busy;
+fn terminal_busy(world: &mut VardeWorld, split: usize) {
+    world.state.terminals[split - 1] = varde::Shell::Busy;
 }
 
 #[when(expr = "terminal {int} prints its prompt")]
-fn terminal_spoke(world: &mut CrimeWorld, split: usize) {
+fn terminal_spoke(world: &mut VardeWorld, split: usize) {
     world.send(Event::ShellSpoke(split - 1));
 }
 
 #[given(expr = "I split the terminal from the command line")]
 #[when(expr = "I split the terminal from the command line")]
-fn split_terminal(world: &mut CrimeWorld) {
+fn split_terminal(world: &mut VardeWorld) {
     world.send(Event::SplitTerminal);
 }
 
 #[given(expr = "terminal {int} has focus")]
-fn focus_split(world: &mut CrimeWorld, split: usize) {
+fn focus_split(world: &mut VardeWorld, split: usize) {
     world.send(Event::FocusSplit(split - 1));
 }
 
 #[then(expr = "a shell is asked for beside terminal {int}")]
-fn shell_asked_beside(world: &mut CrimeWorld, split: usize) {
+fn shell_asked_beside(world: &mut VardeWorld, split: usize) {
     assert_eq!(world.splits, vec![split - 1]);
 }
 
 #[then(expr = "terminal {int} has the keyboard")]
-fn split_has_keyboard(world: &mut CrimeWorld, split: usize) {
+fn split_has_keyboard(world: &mut VardeWorld, split: usize) {
     assert_eq!(world.state.focus, Pane::Terminal);
     assert_eq!(world.state.split(), split - 1);
 }
 
 #[then(expr = "the AI pane spans the whole height")]
-fn ai_pane_is_tall(world: &mut CrimeWorld) {
+fn ai_pane_is_tall(world: &mut VardeWorld) {
     let panes = world.panes();
     assert_eq!(panes.ai.y, 0);
     assert_eq!(panes.ai.bottom(), panes.terminal.bottom());
 }
 
 #[then(expr = "the AI pane stops above the terminal")]
-fn ai_pane_is_beside(world: &mut CrimeWorld) {
+fn ai_pane_is_beside(world: &mut VardeWorld) {
     assert_eq!(world.panes().ai.bottom(), world.panes().terminal.y);
 }
 
 #[then(expr = "the terminal pane ends where the AI pane starts")]
-fn terminal_ends_at_the_ai_pane(world: &mut CrimeWorld) {
+fn terminal_ends_at_the_ai_pane(world: &mut VardeWorld) {
     let panes = world.panes();
     assert_eq!(panes.terminal.right(), panes.ai.x);
 }
 
 #[then(expr = "the terminal pane spans the whole width")]
-fn terminal_spans_the_width(world: &mut CrimeWorld) {
+fn terminal_spans_the_width(world: &mut VardeWorld) {
     let panes = world.panes();
     assert_eq!(panes.terminal.right(), panes.ai.right());
 }
 
 #[then(expr = "the divider between the file tree and the editor is at column {int}")]
-fn divider_should_be_at(world: &mut CrimeWorld, column: u32) {
+fn divider_should_be_at(world: &mut VardeWorld, column: u32) {
     assert_eq!(world.state.tree_divider, column);
 }
 
 #[given(expr = "{string} is open in the editor")]
-fn open_buffer_plain(world: &mut CrimeWorld, path: String) {
+fn open_buffer_plain(world: &mut VardeWorld, path: String) {
     open_clean(world, path);
 }
 
 #[given(expr = "I copy the selection")]
 #[when(expr = "I copy the selection")]
-fn copy_selection(world: &mut CrimeWorld) {
+fn copy_selection(world: &mut VardeWorld) {
     world.send(Event::Copy);
 }
 
 /// Something else already put text there — another application, or an earlier
 /// copy — which is what a paste reads.
 #[given(expr = "the clipboard holds {string}")]
-fn clipboard_seeded(world: &mut CrimeWorld, text: String) {
+fn clipboard_seeded(world: &mut VardeWorld, text: String) {
     world.clipboard = Some(text);
 }
 
 #[then(expr = "the clipboard holds {string}")]
-fn clipboard_holds(world: &mut CrimeWorld, text: String) {
+fn clipboard_holds(world: &mut VardeWorld, text: String) {
     assert_eq!(world.clipboard.as_deref(), Some(text.as_str()));
 }
 
 #[then(expr = "the file tree pane has focus")]
-fn tree_pane_has_focus(world: &mut CrimeWorld) {
+fn tree_pane_has_focus(world: &mut VardeWorld) {
     assert_eq!(world.state.focus, Pane::Tree);
 }
 
 #[given(expr = "the file tree pane has focus")]
-fn give_tree_pane_focus(world: &mut CrimeWorld) {
+fn give_tree_pane_focus(world: &mut VardeWorld) {
     world.state.focus = Pane::Tree;
 }
 
 // ---- F11 / F12: keyboard and row actions ----
 
 #[when(expr = "I type {string}")]
-fn type_text(world: &mut CrimeWorld, text: String) {
+fn type_text(world: &mut VardeWorld, text: String) {
     world.send(Event::Bytes(text.into_bytes()));
 }
 
 #[when(expr = "I paste {string}")]
-fn paste_text(world: &mut CrimeWorld, text: String) {
+fn paste_text(world: &mut VardeWorld, text: String) {
     world.send(Event::Pasted(
         text.replace("\\n", "\n").replace("\\e", "\x1b"),
     ));
@@ -4024,7 +4024,7 @@ fn paste_text(world: &mut CrimeWorld, text: String) {
 /// the keys then did.
 #[given(expr = "I paste {string} into the editor")]
 #[when(expr = "I paste {string} into the editor")]
-fn paste_into_editor(world: &mut CrimeWorld, text: String) {
+fn paste_into_editor(world: &mut VardeWorld, text: String) {
     match keys::on_paste(&world.state, &world.drafts, text.replace("\\n", "\n")) {
         keys::Pasted::ToBuffer(event) => world.send(event),
         _ => panic!("the buffer did not take the paste"),
@@ -4035,7 +4035,7 @@ fn paste_into_editor(world: &mut CrimeWorld, text: String) {
 /// keystroke replay included, since a paste that reaches the buffer as keys is
 /// what the scenario is about rather than a step failure.
 #[when("I paste what was copied into the editor")]
-fn paste_what_was_copied(world: &mut CrimeWorld) {
+fn paste_what_was_copied(world: &mut VardeWorld) {
     let text = world
         .clipboard
         .clone()
@@ -4056,7 +4056,7 @@ fn paste_what_was_copied(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the terminal received {string}")]
-fn terminal_received(world: &mut CrimeWorld, text: String) {
+fn terminal_received(world: &mut VardeWorld, text: String) {
     assert_eq!(
         world.keys_sent,
         vec![(Pane::Terminal, text.into_bytes())],
@@ -4068,7 +4068,7 @@ fn terminal_received(world: &mut CrimeWorld, text: String) {
 /// The way out of a hosted pane is free only if the child still gets the key,
 /// so the count and the pane are both the assertion.
 #[then(expr = "the terminal received the escape twice")]
-fn terminal_received_two_escapes(world: &mut CrimeWorld) {
+fn terminal_received_two_escapes(world: &mut VardeWorld) {
     assert_eq!(
         world.keys_sent,
         vec![(Pane::Terminal, vec![0x1b]), (Pane::Terminal, vec![0x1b])],
@@ -4078,7 +4078,7 @@ fn terminal_received_two_escapes(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the terminal received nothing")]
-fn terminal_received_nothing(world: &mut CrimeWorld) {
+fn terminal_received_nothing(world: &mut VardeWorld) {
     assert!(
         world.keys_sent.is_empty(),
         "keys sent: {:?}",
@@ -4087,22 +4087,22 @@ fn terminal_received_nothing(world: &mut CrimeWorld) {
 }
 
 #[given(expr = "no row is selected in the tree")]
-fn nothing_selected(world: &mut CrimeWorld) {
+fn nothing_selected(world: &mut VardeWorld) {
     world.state.tree_selection = None;
 }
 
 #[given(expr = "the tree selection is {string}")]
-fn selection_is(world: &mut CrimeWorld, path: String) {
+fn selection_is(world: &mut VardeWorld, path: String) {
     world.state.tree_selection = Some(abs(world, &path));
 }
 
 #[then(expr = "the tree selection is {string}")]
-fn selection_should_be(world: &mut CrimeWorld, path: String) {
+fn selection_should_be(world: &mut VardeWorld, path: String) {
     assert_eq!(world.state.tree_selection, Some(abs(world, &path)));
 }
 
 #[then("the row actions offered are:")]
-fn row_actions_offered(world: &mut CrimeWorld, step: &Step) {
+fn row_actions_offered(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -4119,13 +4119,13 @@ fn row_actions_offered(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "the row {string} offers no actions")]
-fn row_offers_nothing(world: &mut CrimeWorld, path: String) {
+fn row_offers_nothing(world: &mut VardeWorld, path: String) {
     let path = abs(world, &path);
     assert!(tree::row_actions(&world.state, &path).is_empty());
 }
 
 #[when(expr = "I click the {string} action on {string}")]
-fn click_row_action(world: &mut CrimeWorld, action: String, _row: String) {
+fn click_row_action(world: &mut VardeWorld, action: String, _row: String) {
     let action: &'static str = match action.as_str() {
         "new-file" => "new-file",
         "new-directory" => "new-directory",
@@ -4142,7 +4142,7 @@ fn click_row_action(world: &mut CrimeWorld, action: String, _row: String) {
 
 /// What HEAD holds for the file, as the edge would have told the core.
 #[given(expr = "the last commit holds {string} as:")]
-fn commit_holds(world: &mut CrimeWorld, path: String, step: &Step) {
+fn commit_holds(world: &mut VardeWorld, path: String, step: &Step) {
     let contents = step
         .docstring()
         .expect("docstring")
@@ -4153,31 +4153,31 @@ fn commit_holds(world: &mut CrimeWorld, path: String, step: &Step) {
 }
 
 #[then(expr = "lines {string} are marked as changed")]
-fn lines_marked_changed(world: &mut CrimeWorld, lines: String) {
+fn lines_marked_changed(world: &mut VardeWorld, lines: String) {
     let expected: Vec<usize> = lines
         .split(", ")
         .map(|line| line.parse().expect("a line"))
         .collect();
-    assert_eq!(crime::changed_lines(&world.state), expected);
+    assert_eq!(varde::changed_lines(&world.state), expected);
 }
 
 #[then("no line is marked as changed")]
-fn no_line_marked_changed(world: &mut CrimeWorld) {
-    assert!(crime::changed_lines(&world.state).is_empty());
+fn no_line_marked_changed(world: &mut VardeWorld) {
+    assert!(varde::changed_lines(&world.state).is_empty());
 }
 
 /// The Authorship the edge read off the commit, one row per line of the file *as the
 /// commit holds it* — the same shape and the same key as the commit's text
 /// above, because the core is told both on the same poll and never reads git.
 #[given(expr = "the last commit authored {string} as:")]
-fn commit_authored(world: &mut CrimeWorld, path: String, step: &Step) {
+fn commit_authored(world: &mut VardeWorld, path: String, step: &Step) {
     let authors = step
         .table()
         .expect("table")
         .rows
         .iter()
         .skip(1)
-        .map(|row| crime::authorship::Authored {
+        .map(|row| varde::authorship::Authored {
             author: row[1].clone(),
             date: row[2].clone(),
         })
@@ -4187,32 +4187,32 @@ fn commit_authored(world: &mut CrimeWorld, path: String, step: &Step) {
 }
 
 #[then(expr = "the editor pane reports the line as authored by {string} on {string}")]
-fn line_authored_by(world: &mut CrimeWorld, author: String, date: String) {
+fn line_authored_by(world: &mut VardeWorld, author: String, date: String) {
     assert_eq!(
-        crime::authorship::at_cursor(&world.state),
-        Some(crime::authorship::Authorship::Committed(
-            crime::authorship::Authored { author, date }
+        varde::authorship::at_cursor(&world.state),
+        Some(varde::authorship::Authorship::Committed(
+            varde::authorship::Authored { author, date }
         ))
     );
 }
 
 #[then(expr = "the editor pane reports the line as {string}")]
-fn line_authorship_is(world: &mut CrimeWorld, state: String) {
-    let reported = match crime::authorship::at_cursor(&world.state) {
-        Some(crime::authorship::Authorship::NotCommittedYet) => "not-committed-yet",
-        Some(crime::authorship::Authorship::Committed(_)) => "committed",
+fn line_authorship_is(world: &mut VardeWorld, state: String) {
+    let reported = match varde::authorship::at_cursor(&world.state) {
+        Some(varde::authorship::Authorship::NotCommittedYet) => "not-committed-yet",
+        Some(varde::authorship::Authorship::Committed(_)) => "committed",
         None => "no-authorship",
     };
     assert_eq!(reported, state);
 }
 
 #[then(expr = "the editor pane reports no authorship")]
-fn no_authorship(world: &mut CrimeWorld) {
-    assert_eq!(crime::authorship::at_cursor(&world.state), None);
+fn no_authorship(world: &mut VardeWorld) {
+    assert_eq!(varde::authorship::at_cursor(&world.state), None);
 }
 
 #[given(expr = "{string} is open in the editor holding:")]
-fn open_holding(world: &mut CrimeWorld, path: String, step: &Step) {
+fn open_holding(world: &mut VardeWorld, path: String, step: &Step) {
     let contents = step
         .docstring()
         .expect("docstring")
@@ -4221,7 +4221,7 @@ fn open_holding(world: &mut CrimeWorld, path: String, step: &Step) {
     open_buffer(world, &path, &contents);
 }
 
-fn current_buffer(world: &CrimeWorld) -> &Buffer {
+fn current_buffer(world: &VardeWorld) -> &Buffer {
     let path = world
         .state
         .current_buffer
@@ -4230,7 +4230,7 @@ fn current_buffer(world: &CrimeWorld) -> &Buffer {
     world.state.buffers.get(path).expect("the buffer")
 }
 
-fn current_buffer_mut(world: &mut CrimeWorld) -> &mut Buffer {
+fn current_buffer_mut(world: &mut VardeWorld) -> &mut Buffer {
     let path = world
         .state
         .current_buffer
@@ -4240,7 +4240,7 @@ fn current_buffer_mut(world: &mut CrimeWorld) -> &mut Buffer {
 }
 
 #[given(expr = "the editor mode is {word}")]
-fn set_mode(world: &mut CrimeWorld, mode: String) {
+fn set_mode(world: &mut VardeWorld, mode: String) {
     match mode.as_str() {
         "insert" => world.send(Event::EditorKey('i')),
         "normal" => world.send(Event::EditorEscape),
@@ -4249,13 +4249,13 @@ fn set_mode(world: &mut CrimeWorld, mode: String) {
 }
 
 #[then(expr = "the editor mode is {word}")]
-fn mode_should_be(world: &mut CrimeWorld, mode: String) {
+fn mode_should_be(world: &mut VardeWorld, mode: String) {
     assert_eq!(current_buffer(world).mode.as_str(), mode);
 }
 
 #[given(expr = "I press {string} in the editor")]
 #[when(expr = "I press {string} in the editor")]
-fn press_in_editor(world: &mut CrimeWorld, keys: String) {
+fn press_in_editor(world: &mut VardeWorld, keys: String) {
     // A key with a name rather than a spelling goes through the real router,
     // because what Escape, Enter and the arrows mean depends on what is on
     // screen: a candidate list claims them and the buffer answers them
@@ -4274,7 +4274,7 @@ fn press_in_editor(world: &mut CrimeWorld, keys: String) {
 /// twelve identical lines would bury it.
 #[given(expr = "I press {string} in the editor {int} times")]
 #[when(expr = "I press {string} in the editor {int} times")]
-fn press_in_editor_times(world: &mut CrimeWorld, keys: String, times: usize) {
+fn press_in_editor_times(world: &mut VardeWorld, keys: String, times: usize) {
     for _ in 0..times {
         press_in_editor(world, keys.clone());
     }
@@ -4282,14 +4282,14 @@ fn press_in_editor_times(world: &mut CrimeWorld, keys: String, times: usize) {
 
 #[given(expr = "I type {string} in the editor")]
 #[when(expr = "I type {string} in the editor")]
-fn type_in_editor(world: &mut CrimeWorld, text: String) {
+fn type_in_editor(world: &mut VardeWorld, text: String) {
     for key in text.chars() {
         world.send(Event::EditorKey(key));
     }
 }
 
 #[then("the buffer holds:")]
-fn buffer_holds(world: &mut CrimeWorld, step: &Step) {
+fn buffer_holds(world: &mut VardeWorld, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
     assert_eq!(current_buffer(world).shown(), expected);
 }
@@ -4297,24 +4297,24 @@ fn buffer_holds(world: &mut CrimeWorld, step: &Step) {
 /// `is_dirty` is the assertion that distinguishes refusing an edit from doing
 /// it: a buffer a refused key left alone never grew a draft.
 #[then(expr = "the buffer is unchanged")]
-fn buffer_unchanged(world: &mut CrimeWorld) {
+fn buffer_unchanged(world: &mut VardeWorld) {
     assert!(!current_buffer(world).is_dirty(), "buffer was edited");
 }
 
 #[then(expr = "the cursor is at line {int} column {int}")]
-fn cursor_at(world: &mut CrimeWorld, line: usize, column: usize) {
+fn cursor_at(world: &mut VardeWorld, line: usize, column: usize) {
     let buffer = current_buffer(world);
     assert_eq!((buffer.line, buffer.column), (line, column));
 }
 
 #[given(expr = "the cursor is at line {int} column {int}")]
 #[when(expr = "the cursor is at line {int} column {int}")]
-fn place_cursor_at(world: &mut CrimeWorld, line: usize, column: usize) {
+fn place_cursor_at(world: &mut VardeWorld, line: usize, column: usize) {
     current_buffer_mut(world).go_to_place(Place { line, column });
 }
 
 #[then(expr = "the word under the cursor is marked at:")]
-fn word_marked_at(world: &mut CrimeWorld, step: &Step) {
+fn word_marked_at(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<Place> = step
         .table()
         .expect("table")
@@ -4326,16 +4326,16 @@ fn word_marked_at(world: &mut CrimeWorld, step: &Step) {
             column: row[1].parse().expect("a column"),
         })
         .collect();
-    assert_eq!(crime::word_occurrences(&world.state), expected);
+    assert_eq!(varde::word_occurrences(&world.state), expected);
 }
 
 #[then(expr = "no word is marked")]
-fn no_word_marked(world: &mut CrimeWorld) {
-    assert_eq!(crime::word_occurrences(&world.state), Vec::new());
+fn no_word_marked(world: &mut VardeWorld) {
+    assert_eq!(varde::word_occurrences(&world.state), Vec::new());
 }
 
 #[then(expr = "{string} has unsaved edits")]
-fn has_unsaved(world: &mut CrimeWorld, path: String) {
+fn has_unsaved(world: &mut VardeWorld, path: String) {
     let absolute = abs(world, &path);
     assert!(world
         .state
@@ -4346,7 +4346,7 @@ fn has_unsaved(world: &mut CrimeWorld, path: String) {
 }
 
 #[then(expr = "{string} has no unsaved edits")]
-fn has_no_unsaved(world: &mut CrimeWorld, path: String) {
+fn has_no_unsaved(world: &mut VardeWorld, path: String) {
     // A file with no buffer open trivially has no unsaved edits, which is the
     // case when a read-only diff is what is on screen.
     let absolute = abs(world, &path);
@@ -4358,17 +4358,17 @@ fn has_no_unsaved(world: &mut CrimeWorld, path: String) {
 
 #[given(expr = "I write the buffer")]
 #[when(expr = "I write the buffer")]
-fn write_buffer(world: &mut CrimeWorld) {
+fn write_buffer(world: &mut VardeWorld) {
     world.send(Event::WriteBuffer);
 }
 
 #[when(expr = "I reload the buffer")]
-fn reload_buffer(world: &mut CrimeWorld) {
+fn reload_buffer(world: &mut VardeWorld) {
     world.send(Event::ReloadBuffer);
 }
 
 #[then(expr = "{string} was written with:")]
-fn written_with(world: &mut CrimeWorld, path: String, step: &Step) {
+fn written_with(world: &mut VardeWorld, path: String, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
     let written = world.files.get(&abs(world, &path)).expect("a written file");
     assert_eq!(written, expected);
@@ -4377,7 +4377,7 @@ fn written_with(world: &mut CrimeWorld, path: String, step: &Step) {
 // ---- F14: highlighting ----
 
 #[given(expr = "{string} contains:")]
-fn file_contains(world: &mut CrimeWorld, path: String, step: &Step) {
+fn file_contains(world: &mut VardeWorld, path: String, step: &Step) {
     let contents = step
         .docstring()
         .expect("docstring")
@@ -4387,13 +4387,13 @@ fn file_contains(world: &mut CrimeWorld, path: String, step: &Step) {
 }
 
 #[when(expr = "{string} is highlighted")]
-fn highlight_file(world: &mut CrimeWorld, path: String) {
+fn highlight_file(world: &mut VardeWorld, path: String) {
     let source = world.files.get(&abs(world, &path)).expect("file").clone();
-    world.highlighted = crime::highlight::highlight(&path, &source);
+    world.highlighted = varde::highlight::highlight(&path, &source);
     world.highlighted_source = source;
 }
 
-fn kind_of(world: &CrimeWorld, needle: &str) -> crime::highlight::Kind {
+fn kind_of(world: &VardeWorld, needle: &str) -> varde::highlight::Kind {
     world
         .highlighted
         .iter()
@@ -4404,80 +4404,80 @@ fn kind_of(world: &CrimeWorld, needle: &str) -> crime::highlight::Kind {
 }
 
 #[then(expr = "{string} is a keyword")]
-fn is_keyword(world: &mut CrimeWorld, text: String) {
-    assert_eq!(kind_of(world, &text), crime::highlight::Kind::Keyword);
+fn is_keyword(world: &mut VardeWorld, text: String) {
+    assert_eq!(kind_of(world, &text), varde::highlight::Kind::Keyword);
 }
 
 #[then(expr = "{string} is an operator")]
-fn is_operator(world: &mut CrimeWorld, text: String) {
-    assert_eq!(kind_of(world, &text), crime::highlight::Kind::Operator);
+fn is_operator(world: &mut VardeWorld, text: String) {
+    assert_eq!(kind_of(world, &text), varde::highlight::Kind::Operator);
 }
 
 #[then(expr = "{string} is a string")]
-fn is_string(world: &mut CrimeWorld, text: String) {
-    assert_eq!(kind_of(world, &text), crime::highlight::Kind::String);
+fn is_string(world: &mut VardeWorld, text: String) {
+    assert_eq!(kind_of(world, &text), varde::highlight::Kind::String);
 }
 
 #[then(expr = "{string} is a comment")]
-fn is_comment(world: &mut CrimeWorld, text: String) {
-    assert_eq!(kind_of(world, &text), crime::highlight::Kind::Comment);
+fn is_comment(world: &mut VardeWorld, text: String) {
+    assert_eq!(kind_of(world, &text), varde::highlight::Kind::Comment);
 }
 
 #[then(expr = "{string} is a function")]
-fn is_function(world: &mut CrimeWorld, text: String) {
-    assert_eq!(kind_of(world, &text), crime::highlight::Kind::Function);
+fn is_function(world: &mut VardeWorld, text: String) {
+    assert_eq!(kind_of(world, &text), varde::highlight::Kind::Function);
 }
 
 #[then(expr = "{string} is a type")]
-fn is_type(world: &mut CrimeWorld, text: String) {
-    assert_eq!(kind_of(world, &text), crime::highlight::Kind::Type);
+fn is_type(world: &mut VardeWorld, text: String) {
+    assert_eq!(kind_of(world, &text), varde::highlight::Kind::Type);
 }
 
 #[then(expr = "{string} is a number")]
-fn is_number(world: &mut CrimeWorld, text: String) {
-    assert_eq!(kind_of(world, &text), crime::highlight::Kind::Number);
+fn is_number(world: &mut VardeWorld, text: String) {
+    assert_eq!(kind_of(world, &text), varde::highlight::Kind::Number);
 }
 
 #[then(expr = "{string} is a constant")]
-fn is_constant(world: &mut CrimeWorld, text: String) {
-    assert_eq!(kind_of(world, &text), crime::highlight::Kind::Constant);
+fn is_constant(world: &mut VardeWorld, text: String) {
+    assert_eq!(kind_of(world, &text), varde::highlight::Kind::Constant);
 }
 
 #[then(expr = "{string} is a property")]
-fn is_property(world: &mut CrimeWorld, text: String) {
-    assert_eq!(kind_of(world, &text), crime::highlight::Kind::Property);
+fn is_property(world: &mut VardeWorld, text: String) {
+    assert_eq!(kind_of(world, &text), varde::highlight::Kind::Property);
 }
 
 #[then(expr = "{string} is an attribute")]
-fn is_attribute(world: &mut CrimeWorld, text: String) {
-    assert_eq!(kind_of(world, &text), crime::highlight::Kind::Attribute);
+fn is_attribute(world: &mut VardeWorld, text: String) {
+    assert_eq!(kind_of(world, &text), varde::highlight::Kind::Attribute);
 }
 
 #[then(expr = "{string} is punctuation")]
-fn is_punctuation(world: &mut CrimeWorld, text: String) {
-    assert_eq!(kind_of(world, &text), crime::highlight::Kind::Punctuation);
+fn is_punctuation(world: &mut VardeWorld, text: String) {
+    assert_eq!(kind_of(world, &text), varde::highlight::Kind::Punctuation);
 }
 
 #[then(expr = "{string} is markup")]
-fn is_markup(world: &mut CrimeWorld, text: String) {
-    assert_eq!(kind_of(world, &text), crime::highlight::Kind::Markup);
+fn is_markup(world: &mut VardeWorld, text: String) {
+    assert_eq!(kind_of(world, &text), varde::highlight::Kind::Markup);
 }
 
 #[then(expr = "{string} is invalid")]
-fn is_invalid(world: &mut CrimeWorld, text: String) {
-    assert_eq!(kind_of(world, &text), crime::highlight::Kind::Invalid);
+fn is_invalid(world: &mut VardeWorld, text: String) {
+    assert_eq!(kind_of(world, &text), varde::highlight::Kind::Invalid);
 }
 
 #[then(expr = "every token is plain text")]
-fn all_plain(world: &mut CrimeWorld) {
+fn all_plain(world: &mut VardeWorld) {
     assert!(world
         .highlighted
         .iter()
         .flatten()
-        .all(|token| token.kind == crime::highlight::Kind::Plain));
+        .all(|token| token.kind == varde::highlight::Kind::Plain));
 }
 
-/// A unified diff of two texts at CRIME's pinned options, built the way the
+/// A unified diff of two texts at Varde's pinned options, built the way the
 /// edge builds one — `git2` over the two buffers, the same origins kept and
 /// the same trailing whitespace trimmed. A scenario that hand-wrote its rows
 /// would be asserting against its own idea of a diff.
@@ -4518,7 +4518,7 @@ fn unified(name: &str, old: &str, new: &str) -> Vec<DiffLine> {
 /// scenario never said HEAD held has no old side at all, which is the case a
 /// removed row cannot be coloured from.
 #[given(expr = "the diff for {string} is shown against HEAD")]
-fn show_diff_against_head(world: &mut CrimeWorld, file: String) {
+fn show_diff_against_head(world: &mut VardeWorld, file: String) {
     let full = world.state.root.join(&file);
     let old = world.held.get(&full).cloned();
     let new = world.files.get(&full).cloned().unwrap_or_default();
@@ -4529,8 +4529,8 @@ fn show_diff_against_head(world: &mut CrimeWorld, file: String) {
         .into_owned();
     let lines = unified(&name, old.as_deref().unwrap_or_default(), &new);
     world.diff_sides = (
-        crime::highlight::highlight(&name, &new),
-        old.map(|text| crime::highlight::highlight(&name, &text))
+        varde::highlight::highlight(&name, &new),
+        old.map(|text| varde::highlight::highlight(&name, &text))
             .unwrap_or_default(),
     );
     let revision = blob_oid(&new);
@@ -4543,7 +4543,7 @@ fn show_diff_against_head(world: &mut CrimeWorld, file: String) {
 }
 
 #[when(expr = "diff row {int} is highlighted")]
-fn diff_row_highlighted(world: &mut CrimeWorld, row: usize) {
+fn diff_row_highlighted(world: &mut VardeWorld, row: usize) {
     let diff = world.state.diff.clone().expect("a diff on screen");
     let tokens = review::diff_tokens(&diff, &world.diff_sides.0, &world.diff_sides.1);
     world.highlighted = tokens[row - 1]
@@ -4553,7 +4553,7 @@ fn diff_row_highlighted(world: &mut CrimeWorld, row: usize) {
 }
 
 #[then(expr = "the diff row carries no tokens of its own")]
-fn diff_row_uncoloured(world: &mut CrimeWorld) {
+fn diff_row_uncoloured(world: &mut VardeWorld) {
     assert!(
         world.highlighted.is_empty(),
         "{:?} was coloured from somewhere",
@@ -4562,7 +4562,7 @@ fn diff_row_uncoloured(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the highlighted tokens reassemble to the original line")]
-fn tokens_reassemble(world: &mut CrimeWorld) {
+fn tokens_reassemble(world: &mut VardeWorld) {
     let joined = world
         .highlighted
         .iter()
@@ -4573,7 +4573,7 @@ fn tokens_reassemble(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the selected lines are {int} to {int}")]
-fn selected_lines(world: &mut CrimeWorld, from: usize, to: usize) {
+fn selected_lines(world: &mut VardeWorld, from: usize, to: usize) {
     assert_eq!(current_buffer(world).selected_lines(), Some((from, to)));
 }
 
@@ -4581,50 +4581,50 @@ fn selected_lines(world: &mut CrimeWorld, from: usize, to: usize) {
 
 #[given(expr = "I quit")]
 #[when(expr = "I quit")]
-fn quit(world: &mut CrimeWorld) {
+fn quit(world: &mut VardeWorld) {
     world.send(Event::Quit);
 }
 
 #[when(expr = "I force quit")]
-fn force_quit(world: &mut CrimeWorld) {
+fn force_quit(world: &mut VardeWorld) {
     world.send(Event::QuitForce);
 }
 
-#[then(expr = "CRIME exits")]
-fn crime_exits(world: &mut CrimeWorld) {
+#[then(expr = "Varde exits")]
+fn varde_exits(world: &mut VardeWorld) {
     assert!(world.exited);
 }
 
-#[then(expr = "CRIME is still running")]
-fn crime_still_running(world: &mut CrimeWorld) {
+#[then(expr = "Varde is still running")]
+fn varde_still_running(world: &mut VardeWorld) {
     assert!(!world.exited);
 }
 
 #[then(expr = "the project state was saved")]
-fn state_saved(world: &mut CrimeWorld) {
+fn state_saved(world: &mut VardeWorld) {
     assert!(world.startup.state_json.is_some());
 }
 
 #[then(expr = "the reviewer is told there are unsaved changes")]
-fn told_unsaved(world: &mut CrimeWorld) {
+fn told_unsaved(world: &mut VardeWorld) {
     assert!(world.notices.contains(&"unsaved-changes".to_string()));
 }
 
 // ---- F16: selection and clipboard ----
 
 #[given(expr = "a system clipboard is available")]
-fn clipboard_available(world: &mut CrimeWorld) {
+fn clipboard_available(world: &mut VardeWorld) {
     world.state.system_clipboard = true;
 }
 
 #[given(expr = "no system clipboard is available")]
-fn clipboard_unavailable(world: &mut CrimeWorld) {
+fn clipboard_unavailable(world: &mut VardeWorld) {
     world.state.system_clipboard = false;
 }
 
 #[given("the terminal shows:")]
 #[when("the terminal shows:")]
-fn terminal_shows(world: &mut CrimeWorld, step: &Step) {
+fn terminal_shows(world: &mut VardeWorld, step: &Step) {
     world.screen = step
         .docstring()
         .expect("docstring")
@@ -4636,7 +4636,7 @@ fn terminal_shows(world: &mut CrimeWorld, step: &Step) {
 
 #[given("the AI session shows:")]
 #[when("the AI session shows:")]
-fn ai_session_shows(world: &mut CrimeWorld, step: &Step) {
+fn ai_session_shows(world: &mut VardeWorld, step: &Step) {
     world.ai_screen = step
         .docstring()
         .expect("docstring")
@@ -4648,7 +4648,7 @@ fn ai_session_shows(world: &mut CrimeWorld, step: &Step) {
 
 #[given(expr = "I drag across {string} in the {word} pane")]
 #[when(expr = "I drag across {string} in the {word} pane")]
-fn drag_in_pane(world: &mut CrimeWorld, text: String, pane: String) {
+fn drag_in_pane(world: &mut VardeWorld, text: String, pane: String) {
     let pane = parse_pane(&pane);
     let lines = world.pane_lines(pane);
     let index = lines
@@ -4664,7 +4664,7 @@ fn drag_in_pane(world: &mut CrimeWorld, text: String, pane: String) {
 #[given(expr = "I drag in the {word} pane from line {int} column {int} to line {int} column {int}")]
 #[when(expr = "I drag in the {word} pane from line {int} column {int} to line {int} column {int}")]
 fn drag_span(
-    world: &mut CrimeWorld,
+    world: &mut VardeWorld,
     pane: String,
     from_line: usize,
     from_column: usize,
@@ -4681,17 +4681,17 @@ fn drag_span(
 // Spelled out because `{word}` is one word and the tree's name is two — the
 // same reason "the file tree pane has focus" has a step of its own above.
 #[when(expr = "I press at line {int} column {int} in the file tree pane")]
-fn press_at_in_tree(world: &mut CrimeWorld, line: usize, column: usize) {
+fn press_at_in_tree(world: &mut VardeWorld, line: usize, column: usize) {
     press_at(world, line, column, "file tree".to_string());
 }
 
 #[when(expr = "I drag past the {word} of the file tree pane")]
-fn drag_past_tree(world: &mut CrimeWorld, side: String) {
+fn drag_past_tree(world: &mut VardeWorld, side: String) {
     drag_past(world, side, "file tree".to_string());
 }
 
 #[when(expr = "I press at line {int} column {int} in the {word} pane")]
-fn press_at(world: &mut CrimeWorld, line: usize, column: usize, pane: String) {
+fn press_at(world: &mut VardeWorld, line: usize, column: usize, pane: String) {
     let pane = parse_pane(&pane);
     world.pointer = mouse::Pointer::default();
     let (at_column, at_row) = pointer_at(&world.state, &world.panes(), pane, (line, column));
@@ -4699,7 +4699,7 @@ fn press_at(world: &mut CrimeWorld, line: usize, column: usize, pane: String) {
 }
 
 #[when(expr = "I drag to line {int} column {int} in the {word} pane")]
-fn drag_to(world: &mut CrimeWorld, line: usize, column: usize, pane: String) {
+fn drag_to(world: &mut VardeWorld, line: usize, column: usize, pane: String) {
     let pane = parse_pane(&pane);
     let (at_column, at_row) = pointer_at(&world.state, &world.panes(), pane, (line, column));
     world.report(mouse::Kind::LeftDrag, at_column, at_row);
@@ -4709,7 +4709,7 @@ fn drag_to(world: &mut CrimeWorld, line: usize, column: usize, pane: String) {
 /// side named — which is where a neighbouring pane begins, so this is also what
 /// proves the drag stays with the pane it started in.
 #[when(expr = "I drag past the {word} of the {word} pane")]
-fn drag_past(world: &mut CrimeWorld, side: String, pane: String) {
+fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
     let area = match parse_pane(&pane) {
         Pane::Tree => world.panes().tree,
         Pane::Editor => world.panes().editor,
@@ -4735,7 +4735,7 @@ fn drag_past(world: &mut CrimeWorld, side: String, pane: String) {
 /// The cadence the edge replays a held drag on, fired by hand: no clock, and
 /// nothing moves in between, which is the case the feature exists for.
 #[when(expr = "I hold the drag still for {int} ticks")]
-fn hold_drag(world: &mut CrimeWorld, ticks: usize) {
+fn hold_drag(world: &mut VardeWorld, ticks: usize) {
     for _ in 0..ticks {
         let held = world.pointer.held.expect("a drag is held");
         world.report(held.kind, held.column, held.row);
@@ -4743,7 +4743,7 @@ fn hold_drag(world: &mut CrimeWorld, ticks: usize) {
 }
 
 #[when("I release the mouse")]
-fn release_mouse(world: &mut CrimeWorld) {
+fn release_mouse(world: &mut VardeWorld) {
     let held = world
         .pointer
         .held
@@ -4760,12 +4760,12 @@ fn release_mouse(world: &mut CrimeWorld) {
 }
 
 #[then("no drag is held")]
-fn no_drag_is_held(world: &mut CrimeWorld) {
+fn no_drag_is_held(world: &mut VardeWorld) {
     assert_eq!(world.pointer.held, None);
 }
 
 #[when(expr = "I drag across the row {string} in the file tree pane")]
-fn drag_row(world: &mut CrimeWorld, path: String) {
+fn drag_row(world: &mut VardeWorld, path: String) {
     let absolute = abs(world, &path);
     let index = tree::visible_rows(&world.state)
         .iter()
@@ -4780,7 +4780,7 @@ fn drag_row(world: &mut CrimeWorld, path: String) {
 // it in this file.
 #[then(expr = "the selection holds {string}")]
 #[then(expr = "the selection is {string}")]
-fn selection_holds(world: &mut CrimeWorld, text: String) {
+fn selection_holds(world: &mut VardeWorld, text: String) {
     assert_eq!(world.state.selected_text(), Some(text));
 }
 
@@ -4791,7 +4791,7 @@ fn selection_holds(world: &mut CrimeWorld, text: String) {
 /// for a pty.
 #[given(expr = "I drag across the row holding {string}")]
 #[when(expr = "I drag across the row holding {string}")]
-fn drag_preview_row(world: &mut CrimeWorld, text: String) {
+fn drag_preview_row(world: &mut VardeWorld, text: String) {
     let rows = preview_rows(world);
     let index = rows
         .iter()
@@ -4807,11 +4807,11 @@ fn drag_preview_row(world: &mut CrimeWorld, text: String) {
 /// Where a word sits in the editor: a Preview's row while previewing, and a
 /// source line otherwise — the same distinction the drag steps make, since a
 /// heading's row is not its line.
-fn word_at(world: &mut CrimeWorld, text: &str) -> (usize, usize) {
-    let lines: Vec<String> = match crime::previewing(&world.state) {
+fn word_at(world: &mut VardeWorld, text: &str) -> (usize, usize) {
+    let lines: Vec<String> = match varde::previewing(&world.state) {
         true => preview_rows(world)
             .iter()
-            .map(crime::preview::Row::text)
+            .map(varde::preview::Row::text)
             .collect(),
         false => world.pane_lines(Pane::Editor),
     };
@@ -4824,30 +4824,30 @@ fn word_at(world: &mut CrimeWorld, text: &str) -> (usize, usize) {
 }
 
 #[when(expr = "I double-click on {string} in the editor")]
-fn double_click_word(world: &mut CrimeWorld, text: String) {
+fn double_click_word(world: &mut VardeWorld, text: String) {
     let at = word_at(world, &text);
     world.click_twice(Pane::Editor, at, 0);
 }
 
 #[when(expr = "I double-click at line {int} column {int} in the editor")]
-fn double_click_at(world: &mut CrimeWorld, line: usize, column: usize) {
+fn double_click_at(world: &mut VardeWorld, line: usize, column: usize) {
     world.click_twice(Pane::Editor, (line, column), 0);
 }
 
 #[when(expr = "I click twice on {string} in the editor {int}ms apart")]
-fn click_twice_apart(world: &mut CrimeWorld, text: String, apart: u64) {
+fn click_twice_apart(world: &mut VardeWorld, text: String, apart: u64) {
     let at = word_at(world, &text);
     world.click_twice(Pane::Editor, at, apart);
 }
 
 #[then("the selection holds:")]
-fn selection_holds_lines(world: &mut CrimeWorld, step: &Step) {
+fn selection_holds_lines(world: &mut VardeWorld, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
     assert_eq!(world.state.selected_text().as_deref(), Some(expected));
 }
 
 #[then("the other occurrences picked are:")]
-fn occurrences_picked(world: &mut CrimeWorld, step: &Step) {
+fn occurrences_picked(world: &mut VardeWorld, step: &Step) {
     let rows = &step.table().expect("table").rows;
     let expected: Vec<(usize, usize)> = rows[1..]
         .iter()
@@ -4868,17 +4868,17 @@ fn occurrences_picked(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "no other occurrence is picked")]
-fn no_occurrence_picked(world: &mut CrimeWorld) {
+fn no_occurrence_picked(world: &mut VardeWorld) {
     assert!(world.state.occurrences.is_empty());
 }
 
 #[then(expr = "the selection holds nothing")]
-fn selection_empty(world: &mut CrimeWorld) {
+fn selection_empty(world: &mut VardeWorld) {
     assert!(world.state.selection.is_none());
 }
 
 #[then("the clipboard holds:")]
-fn clipboard_holds_lines(world: &mut CrimeWorld, step: &Step) {
+fn clipboard_holds_lines(world: &mut VardeWorld, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
     assert_eq!(world.clipboard.as_deref(), Some(expected));
 }
@@ -4889,7 +4889,7 @@ fn clipboard_holds_lines(world: &mut CrimeWorld, step: &Step) {
 /// read as a pass. These add it back.
 #[given("the selection holds the lines:")]
 #[then("the selection holds the lines:")]
-fn selection_holds_whole_lines(world: &mut CrimeWorld, step: &Step) {
+fn selection_holds_whole_lines(world: &mut VardeWorld, step: &Step) {
     let expected = format!(
         "{}\n",
         step.docstring().expect("docstring").trim_matches('\n')
@@ -4901,7 +4901,7 @@ fn selection_holds_whole_lines(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then("the clipboard holds the lines:")]
-fn clipboard_holds_whole_lines(world: &mut CrimeWorld, step: &Step) {
+fn clipboard_holds_whole_lines(world: &mut VardeWorld, step: &Step) {
     let expected = format!(
         "{}\n",
         step.docstring().expect("docstring").trim_matches('\n')
@@ -4910,12 +4910,12 @@ fn clipboard_holds_whole_lines(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "the clipboard holds nothing")]
-fn clipboard_empty(world: &mut CrimeWorld) {
+fn clipboard_empty(world: &mut VardeWorld) {
     assert!(world.clipboard.is_none());
 }
 
 #[then(expr = "the terminal was asked to hold {string}")]
-fn terminal_clipboard(world: &mut CrimeWorld, text: String) {
+fn terminal_clipboard(world: &mut VardeWorld, text: String) {
     assert_eq!(world.terminal_clipboard.as_deref(), Some(text.as_str()));
 }
 
@@ -4923,9 +4923,9 @@ fn terminal_clipboard(world: &mut CrimeWorld, text: String) {
 
 #[given(expr = "the diff for {string} is shown")]
 #[when(expr = "the diff for {string} is shown")]
-fn show_diff(world: &mut CrimeWorld, file: String) {
+fn show_diff(world: &mut VardeWorld, file: String) {
     let lines = (1..=3)
-        .map(|number| crime::DiffLine {
+        .map(|number| varde::DiffLine {
             new_line: Some(number),
             old_line: None,
             removed: false,
@@ -4943,10 +4943,10 @@ fn show_diff(world: &mut CrimeWorld, file: String) {
 /// gesture exists for, since the mock diff above holds nothing that reaches the
 /// pane's right edge.
 #[given(expr = "the diff for {string} is shown holding a {int}-character line")]
-fn show_wide_diff(world: &mut CrimeWorld, file: String, width: usize) {
+fn show_wide_diff(world: &mut VardeWorld, file: String, width: usize) {
     world.send(Event::ShowDiff {
         file,
-        lines: vec![crime::DiffLine {
+        lines: vec![varde::DiffLine {
             new_line: Some(1),
             old_line: None,
             removed: false,
@@ -4957,44 +4957,44 @@ fn show_wide_diff(world: &mut CrimeWorld, file: String, width: usize) {
 }
 
 #[then(expr = "the diff for {string} is shown")]
-fn diff_is_shown(world: &mut CrimeWorld, file: String) {
+fn diff_is_shown(world: &mut VardeWorld, file: String) {
     assert_eq!(world.state.diff_file.as_deref(), Some(file.as_str()));
 }
 
 #[then(expr = "the diff for {string} was re-read")]
-fn diff_re_read(world: &mut CrimeWorld, file: String) {
+fn diff_re_read(world: &mut VardeWorld, file: String) {
     assert_eq!(world.diffs_read, vec![abs(world, &file)]);
 }
 
 #[then(expr = "no diff was re-read")]
-fn no_diff_re_read(world: &mut CrimeWorld) {
+fn no_diff_re_read(world: &mut VardeWorld) {
     assert!(world.diffs_read.is_empty());
 }
 
 #[then(expr = "the diff cursor is on line {int}")]
-fn diff_cursor(world: &mut CrimeWorld, line: usize) {
+fn diff_cursor(world: &mut VardeWorld, line: usize) {
     assert_eq!(world.state.diff_line, line);
 }
 
 #[then(expr = "the comment picker is shown")]
-fn picker_shown(world: &mut CrimeWorld) {
+fn picker_shown(world: &mut VardeWorld) {
     assert_eq!(world.state.modal, Modal::Comment);
 }
 
 #[then(expr = "the comment picker is not shown")]
-fn picker_not_shown(world: &mut CrimeWorld) {
+fn picker_not_shown(world: &mut VardeWorld) {
     assert_ne!(world.state.modal, Modal::Comment);
 }
 
 #[given(expr = "I submit the review from the command line")]
 #[when(expr = "I submit the review from the command line")]
-fn submit_from_command_line(world: &mut CrimeWorld) {
+fn submit_from_command_line(world: &mut VardeWorld) {
     world.send(Event::SubmitReview);
 }
 
 #[given(expr = "I press the {word} arrow in the editor")]
 #[when(expr = "I press the {word} arrow in the editor")]
-fn press_arrow(world: &mut CrimeWorld, direction: String) {
+fn press_arrow(world: &mut VardeWorld, direction: String) {
     world.send(Event::EditorArrow(arrow(&direction)));
 }
 
@@ -5010,55 +5010,55 @@ fn arrow(direction: &str) -> Direction {
 
 #[given(expr = "I hold shift and press the {word} arrow in the editor")]
 #[when(expr = "I hold shift and press the {word} arrow in the editor")]
-fn extend_selection(world: &mut CrimeWorld, direction: String) {
+fn extend_selection(world: &mut VardeWorld, direction: String) {
     world.send(Event::EditorExtend(arrow(&direction)));
 }
 
 #[given(expr = "I hold alt and press the {word} arrow in the editor")]
 #[when(expr = "I hold alt and press the {word} arrow in the editor")]
-fn word_motion(world: &mut CrimeWorld, direction: String) {
+fn word_motion(world: &mut VardeWorld, direction: String) {
     world.send(Event::EditorWord(arrow(&direction)));
 }
 
 #[given(expr = "I hold shift and alt and press the {word} arrow in the editor")]
 #[when(expr = "I hold shift and alt and press the {word} arrow in the editor")]
-fn extend_selection_by_word(world: &mut CrimeWorld, direction: String) {
+fn extend_selection_by_word(world: &mut VardeWorld, direction: String) {
     world.send(Event::EditorExtendWord(arrow(&direction)));
 }
 
 #[given(expr = "I hold shift and press the {word} arrow in the editor {int} times")]
 #[when(expr = "I hold shift and press the {word} arrow in the editor {int} times")]
-fn extend_selection_times(world: &mut CrimeWorld, direction: String, times: usize) {
+fn extend_selection_times(world: &mut VardeWorld, direction: String, times: usize) {
     for _ in 0..times {
         world.send(Event::EditorExtend(arrow(&direction)));
     }
 }
 
 #[when(expr = "I press Backspace in the editor")]
-fn press_backspace(world: &mut CrimeWorld) {
+fn press_backspace(world: &mut VardeWorld) {
     world.send(Event::EditorBackspace);
 }
 
 #[then(expr = "the pending command shows {string}")]
-fn pending_command_shows(world: &mut CrimeWorld, expected: String) {
+fn pending_command_shows(world: &mut VardeWorld, expected: String) {
     assert_eq!(current_buffer(world).pending_command(), expected);
 }
 
 #[when(expr = "I switch to Edit view")]
 #[given(expr = "I open Edit view")]
 #[when(expr = "I open Edit view")]
-fn switch_to_edit(world: &mut CrimeWorld) {
+fn switch_to_edit(world: &mut VardeWorld) {
     pick_palette_entry(world, "Edit");
 }
 
 #[then(expr = "no diff is shown")]
-fn no_diff_shown(world: &mut CrimeWorld) {
+fn no_diff_shown(world: &mut VardeWorld) {
     assert!(world.state.diff.is_none() && world.state.diff_file.is_none());
 }
 
 #[given(expr = "I start the AI")]
 #[when(expr = "I start the AI")]
-fn start_ai(world: &mut CrimeWorld) {
+fn start_ai(world: &mut VardeWorld) {
     world.send(Event::StartAi {
         command: None,
         force: false,
@@ -5071,7 +5071,7 @@ fn start_ai(world: &mut CrimeWorld) {
 /// growing a line. Non-empty bytes would not have caught that. `\e` is the
 /// escape byte the Alt prefix is made of.
 #[then(expr = "the AI received the bytes {string}")]
-fn ai_received_the_bytes(world: &mut CrimeWorld, bytes: String) {
+fn ai_received_the_bytes(world: &mut VardeWorld, bytes: String) {
     let expected: Vec<u8> = bytes
         .replace("\\e", "\x1b")
         .replace("\\r", "\r")
@@ -5081,7 +5081,7 @@ fn ai_received_the_bytes(world: &mut CrimeWorld, bytes: String) {
 }
 
 #[then(expr = "the AI received nothing")]
-fn ai_received_nothing(world: &mut CrimeWorld) {
+fn ai_received_nothing(world: &mut VardeWorld) {
     assert!(
         !world.keys_sent.iter().any(|(pane, _)| *pane == Pane::Ai),
         "keys sent: {:?}",
@@ -5090,13 +5090,13 @@ fn ai_received_nothing(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the AI received {string}")]
-fn ai_received(world: &mut CrimeWorld, text: String) {
+fn ai_received(world: &mut VardeWorld, text: String) {
     assert_eq!(world.keys_sent, vec![(Pane::Ai, text.into_bytes())]);
 }
 
 #[given(expr = "I start the AI with {string}")]
 #[when(expr = "I start the AI with {string}")]
-fn start_named_ai(world: &mut CrimeWorld, command: String) {
+fn start_named_ai(world: &mut VardeWorld, command: String) {
     world.send(Event::StartAi {
         command: Some(command),
         force: false,
@@ -5105,7 +5105,7 @@ fn start_named_ai(world: &mut CrimeWorld, command: String) {
 
 #[given(expr = "I force the AI to {string}")]
 #[when(expr = "I force the AI to {string}")]
-fn force_ai(world: &mut CrimeWorld, command: String) {
+fn force_ai(world: &mut VardeWorld, command: String) {
     world.send(Event::StartAi {
         command: Some(command),
         force: true,
@@ -5113,24 +5113,24 @@ fn force_ai(world: &mut CrimeWorld, command: String) {
 }
 
 #[then(expr = "the AI session was stopped")]
-fn ai_stopped(world: &mut CrimeWorld) {
+fn ai_stopped(world: &mut VardeWorld) {
     assert!(world.ai_stopped);
 }
 
 /// The absence: authoring a Story set for a repository the session knows
 /// nothing about must not cost the reviewer the session they already had.
 #[then(expr = "no AI session was stopped")]
-fn ai_not_stopped(world: &mut CrimeWorld) {
+fn ai_not_stopped(world: &mut VardeWorld) {
     assert!(!world.ai_stopped, "the AI session was stopped");
 }
 
 #[given(expr = "the remembered AI command is {string}")]
-fn remember_ai_command(world: &mut CrimeWorld, command: String) {
+fn remember_ai_command(world: &mut VardeWorld, command: String) {
     world.state.ai_command = command;
 }
 
 #[then(expr = "the remembered AI command is {string}")]
-fn ai_command_remembered(world: &mut CrimeWorld, command: String) {
+fn ai_command_remembered(world: &mut VardeWorld, command: String) {
     let saved = world
         .startup
         .state_json
@@ -5143,44 +5143,44 @@ fn ai_command_remembered(world: &mut CrimeWorld, command: String) {
 }
 
 #[then(expr = "the reviewer is told the AI is already running")]
-fn told_ai_running(world: &mut CrimeWorld) {
+fn told_ai_running(world: &mut VardeWorld) {
     assert!(world.notices.contains(&"ai-already-running".to_string()));
 }
 
 #[then(expr = "the reviewer is not told the AI is already running")]
-fn not_told_ai_running(world: &mut CrimeWorld) {
+fn not_told_ai_running(world: &mut VardeWorld) {
     assert!(!world.notices.contains(&"ai-already-running".to_string()));
 }
 
 #[then(expr = "only one AI session was started")]
-fn one_ai_session(world: &mut CrimeWorld) {
+fn one_ai_session(world: &mut VardeWorld) {
     assert_eq!(world.ai_spawned.len(), 1, "spawned: {:?}", world.ai_spawned);
 }
 
 #[then(expr = "the AI pane is asking which CLI to start")]
-fn ai_pane_asking(world: &mut CrimeWorld) {
+fn ai_pane_asking(world: &mut VardeWorld) {
     assert!(!world.state.ai_running);
 }
 
 #[then(expr = "the AI pane is not asking which CLI to start")]
-fn ai_pane_not_asking(world: &mut CrimeWorld) {
+fn ai_pane_not_asking(world: &mut VardeWorld) {
     assert!(world.state.ai_running);
 }
 
 #[given(expr = "the AI session exits")]
 #[when(expr = "the AI session exits")]
-fn ai_exits(world: &mut CrimeWorld) {
+fn ai_exits(world: &mut VardeWorld) {
     world.ai_is_gone();
     world.tell_core();
 }
 
 #[then(expr = "the reviewer is told the comment was added")]
-fn told_comment_added(world: &mut CrimeWorld) {
+fn told_comment_added(world: &mut VardeWorld) {
     assert!(world.notices.contains(&"comment-added".to_string()));
 }
 
 #[then(expr = "the diff shows the comment {string} against line {int}")]
-fn diff_shows_comment(world: &mut CrimeWorld, body: String, line: u32) {
+fn diff_shows_comment(world: &mut VardeWorld, body: String, line: u32) {
     let file = world.state.diff_file.clone().expect("a diff");
     let found = review::comments_at(&world.state, &file, line);
     assert!(
@@ -5190,19 +5190,19 @@ fn diff_shows_comment(world: &mut CrimeWorld, body: String, line: u32) {
 }
 
 #[then(expr = "the diff shows no comment against line {int}")]
-fn diff_shows_no_comment(world: &mut CrimeWorld, line: u32) {
+fn diff_shows_no_comment(world: &mut VardeWorld, line: u32) {
     let file = world.state.diff_file.clone().expect("a diff");
     assert!(review::comments_at(&world.state, &file, line).is_empty());
 }
 
 #[given(expr = "I close the buffer")]
 #[when(expr = "I close the buffer")]
-fn close_buffer(world: &mut CrimeWorld) {
+fn close_buffer(world: &mut VardeWorld) {
     world.send(Event::CloseBuffer { force: false });
 }
 
 #[when(expr = "I force close the buffer")]
-fn force_close_buffer(world: &mut CrimeWorld) {
+fn force_close_buffer(world: &mut VardeWorld) {
     world.send(Event::CloseBuffer { force: true });
 }
 
@@ -5210,34 +5210,34 @@ fn force_close_buffer(world: &mut CrimeWorld) {
 /// spells the gesture is what these Scenarios exercise: an event sent by hand
 /// goes green over a command nobody can type.
 #[when(expr = "I close every clean buffer")]
-fn close_clean_buffers(world: &mut CrimeWorld) {
+fn close_clean_buffers(world: &mut VardeWorld) {
     run_story_command(world, ":qa".to_string());
 }
 
 #[when(expr = "I force close every buffer")]
-fn force_close_every_buffer(world: &mut CrimeWorld) {
+fn force_close_every_buffer(world: &mut VardeWorld) {
     run_story_command(world, ":qa!".to_string());
 }
 
 #[then(expr = "the editor has no file open")]
-fn no_file_open(world: &mut CrimeWorld) {
+fn no_file_open(world: &mut VardeWorld) {
     assert!(world.state.current_buffer.is_none() && world.state.buffers.is_empty());
 }
 
 #[then(expr = "the editor shows no buffer")]
-fn no_buffer_shown(world: &mut CrimeWorld) {
+fn no_buffer_shown(world: &mut VardeWorld) {
     assert_eq!(world.state.current_buffer, None);
 }
 
 /// The command line is a draft the edge holds, not core state, so a scenario
 /// asks the drafts the router was handed.
 #[then(expr = "the command line is open")]
-fn command_line_open(world: &mut CrimeWorld) {
+fn command_line_open(world: &mut VardeWorld) {
     assert_eq!(world.drafts.command.as_deref(), Some(""));
 }
 
 #[then(expr = "the command line is not open")]
-fn command_line_closed(world: &mut CrimeWorld) {
+fn command_line_closed(world: &mut VardeWorld) {
     assert_eq!(world.drafts.command, None);
 }
 
@@ -5245,7 +5245,7 @@ fn command_line_closed(world: &mut CrimeWorld) {
 
 #[given(expr = "I open {string}")]
 #[when(expr = "I open {string}")]
-fn open_named(world: &mut CrimeWorld, path: String) {
+fn open_named(world: &mut VardeWorld, path: String) {
     let absolute = abs(world, &path);
     // What the edge reads off disk: whatever the scenario put there, and a
     // stand-in for a file it never described.
@@ -5264,7 +5264,7 @@ fn open_named(world: &mut CrimeWorld, path: String) {
 
 #[given(expr = "{string} is previewed")]
 #[when(expr = "{string} is previewed")]
-fn preview_named(world: &mut CrimeWorld, path: String) {
+fn preview_named(world: &mut VardeWorld, path: String) {
     let absolute = abs(world, &path);
     world.send(Event::BufferOpened {
         contents: "contents".to_string(),
@@ -5275,7 +5275,7 @@ fn preview_named(world: &mut CrimeWorld, path: String) {
 }
 
 #[then("the open buffers are:")]
-fn open_buffers_are(world: &mut CrimeWorld, step: &Step) {
+fn open_buffers_are(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<PathBuf> = step
         .table()
         .expect("table")
@@ -5289,13 +5289,13 @@ fn open_buffers_are(world: &mut CrimeWorld, step: &Step) {
 
 #[given(expr = "the current buffer is {string}")]
 #[then(expr = "the current buffer is {string}")]
-fn current_buffer_is(world: &mut CrimeWorld, path: String) {
+fn current_buffer_is(world: &mut VardeWorld, path: String) {
     assert_eq!(world.state.current_buffer, Some(abs(world, &path)));
 }
 
 #[given(expr = "I click buffer dot {int}")]
 #[when(expr = "I click buffer dot {int}")]
-fn click_dot(world: &mut CrimeWorld, index: usize) {
+fn click_dot(world: &mut VardeWorld, index: usize) {
     let path = world
         .state
         .buffers
@@ -5307,13 +5307,13 @@ fn click_dot(world: &mut CrimeWorld, index: usize) {
 }
 
 #[then(expr = "the buffer mark for {string} is {string}")]
-fn buffer_mark_is(world: &mut CrimeWorld, path: String, expected: String) {
-    let actual = match crime::mark(&world.state, &abs(world, &path)) {
-        crime::Mark::None => "none",
-        crime::Mark::Open => "open",
-        crime::Mark::Dirty => "dirty",
-        crime::Mark::Current => "current",
-        crime::Mark::CurrentDirty => "current-dirty",
+fn buffer_mark_is(world: &mut VardeWorld, path: String, expected: String) {
+    let actual = match varde::mark(&world.state, &abs(world, &path)) {
+        varde::Mark::None => "none",
+        varde::Mark::Open => "open",
+        varde::Mark::Dirty => "dirty",
+        varde::Mark::Current => "current",
+        varde::Mark::CurrentDirty => "current-dirty",
     };
     assert_eq!(actual, expected);
 }
@@ -5321,7 +5321,7 @@ fn buffer_mark_is(world: &mut CrimeWorld, path: String, expected: String) {
 // ---- F20: filtering the tree ----
 
 #[given("the project contains:")]
-fn project_contains(world: &mut CrimeWorld, step: &Step) {
+fn project_contains(world: &mut VardeWorld, step: &Step) {
     let files: Vec<String> = step
         .table()
         .expect("table")
@@ -5334,7 +5334,7 @@ fn project_contains(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[given(expr = "the project gains {string}")]
-fn project_gains(world: &mut CrimeWorld, path: String) {
+fn project_gains(world: &mut VardeWorld, path: String) {
     // Only on disk: whether the core comes to know about it is the behaviour
     // under test.
     world.indexable.push(path);
@@ -5342,12 +5342,12 @@ fn project_gains(world: &mut CrimeWorld, path: String) {
 
 #[given(expr = "I filter by {string}")]
 #[when(expr = "I filter by {string}")]
-fn filter_by(world: &mut CrimeWorld, text: String) {
+fn filter_by(world: &mut VardeWorld, text: String) {
     world.send(Event::Filter(text));
 }
 
 #[then("the filtered files are:")]
-fn filtered_files_are(world: &mut CrimeWorld, step: &Step) {
+fn filtered_files_are(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -5355,7 +5355,7 @@ fn filtered_files_are(world: &mut CrimeWorld, step: &Step) {
         .iter()
         .map(|row| row[0].clone())
         .collect();
-    let mut actual = crime::filter::matches(&world.state);
+    let mut actual = varde::filter::matches(&world.state);
     let mut sorted = expected.clone();
     actual.sort();
     sorted.sort();
@@ -5363,20 +5363,20 @@ fn filtered_files_are(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "the filtered files include {string}")]
-fn filtered_include(world: &mut CrimeWorld, path: String) {
-    assert!(crime::filter::matches(&world.state).contains(&path));
+fn filtered_include(world: &mut VardeWorld, path: String) {
+    assert!(varde::filter::matches(&world.state).contains(&path));
 }
 
 #[then(expr = "the filtered files are empty")]
-fn filtered_empty(world: &mut CrimeWorld) {
-    assert!(crime::filter::matches(&world.state).is_empty());
+fn filtered_empty(world: &mut VardeWorld) {
+    assert!(varde::filter::matches(&world.state).is_empty());
 }
 
 #[then(expr = "the best match is {string}")]
 #[then(expr = "the completion is {string}")]
-fn best_match_is(world: &mut CrimeWorld, path: String) {
+fn best_match_is(world: &mut VardeWorld, path: String) {
     assert_eq!(
-        crime::filter::best(&world.state).as_deref(),
+        varde::filter::best(&world.state).as_deref(),
         Some(path.as_str())
     );
 }
@@ -5386,7 +5386,7 @@ fn best_match_is(world: &mut CrimeWorld, path: String) {
 /// it — conflating the two is what left every folder a match sat under
 /// standing open once the filter was cleared.
 #[then(expr = "the row {string} is expanded")]
-fn row_is_expanded(world: &mut CrimeWorld, path: String) {
+fn row_is_expanded(world: &mut VardeWorld, path: String) {
     let wanted = abs(world, &path);
     let row = tree::visible_rows(&world.state)
         .into_iter()
@@ -5396,24 +5396,24 @@ fn row_is_expanded(world: &mut CrimeWorld, path: String) {
 }
 
 #[then(expr = "the tree is not filtered")]
-fn tree_not_filtered(world: &mut CrimeWorld) {
+fn tree_not_filtered(world: &mut VardeWorld) {
     assert!(world.state.filter.is_empty());
 }
 
 #[when(expr = "I accept the filter")]
-fn accept_filter(world: &mut CrimeWorld) {
+fn accept_filter(world: &mut VardeWorld) {
     world.send(Event::AcceptFilter);
 }
 
 #[then(expr = "the tree filter state is {string}")]
-fn tree_filter_state(world: &mut CrimeWorld, expected: String) {
-    assert_eq!(crime::filter::view_state(&world.state), expected);
+fn tree_filter_state(world: &mut VardeWorld, expected: String) {
+    assert_eq!(varde::filter::view_state(&world.state), expected);
 }
 
 // ---- F21: content search ----
 
 #[given("the project holds:")]
-fn project_holds(world: &mut CrimeWorld, step: &Step) {
+fn project_holds(world: &mut VardeWorld, step: &Step) {
     world.project = step
         .table()
         .expect("table")
@@ -5428,71 +5428,71 @@ fn project_holds(world: &mut CrimeWorld, step: &Step) {
 
 #[given(expr = "I open search")]
 #[when(expr = "I open search")]
-fn open_search(world: &mut CrimeWorld) {
+fn open_search(world: &mut VardeWorld) {
     world.send(Event::OpenSearch);
 }
 
 #[given(expr = "I open search in {string}")]
-fn open_search_in(world: &mut CrimeWorld, folder: String) {
+fn open_search_in(world: &mut VardeWorld, folder: String) {
     world.send(Event::Trigger(
-        crime::tree_actions::Action::SearchHere,
-        Some(crime::tree_actions::Target::Folder(folder.into())),
+        varde::tree_actions::Action::SearchHere,
+        Some(varde::tree_actions::Target::Folder(folder.into())),
     ));
 }
 
 #[then(expr = "the search is scoped to {string}")]
-fn search_is_scoped_to(world: &mut CrimeWorld, folder: String) {
+fn search_is_scoped_to(world: &mut VardeWorld, folder: String) {
     assert_eq!(search(world).scope.as_deref(), Some(Path::new(&folder)));
 }
 
 #[then("the search is scoped to the whole project")]
-fn search_is_unscoped(world: &mut CrimeWorld) {
+fn search_is_unscoped(world: &mut VardeWorld) {
     assert_eq!(search(world).scope, None);
 }
 
 #[when(expr = "I close search")]
-fn close_search(world: &mut CrimeWorld) {
+fn close_search(world: &mut VardeWorld) {
     world.send(Event::CloseSearch);
 }
 
 #[then(expr = "the search is open")]
-fn search_is_open(world: &mut CrimeWorld) {
+fn search_is_open(world: &mut VardeWorld) {
     assert!(world.state.search.is_some());
 }
 
 #[then(expr = "the search is not open")]
-fn search_is_closed(world: &mut CrimeWorld) {
+fn search_is_closed(world: &mut VardeWorld) {
     assert!(world.state.search.is_none());
 }
 
 #[given(expr = "I search for {string}")]
 #[when(expr = "I search for {string}")]
-fn search_for(world: &mut CrimeWorld, query: String) {
+fn search_for(world: &mut VardeWorld, query: String) {
     world.send(Event::SearchQuery(query));
 }
 
-fn search(world: &CrimeWorld) -> &crime::Search {
+fn search(world: &VardeWorld) -> &varde::Search {
     world.state.search.as_ref().expect("search is open")
 }
 
 #[then(expr = "the search query is {string}")]
-fn search_query_is(world: &mut CrimeWorld, expected: String) {
+fn search_query_is(world: &mut VardeWorld, expected: String) {
     assert_eq!(search(world).query, expected);
 }
 
 #[then(expr = "there are no hits")]
-fn no_hits(world: &mut CrimeWorld) {
+fn no_hits(world: &mut VardeWorld) {
     assert!(search(world).results.hits.is_empty());
 }
 
 #[then(expr = "{int} hits were found")]
-fn hit_count(world: &mut CrimeWorld, expected: usize) {
+fn hit_count(world: &mut VardeWorld, expected: usize) {
     let hits = &search(world).results.hits;
     assert_eq!(hits.len(), expected, "hits: {hits:?}");
 }
 
 #[then("the hits are:")]
-fn hits_are(world: &mut CrimeWorld, step: &Step) {
+fn hits_are(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<(String, u32)> = step
         .table()
         .expect("table")
@@ -5510,7 +5510,7 @@ fn hits_are(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then("the hit files in order are:")]
-fn hit_files_are(world: &mut CrimeWorld, step: &Step) {
+fn hit_files_are(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -5518,29 +5518,29 @@ fn hit_files_are(world: &mut CrimeWorld, step: &Step) {
         .iter()
         .map(|row| row[0].clone())
         .collect();
-    assert_eq!(crime::search::files(&search(world).results), expected);
+    assert_eq!(varde::search::files(&search(world).results), expected);
 }
 
 #[given(expr = "I move down in the search")]
 #[when(expr = "I move down in the search")]
-fn move_down_in_search(world: &mut CrimeWorld) {
+fn move_down_in_search(world: &mut VardeWorld) {
     world.send(Event::MoveHit(Direction::Down));
 }
 
 #[given(expr = "I move up in the search")]
 #[when(expr = "I move up in the search")]
-fn move_up_in_search(world: &mut CrimeWorld) {
+fn move_up_in_search(world: &mut VardeWorld) {
     world.send(Event::MoveHit(Direction::Up));
 }
 
 #[given(expr = "I jump to the next file in the search")]
 #[when(expr = "I jump to the next file in the search")]
-fn next_file_in_search(world: &mut CrimeWorld) {
+fn next_file_in_search(world: &mut VardeWorld) {
     world.send(Event::MoveHitFile(Direction::Down));
 }
 
 #[when(expr = "I jump to the previous file in the search")]
-fn previous_file_in_search(world: &mut CrimeWorld) {
+fn previous_file_in_search(world: &mut VardeWorld) {
     world.send(Event::MoveHitFile(Direction::Up));
 }
 
@@ -5551,7 +5551,7 @@ fn previous_file_in_search(world: &mut CrimeWorld) {
 /// its bottom border — the chrome scenario relies on that.
 #[given(expr = "I click result row {int}")]
 #[when(expr = "I click result row {int}")]
-fn click_result_row(world: &mut CrimeWorld, row: u16) {
+fn click_result_row(world: &mut VardeWorld, row: u16) {
     let (width, height) = world.screen();
     let area = layout::search_box(width, height);
     let panes = world.panes();
@@ -5577,54 +5577,54 @@ fn click_result_row(world: &mut CrimeWorld, row: u16) {
 /// The first row of the list the box shows, 1-based — rows and not hits,
 /// because the files are headings between them.
 #[then(expr = "the results start at row {int}")]
-fn results_start_at_row(world: &mut CrimeWorld, row: usize) {
+fn results_start_at_row(world: &mut VardeWorld, row: usize) {
     assert_eq!(search(world).scroll + 1, row);
 }
 
 #[then(expr = "the selected hit is {string} line {int}")]
-fn selected_hit_is(world: &mut CrimeWorld, file: String, line: u32) {
+fn selected_hit_is(world: &mut VardeWorld, file: String, line: u32) {
     let search = search(world);
     let hit = search.results.hits.get(search.selected).expect("a hit");
     assert_eq!((hit.file.as_str(), hit.line), (file.as_str(), line));
 }
 
 #[when(expr = "I open the selected hit")]
-fn open_selected_hit(world: &mut CrimeWorld) {
+fn open_selected_hit(world: &mut VardeWorld) {
     world.send(Event::OpenHit);
 }
 
 #[when(expr = "I open every hit")]
-fn open_every_hit(world: &mut CrimeWorld) {
+fn open_every_hit(world: &mut VardeWorld) {
     world.send(Event::OpenEveryHit);
 }
 
 #[when(expr = "I complete the search")]
-fn complete_search(world: &mut CrimeWorld) {
+fn complete_search(world: &mut VardeWorld) {
     world.send(Event::CompleteSearch);
 }
 
 // ---- F21: finding inside the buffer ----
 
 #[then(expr = "the in-file search is open")]
-fn find_is_open(world: &mut CrimeWorld) {
+fn find_is_open(world: &mut VardeWorld) {
     assert!(world.state.find.is_some());
 }
 
 #[then(expr = "the in-file search is not open")]
-fn find_is_closed(world: &mut CrimeWorld) {
+fn find_is_closed(world: &mut VardeWorld) {
     assert!(world.state.find.is_none());
 }
 
 #[then(expr = "there are no matches")]
-fn there_are_no_matches(world: &mut CrimeWorld) {
-    assert!(crime::matches(&world.state).is_empty());
+fn there_are_no_matches(world: &mut VardeWorld) {
+    assert!(varde::matches(&world.state).is_empty());
 }
 
 /// One event per character, because that is what the editor sees: the cursor
 /// moves as the query grows, so a whole query sent at once would prove nothing.
 #[given(expr = "I type {string} into the in-file search")]
 #[when(expr = "I type {string} into the in-file search")]
-fn type_into_find(world: &mut CrimeWorld, query: String) {
+fn type_into_find(world: &mut VardeWorld, query: String) {
     let mut typed = String::new();
     for character in query.chars() {
         typed.push(character);
@@ -5633,25 +5633,25 @@ fn type_into_find(world: &mut CrimeWorld, query: String) {
 }
 
 #[when(expr = "I press Escape during the in-file search")]
-fn abandon_find(world: &mut CrimeWorld) {
+fn abandon_find(world: &mut VardeWorld) {
     world.send(Event::CloseFind);
 }
 
 #[given(expr = "I press Enter during the in-file search")]
 #[when(expr = "I press Enter during the in-file search")]
-fn accept_find(world: &mut CrimeWorld) {
+fn accept_find(world: &mut VardeWorld) {
     world.send(Event::AcceptFind);
 }
 
 #[then(expr = "nothing is highlighted")]
-fn nothing_highlighted(world: &mut CrimeWorld) {
-    assert_eq!(crime::matches(&world.state), Vec::new());
+fn nothing_highlighted(world: &mut VardeWorld) {
+    assert_eq!(varde::matches(&world.state), Vec::new());
 }
 
 /// Every match, not only the one the cursor is on — walking the file is not the
 /// only way to know how many there are.
 #[then(expr = "the highlighted matches are:")]
-fn highlighted_matches(world: &mut CrimeWorld, step: &Step) {
+fn highlighted_matches(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<(usize, usize)> = step
         .table()
         .expect("table")
@@ -5664,7 +5664,7 @@ fn highlighted_matches(world: &mut CrimeWorld, step: &Step) {
             )
         })
         .collect();
-    let found: Vec<(usize, usize)> = crime::matches(&world.state)
+    let found: Vec<(usize, usize)> = varde::matches(&world.state)
         .iter()
         .map(|at| (at.line, at.column))
         .collect();
@@ -5672,12 +5672,12 @@ fn highlighted_matches(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "nothing is echoed")]
-fn nothing_echoed(world: &mut CrimeWorld) {
-    assert_eq!(crime::echoes(&world.state), Vec::new());
+fn nothing_echoed(world: &mut VardeWorld) {
+    assert_eq!(varde::echoes(&world.state), Vec::new());
 }
 
 #[then(expr = "the echoed occurrences are:")]
-fn echoed_occurrences(world: &mut CrimeWorld, step: &Step) {
+fn echoed_occurrences(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<(usize, usize)> = step
         .table()
         .expect("table")
@@ -5690,7 +5690,7 @@ fn echoed_occurrences(world: &mut CrimeWorld, step: &Step) {
             )
         })
         .collect();
-    let found: Vec<(usize, usize)> = crime::echoes(&world.state)
+    let found: Vec<(usize, usize)> = varde::echoes(&world.state)
         .iter()
         .map(|at| (at.line, at.column))
         .collect();
@@ -5698,7 +5698,7 @@ fn echoed_occurrences(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "the selected action is {string}")]
-fn selected_action_is(world: &mut CrimeWorld, expected: String) {
+fn selected_action_is(world: &mut VardeWorld, expected: String) {
     let index = world.state.selected_action.expect("an action is selected");
     let path = world.state.tree_selection.clone().expect("a row");
     let actions = tree::row_actions(&world.state, &path);
@@ -5706,12 +5706,12 @@ fn selected_action_is(world: &mut CrimeWorld, expected: String) {
 }
 
 #[then(expr = "no action is selected")]
-fn no_action_selected(world: &mut CrimeWorld) {
+fn no_action_selected(world: &mut VardeWorld) {
     assert!(world.state.selected_action.is_none());
 }
 
 #[given(expr = "the file tree pane does not have focus")]
-fn tree_not_focused(world: &mut CrimeWorld) {
+fn tree_not_focused(world: &mut VardeWorld) {
     world.state.focus = Pane::Editor;
     world.state.tree_selection = None;
 }
@@ -5721,7 +5721,7 @@ fn tree_not_focused(world: &mut CrimeWorld) {
 /// A story artifact, serialised straight from a `serde_json::Value` tree
 /// rather than through the library's own (`Deserialize`-only) types — the
 /// world plays the CLI that writes one, and the CLI has no reason to link
-/// against `crime`.
+/// against `varde`.
 fn build_story(
     base: &str,
     head: &str,
@@ -5860,7 +5860,7 @@ fn column<'a>(headers: &[String], row: &'a [String], name: &str) -> Option<&'a s
 // Remainder's subtraction; "holds:" is a file's current content unrelated to
 // any change, so it only ever touches `files`.
 #[given(expr = "{string} held:")]
-fn file_held(world: &mut CrimeWorld, path: String, step: &Step) {
+fn file_held(world: &mut VardeWorld, path: String, step: &Step) {
     let contents = step
         .docstring()
         .expect("docstring")
@@ -5874,7 +5874,7 @@ fn file_held(world: &mut CrimeWorld, path: String, step: &Step) {
 }
 
 #[given(expr = "{string} holds:")]
-fn file_holds(world: &mut CrimeWorld, path: String, step: &Step) {
+fn file_holds(world: &mut VardeWorld, path: String, step: &Step) {
     let contents = step
         .docstring()
         .expect("docstring")
@@ -5888,7 +5888,7 @@ fn file_holds(world: &mut CrimeWorld, path: String, step: &Step) {
 /// A file long enough to be scrolled, without a forty-line docstring in the
 /// feature saying nothing but its own length.
 #[given(expr = "{string} holds {int} numbered lines")]
-fn file_holds_numbered_lines(world: &mut CrimeWorld, path: String, lines: usize) {
+fn file_holds_numbered_lines(world: &mut VardeWorld, path: String, lines: usize) {
     let contents: Vec<String> = (1..=lines).map(|line| format!("line {line}")).collect();
     let full = world.state.root.join(&path);
     world.known_files.insert(full.clone());
@@ -5897,7 +5897,7 @@ fn file_holds_numbered_lines(world: &mut CrimeWorld, path: String, lines: usize)
 
 #[given(expr = "{string} now holds:")]
 #[when(expr = "{string} now holds:")]
-fn file_now_holds(world: &mut CrimeWorld, path: String, step: &Step) {
+fn file_now_holds(world: &mut VardeWorld, path: String, step: &Step) {
     let contents = step
         .docstring()
         .expect("docstring")
@@ -5911,7 +5911,7 @@ fn file_now_holds(world: &mut CrimeWorld, path: String, step: &Step) {
 }
 
 #[given(expr = "{string} is gone")]
-fn file_is_gone(world: &mut CrimeWorld, path: String) {
+fn file_is_gone(world: &mut VardeWorld, path: String) {
     let full = world.state.root.join(&path);
     world.known_files.insert(full.clone());
     world.files.remove(&full);
@@ -5923,7 +5923,7 @@ fn file_is_gone(world: &mut CrimeWorld, path: String) {
 /// something bare to walk — real subtraction over real hunks, never a
 /// fictional count.
 #[given(expr = "{string} has an unclaimed hunk")]
-fn file_has_an_unclaimed_hunk(world: &mut CrimeWorld, path: String) {
+fn file_has_an_unclaimed_hunk(world: &mut VardeWorld, path: String) {
     let full = world.state.root.join(&path);
     world.known_files.insert(full.clone());
     world.held.insert(full.clone(), "a\nb\nc\n".to_string());
@@ -5940,7 +5940,7 @@ fn file_has_an_unclaimed_hunk(world: &mut CrimeWorld, path: String) {
 /// fail at the scenario's `Then` with nothing pointing back here — so it
 /// refuses out loud instead.
 #[given(expr = "{string} has an unclaimed hunk covering lines {int} to {int}")]
-fn file_has_an_unclaimed_hunk_covering(world: &mut CrimeWorld, path: String, from: u32, to: u32) {
+fn file_has_an_unclaimed_hunk_covering(world: &mut VardeWorld, path: String, from: u32, to: u32) {
     assert!(
         to >= from + story::CONTEXT_LINES,
         "lines {from} to {to} cannot be one hunk: a hunk needs {} lines of \
@@ -5967,7 +5967,7 @@ fn file_has_an_unclaimed_hunk_covering(world: &mut CrimeWorld, path: String, fro
 }
 
 #[given(expr = "{string} holds only {int} lines")]
-fn file_holds_only_lines(world: &mut CrimeWorld, path: String, lines: usize) {
+fn file_holds_only_lines(world: &mut VardeWorld, path: String, lines: usize) {
     let full = world.state.root.join(&path);
     world.known_files.insert(full.clone());
     let current = world.files.get(&full).cloned().unwrap_or_default();
@@ -5982,7 +5982,7 @@ fn file_holds_only_lines(world: &mut CrimeWorld, path: String, lines: usize) {
 }
 
 #[given(expr = "{string} now holds different text at line {int}")]
-fn file_now_holds_different_text_at_line(world: &mut CrimeWorld, path: String, line: usize) {
+fn file_now_holds_different_text_at_line(world: &mut VardeWorld, path: String, line: usize) {
     let full = world.state.root.join(&path);
     world.known_files.insert(full.clone());
     let mut lines: Vec<String> = world
@@ -6002,7 +6002,7 @@ fn file_now_holds_different_text_at_line(world: &mut CrimeWorld, path: String, l
 }
 
 #[given(expr = "a story {string} holds the steps:")]
-fn story_holds_the_steps(world: &mut CrimeWorld, name: String, step: &Step) {
+fn story_holds_the_steps(world: &mut VardeWorld, name: String, step: &Step) {
     let table = step.table().expect("table");
     let headers = &table.rows[0];
     let steps: Vec<Value> = table
@@ -6059,7 +6059,7 @@ fn step_named<'a>(artifact: &'a mut story::Artifact, claim: &str) -> &'a mut sto
 }
 
 #[given(expr = "the step {string} carries the values:")]
-fn step_carries_values(world: &mut CrimeWorld, claim: String, step: &Step) {
+fn step_carries_values(world: &mut VardeWorld, claim: String, step: &Step) {
     let table = step.table().expect("table");
     let headers = &table.rows[0];
     let values: Vec<story::Value> = table
@@ -6104,7 +6104,7 @@ fn step_carries_values(world: &mut CrimeWorld, claim: String, step: &Step) {
 }
 
 #[given(expr = "the step {string} holds:")]
-fn step_holds_detail(world: &mut CrimeWorld, claim: String, step: &Step) {
+fn step_holds_detail(world: &mut VardeWorld, claim: String, step: &Step) {
     let table = step.table().expect("table");
     let headers = &table.rows[0];
     let row = &table.rows[1];
@@ -6128,7 +6128,7 @@ fn step_holds_detail(world: &mut CrimeWorld, claim: String, step: &Step) {
 }
 
 #[given(expr = "the step {string} asks {string}:")]
-fn step_asks(world: &mut CrimeWorld, claim: String, question: String, step: &Step) {
+fn step_asks(world: &mut VardeWorld, claim: String, question: String, step: &Step) {
     let table = step.table().expect("table");
     let headers = &table.rows[0];
     let choices: Vec<story::Choice> = table
@@ -6162,7 +6162,7 @@ fn step_asks(world: &mut CrimeWorld, claim: String, question: String, step: &Ste
 
 #[given("a story set for this change claims:")]
 #[when("a story set for this change claims:")]
-fn story_set_claims(world: &mut CrimeWorld, step: &Step) {
+fn story_set_claims(world: &mut VardeWorld, step: &Step) {
     let table = step.table().expect("table");
     let headers = &table.rows[0];
     let mut stories: Vec<(String, Vec<Value>)> = Vec::new();
@@ -6207,7 +6207,7 @@ fn story_set_claims(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[given("a story set for this change holds:")]
-fn story_set_holds(world: &mut CrimeWorld, step: &Step) {
+fn story_set_holds(world: &mut VardeWorld, step: &Step) {
     let table = step.table().expect("table");
     let headers = &table.rows[0];
     let stories: Vec<(String, Vec<Value>)> = table
@@ -6250,21 +6250,21 @@ fn story_set_holds(world: &mut CrimeWorld, step: &Step) {
 /// re-opening without leaving reads nothing off disk.
 #[given(expr = "I leave Story view")]
 #[when(expr = "I leave Story view")]
-fn leave_story_view(world: &mut CrimeWorld) {
+fn leave_story_view(world: &mut VardeWorld) {
     pick_palette_entry(world, "Edit");
 }
 
 #[given(expr = "I opened Story view")]
 #[given(expr = "I open Story view")]
 #[when(expr = "I open Story view")]
-fn open_story_view(world: &mut CrimeWorld) {
+fn open_story_view(world: &mut VardeWorld) {
     pick_palette_entry(world, "Story");
 }
 
 /// The Story's index in `story::spine`'s order — the same order
 /// `Event::EnterStory` reads by, so a scenario can name a Story rather than
 /// its position.
-fn story_index(world: &CrimeWorld, name: &str) -> usize {
+fn story_index(world: &VardeWorld, name: &str) -> usize {
     let story::Set::Loaded(artifact) = &world.state.story_set else {
         panic!("no story set loaded");
     };
@@ -6277,7 +6277,7 @@ fn story_index(world: &CrimeWorld, name: &str) -> usize {
 
 #[given(expr = "I enter the story {string}")]
 #[when(expr = "I enter the story {string}")]
-fn enter_story(world: &mut CrimeWorld, name: String) {
+fn enter_story(world: &mut VardeWorld, name: String) {
     if world.state.view != View::Story {
         pick_palette_entry(world, "Story");
     }
@@ -6287,7 +6287,7 @@ fn enter_story(world: &mut CrimeWorld, name: String) {
 
 #[given(expr = "I enter the remainder")]
 #[when(expr = "I enter the remainder")]
-fn enter_remainder(world: &mut CrimeWorld) {
+fn enter_remainder(world: &mut VardeWorld) {
     if world.state.view != View::Story {
         pick_palette_entry(world, "Story");
     }
@@ -6295,7 +6295,7 @@ fn enter_remainder(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the cursor is in {string}")]
-fn cursor_is_in(world: &mut CrimeWorld, path: String) {
+fn cursor_is_in(world: &mut VardeWorld, path: String) {
     let expected = world.state.root.join(&path);
     assert_eq!(world.state.current_buffer, Some(expected));
 }
@@ -6303,12 +6303,12 @@ fn cursor_is_in(world: &mut CrimeWorld, path: String) {
 /// Walking the Remainder is never a Story: it has no Step, so the band has
 /// nothing to claim.
 #[then(expr = "the band has no claim")]
-fn band_has_no_claim(world: &mut CrimeWorld) {
+fn band_has_no_claim(world: &mut VardeWorld) {
     assert!(story::current_step(&world.state).is_none());
 }
 
 #[then(expr = "no prediction is offered")]
-fn no_prediction_is_offered(world: &mut CrimeWorld) {
+fn no_prediction_is_offered(world: &mut VardeWorld) {
     let prediction = story::current_step(&world.state).and_then(|step| step.prediction.as_ref());
     assert!(prediction.is_none());
 }
@@ -6318,7 +6318,7 @@ fn no_prediction_is_offered(world: &mut CrimeWorld) {
 /// real effect would record an open the later "no file was opened" scenarios
 /// must not see.
 #[given(expr = "I am walking {string}")]
-fn set_walking(world: &mut CrimeWorld, name: String) {
+fn set_walking(world: &mut VardeWorld, name: String) {
     world.state.view = View::Story;
     world.state.focus = Pane::Editor;
     let index = story_index(world, &name);
@@ -6351,7 +6351,7 @@ fn set_walking(world: &mut CrimeWorld, name: String) {
 }
 
 #[then(expr = "I am walking {string}")]
-fn still_walking(world: &mut CrimeWorld, name: String) {
+fn still_walking(world: &mut VardeWorld, name: String) {
     let index = story_index(world, &name);
     assert_eq!(world.state.view, View::Story);
     let walking_story = match world.state.walking {
@@ -6364,7 +6364,7 @@ fn still_walking(world: &mut CrimeWorld, name: String) {
 /// Enters the story, then steps forward until the given (1-based) Step.
 #[given(expr = "I walked to step {int} of {string}")]
 #[when(expr = "I walk to step {int} of {string}")]
-fn walk_to_step(world: &mut CrimeWorld, target: usize, name: String) {
+fn walk_to_step(world: &mut VardeWorld, target: usize, name: String) {
     enter_story(world, name);
     for _ in 1..target {
         world.send(Event::StepStory(Direction::Right));
@@ -6373,7 +6373,7 @@ fn walk_to_step(world: &mut CrimeWorld, target: usize, name: String) {
 
 /// The current Story's Step by its 1-based position — the same numbering a
 /// scenario reads the spine or the walkthrough by.
-fn nth_step(world: &CrimeWorld, index: usize) -> &story::Step {
+fn nth_step(world: &VardeWorld, index: usize) -> &story::Step {
     let Some(story::Walking::Story { story, .. }) = world.state.walking else {
         panic!("walking a story");
     };
@@ -6384,10 +6384,10 @@ fn nth_step(world: &CrimeWorld, index: usize) -> &story::Step {
 }
 
 /// Reads the loaded set straight through rather than through `nth_step`: the
-/// text CRIME filled in is a fact about the set, and a Scenario should not
+/// text Varde filled in is a fact about the set, and a Scenario should not
 /// have to start walking a Story to see it.
 #[then(expr = "the site text of step {int} is {string}")]
-fn site_text_of_step_is(world: &mut CrimeWorld, index: usize, expected: String) {
+fn site_text_of_step_is(world: &mut VardeWorld, index: usize, expected: String) {
     let story::Set::Loaded(artifact) = &world.state.story_set else {
         panic!("no story set loaded");
     };
@@ -6401,20 +6401,20 @@ fn site_text_of_step_is(world: &mut CrimeWorld, index: usize, expected: String) 
 
 /// Holds back the edge's answer about what the Sites hold, so a Scenario can
 /// watch a parsed set stay unwalkable while the read is outstanding.
-#[given(expr = "CRIME has not yet read what the sites hold")]
-fn sites_not_yet_read(world: &mut CrimeWorld) {
+#[given(expr = "Varde has not yet read what the sites hold")]
+fn sites_not_yet_read(world: &mut VardeWorld) {
     world.hold_site_texts = true;
 }
 
 /// By position, not by name: a set that is not loaded has no spine to look a
 /// name up in, which is exactly the Scenario this exists for.
 #[when(expr = "I choose the first story from the spine")]
-fn choose_first_story(world: &mut CrimeWorld) {
+fn choose_first_story(world: &mut VardeWorld) {
     world.send(Event::EnterStory(0));
 }
 
 #[then(expr = "step {int} is stale as {string}")]
-fn step_is_stale_as(world: &mut CrimeWorld, index: usize, kind: String) {
+fn step_is_stale_as(world: &mut VardeWorld, index: usize, kind: String) {
     let step = nth_step(world, index);
     assert_eq!(
         story::staleness(&world.state, step).kind(),
@@ -6424,25 +6424,25 @@ fn step_is_stale_as(world: &mut CrimeWorld, index: usize, kind: String) {
 
 #[given(expr = "step {int} is not stale")]
 #[then(expr = "step {int} is not stale")]
-fn step_is_not_stale(world: &mut CrimeWorld, index: usize) {
+fn step_is_not_stale(world: &mut VardeWorld, index: usize) {
     let step = nth_step(world, index);
     assert!(!story::staleness(&world.state, step).is_stale());
 }
 
 #[then(expr = "the band warns that the step is stale")]
-fn band_warns_stale(world: &mut CrimeWorld) {
+fn band_warns_stale(world: &mut VardeWorld) {
     let step = story::current_step(&world.state).expect("a step");
     assert!(story::staleness(&world.state, step).is_stale());
 }
 
 #[then(expr = "the overlay shows the site's stored text")]
-fn overlay_shows_stored_text(world: &mut CrimeWorld) {
+fn overlay_shows_stored_text(world: &mut VardeWorld) {
     let step = story::current_step(&world.state).expect("a step");
     assert!(!step.site.text.is_empty());
 }
 
 #[then(expr = "the overlay shows what the site holds now")]
-fn overlay_shows_current_text(world: &mut CrimeWorld) {
+fn overlay_shows_current_text(world: &mut VardeWorld) {
     let step = story::current_step(&world.state).expect("a step");
     match story::staleness(&world.state, step) {
         story::Staleness::Changed { now } => assert_ne!(now, step.site.text),
@@ -6451,12 +6451,12 @@ fn overlay_shows_current_text(world: &mut CrimeWorld) {
 }
 
 #[when(expr = "I change line {int} of {string} in the editor")]
-fn change_line_in_editor(world: &mut CrimeWorld, line: usize, path: String) {
+fn change_line_in_editor(world: &mut VardeWorld, line: usize, path: String) {
     edit_line(world, &path, line, "totally different text now");
 }
 
 #[when(expr = "I re-indent line {int} of {string} in the editor")]
-fn reindent_line_in_editor(world: &mut CrimeWorld, line: usize, path: String) {
+fn reindent_line_in_editor(world: &mut VardeWorld, line: usize, path: String) {
     let full = world.state.root.join(&path);
     let buffer = world.state.buffers.get_mut(&full).expect("buffer open");
     buffer.go_to_place(Place { line, column: 1 });
@@ -6470,7 +6470,7 @@ fn reindent_line_in_editor(world: &mut CrimeWorld, line: usize, path: String) {
 /// Clears a whole line, then types replacement text into it — used to make an
 /// in-editor edit that genuinely changes a Site's text, as opposed to a
 /// reindent that only shifts its whitespace.
-fn edit_line(world: &mut CrimeWorld, path: &str, line: usize, text: &str) {
+fn edit_line(world: &mut VardeWorld, path: &str, line: usize, text: &str) {
     let full = world.state.root.join(path);
     let buffer = world.state.buffers.get_mut(&full).expect("buffer open");
     buffer.go_to_place(Place { line, column: 1 });
@@ -6488,7 +6488,7 @@ fn edit_line(world: &mut CrimeWorld, path: &str, line: usize, text: &str) {
 /// be spelt the same way or the bar lands on nothing. A Guest repo's file was
 /// spelt from the workspace root and never matched.
 #[then(expr = "the site mark is drawn on the file on screen")]
-fn site_mark_is_on_screen(world: &mut CrimeWorld) {
+fn site_mark_is_on_screen(world: &mut VardeWorld) {
     let marked = story::mark(&world.state);
     let story::SiteMark::Site { from, .. } = &marked else {
         panic!("expected a site mark, got {marked:?}");
@@ -6501,7 +6501,7 @@ fn site_mark_is_on_screen(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the site mark covers lines {int} to {int} of {string}")]
-fn site_mark_covers(world: &mut CrimeWorld, from: u32, to: u32, path: String) {
+fn site_mark_covers(world: &mut VardeWorld, from: u32, to: u32, path: String) {
     let marked = story::mark(&world.state);
     let story::SiteMark::Site {
         file,
@@ -6520,11 +6520,11 @@ fn site_mark_covers(world: &mut CrimeWorld, from: u32, to: u32, path: String) {
 
 /// The promise framing makes, asked of the rows the pane actually shows: a
 /// Site is a range, so "in view" is a claim about both its ends. In rows, via
-/// `story::row_of`, and against `crime::fits` rather than a count of its own —
+/// `story::row_of`, and against `varde::fits` rather than a count of its own —
 /// a scenario recomputing the pane's size would be asserting its own
 /// arithmetic.
 #[then(expr = "the whole site is in view")]
-fn whole_site_is_in_view(world: &mut CrimeWorld) {
+fn whole_site_is_in_view(world: &mut VardeWorld) {
     let marked = story::mark(&world.state);
     let story::SiteMark::Site { from, to, .. } = &marked else {
         panic!("expected a site mark, got {marked:?}");
@@ -6534,7 +6534,7 @@ fn whole_site_is_in_view(world: &mut CrimeWorld) {
         story::row_of(&world.state, *to),
     );
     let top = world.state.editor_scroll + 1;
-    let bottom = top + crime::fits(&world.state).1 - 1;
+    let bottom = top + varde::fits(&world.state).1 - 1;
     assert!(
         first >= top && last <= bottom,
         "the site is drawn on rows {first} to {last}, and the pane shows rows {top} to {bottom}"
@@ -6542,7 +6542,7 @@ fn whole_site_is_in_view(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the site mark is {string}")]
-fn site_mark_is(world: &mut CrimeWorld, kind: String) {
+fn site_mark_is(world: &mut VardeWorld, kind: String) {
     let marked = story::mark(&world.state);
     let story::SiteMark::Site {
         kind: marked_kind, ..
@@ -6554,12 +6554,12 @@ fn site_mark_is(world: &mut CrimeWorld, kind: String) {
 }
 
 #[then(expr = "line {int} of {string} is marked")]
-fn line_is_marked(world: &mut CrimeWorld, line: u32, path: String) {
+fn line_is_marked(world: &mut VardeWorld, line: u32, path: String) {
     assert!(story::mark(&world.state).covers(&path, line));
 }
 
 #[then(expr = "no site mark is drawn")]
-fn no_site_mark(world: &mut CrimeWorld) {
+fn no_site_mark(world: &mut VardeWorld) {
     let marked = story::mark(&world.state);
     assert!(
         !matches!(marked, story::SiteMark::Site { .. }),
@@ -6570,7 +6570,7 @@ fn no_site_mark(world: &mut CrimeWorld) {
 // ---- The Site's diff ----
 
 #[then(expr = "line {int} of {string} is marked as added")]
-fn line_is_marked_as_added(world: &mut CrimeWorld, line: u32, path: String) {
+fn line_is_marked_as_added(world: &mut VardeWorld, line: u32, path: String) {
     assert_eq!(story::shown_file(&world.state), path);
     let diff = story::site_diff(&world.state);
     assert!(
@@ -6580,7 +6580,7 @@ fn line_is_marked_as_added(world: &mut CrimeWorld, line: u32, path: String) {
 }
 
 #[then(expr = "line {int} of {string} is not marked as added")]
-fn line_is_not_marked_as_added(world: &mut CrimeWorld, line: u32, path: String) {
+fn line_is_not_marked_as_added(world: &mut VardeWorld, line: u32, path: String) {
     assert_eq!(story::shown_file(&world.state), path);
     let diff = story::site_diff(&world.state);
     assert!(
@@ -6592,7 +6592,7 @@ fn line_is_not_marked_as_added(world: &mut CrimeWorld, line: u32, path: String) 
 /// Every removed row the code surface draws, with the line it sits under —
 /// read off `story::rows`, the map the renderer, the caret and the scroll
 /// clamp all read.
-fn removed_rows(world: &CrimeWorld) -> Vec<(u32, String)> {
+fn removed_rows(world: &VardeWorld) -> Vec<(u32, String)> {
     let lines = current_buffer(world).shown().split('\n').count();
     let mut under = 0;
     let mut removed = Vec::new();
@@ -6607,7 +6607,7 @@ fn removed_rows(world: &CrimeWorld) -> Vec<(u32, String)> {
 }
 
 #[then(expr = "the code shows the removed rows:")]
-fn code_shows_removed_rows(world: &mut CrimeWorld, step: &Step) {
+fn code_shows_removed_rows(world: &mut VardeWorld, step: &Step) {
     let table = step.table().expect("table");
     let expected: Vec<(u32, String)> = table
         .rows
@@ -6624,34 +6624,34 @@ fn code_shows_removed_rows(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "the code shows no removed rows")]
-fn code_shows_no_removed_rows(world: &mut CrimeWorld) {
+fn code_shows_no_removed_rows(world: &mut VardeWorld) {
     assert_eq!(removed_rows(world), vec![]);
 }
 
 /// What the pane title says keys will do — the buffer's own mode everywhere but
 /// a walk, which claims every editor key before the buffer sees one.
 #[then(expr = "the editor mode label is {string}")]
-fn editor_mode_label_is(world: &mut CrimeWorld, expected: String) {
-    let label = crime::mode_label(&world.state, current_buffer(world));
+fn editor_mode_label_is(world: &mut VardeWorld, expected: String) {
+    let label = varde::mode_label(&world.state, current_buffer(world));
     assert_eq!(label, expected);
 }
 
 #[then(expr = "the step view state is {string}")]
-fn step_view_state_is(world: &mut CrimeWorld, expected: String) {
+fn step_view_state_is(world: &mut VardeWorld, expected: String) {
     assert_eq!(story::mark(&world.state).as_str(), expected);
 }
 
 /// Dimming is not a query of its own: a line is dimmed exactly when it is
 /// outside the mark, so this asserts the same answer the renderer derives.
 #[then(expr = "line {int} of {string} is dimmed")]
-fn line_is_dimmed(world: &mut CrimeWorld, line: u32, path: String) {
+fn line_is_dimmed(world: &mut VardeWorld, line: u32, path: String) {
     assert!(!story::mark(&world.state).covers(&path, line));
 }
 
 /// Widens a Step's Site, carrying its stored text with it — a range moved
 /// without its text would read as stale, which is a different scenario.
 #[given(expr = "the step {string} covers lines {int} to {int}")]
-fn step_covers_lines(world: &mut CrimeWorld, claim: String, from: u32, to: u32) {
+fn step_covers_lines(world: &mut VardeWorld, claim: String, from: u32, to: u32) {
     let file = {
         let story::Set::Loaded(artifact) = &world.state.story_set else {
             panic!("no story set loaded");
@@ -6687,7 +6687,7 @@ fn step_covers_lines(world: &mut CrimeWorld, claim: String, from: u32, to: u32) 
 }
 
 #[given(expr = "the step {string} points at context")]
-fn step_points_at_context(world: &mut CrimeWorld, claim: String) {
+fn step_points_at_context(world: &mut VardeWorld, claim: String) {
     let story::Set::Loaded(artifact) = &mut world.state.story_set else {
         panic!("no story set loaded");
     };
@@ -6697,7 +6697,7 @@ fn step_points_at_context(world: &mut CrimeWorld, claim: String) {
 /// A Prediction with no scenario-visible content: these scenarios care that
 /// the overlay is up at all, not what it offers.
 #[given(expr = "the step {string} carries a prediction")]
-fn step_carries_a_prediction(world: &mut CrimeWorld, claim: String) {
+fn step_carries_a_prediction(world: &mut VardeWorld, claim: String) {
     let choices = ["a", "b", "c"]
         .into_iter()
         .enumerate()
@@ -6717,7 +6717,7 @@ fn step_carries_a_prediction(world: &mut CrimeWorld, claim: String) {
 }
 
 #[given(expr = "the step {string} points at the old side")]
-fn step_points_at_old_side(world: &mut CrimeWorld, claim: String) {
+fn step_points_at_old_side(world: &mut VardeWorld, claim: String) {
     let story::Set::Loaded(artifact) = &mut world.state.story_set else {
         panic!("no story set loaded");
     };
@@ -6725,7 +6725,7 @@ fn step_points_at_old_side(world: &mut CrimeWorld, claim: String) {
 }
 
 #[given(expr = "the story set's range is {string}")]
-fn story_set_range_is(world: &mut CrimeWorld, spelling: String) {
+fn story_set_range_is(world: &mut VardeWorld, spelling: String) {
     let (base, head, _) = story::revisions(&spelling).expect("a base..head spelling");
     let story::Set::Loaded(artifact) = &mut world.state.story_set else {
         panic!("no story set loaded");
@@ -6742,7 +6742,7 @@ fn story_set_range_is(world: &mut CrimeWorld, spelling: String) {
 /// an uncommitted range vulnerable to staleness in the first place.
 #[given(expr = "the working tree is committed")]
 #[when(expr = "the working tree is committed")]
-fn working_tree_is_committed(world: &mut CrimeWorld) {
+fn working_tree_is_committed(world: &mut VardeWorld) {
     for (path, contents) in world.files.clone() {
         world.held.insert(path, contents);
     }
@@ -6750,7 +6750,7 @@ fn working_tree_is_committed(world: &mut CrimeWorld) {
 }
 
 #[given(expr = "authoring has begun for {string}")]
-fn authoring_begun(world: &mut CrimeWorld, spelling: String) {
+fn authoring_begun(world: &mut VardeWorld, spelling: String) {
     // The snapshot "the review list is unchanged" compares against, taken
     // before the real confirm flow runs.
     world.repo_before = Some(review::list(&world.state));
@@ -6762,7 +6762,7 @@ fn authoring_begun(world: &mut CrimeWorld, spelling: String) {
 }
 
 #[when(expr = "the story artifact arrives:")]
-fn story_artifact_arrives(world: &mut CrimeWorld, step: &Step) {
+fn story_artifact_arrives(world: &mut VardeWorld, step: &Step) {
     let contents = step
         .docstring()
         .expect("docstring")
@@ -6775,7 +6775,7 @@ fn story_artifact_arrives(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[when(expr = "a story artifact arrives whose prediction offers {int} choices")]
-fn artifact_with_choice_count(world: &mut CrimeWorld, count: u32) {
+fn artifact_with_choice_count(world: &mut VardeWorld, count: u32) {
     let choices: Vec<Value> = (0..count)
         .map(|index| {
             json!({
@@ -6800,7 +6800,7 @@ fn artifact_with_choice_count(world: &mut CrimeWorld, count: u32) {
 }
 
 #[given(expr = "a story set exists for the range {string}")]
-fn story_set_exists_for_range(world: &mut CrimeWorld, spelling: String) {
+fn story_set_exists_for_range(world: &mut VardeWorld, spelling: String) {
     let (base, head, _) = story::revisions(&spelling).expect("a range");
     let claimed = build_step("s1e1", "src/keys.rs", "new", "changed", 1, 1, "x");
     // The Step has to point at real, changed code, or the arrival checks
@@ -6814,7 +6814,7 @@ fn story_set_exists_for_range(world: &mut CrimeWorld, spelling: String) {
         &spelling,
         vec![("Story".to_string(), vec![claimed])],
     );
-    let dir = world.state.root.join(".crime/stories");
+    let dir = world.state.root.join(".varde/stories");
     world
         .files
         .insert(dir.join(format!("{base}-{head}.json")), contents);
@@ -6822,10 +6822,10 @@ fn story_set_exists_for_range(world: &mut CrimeWorld, spelling: String) {
 }
 
 /// A story set already in the folder, writing no `site.text` — the shape the
-/// AI leaves behind now that CRIME fills the text in. Written into the folder
+/// AI leaves behind now that Varde fills the text in. Written into the folder
 /// rather than sent as an event, so opening Story view really re-reads it.
 #[given(expr = "a story set on disk claims lines {int} to {int} of {string}")]
-fn story_set_on_disk_claims(world: &mut CrimeWorld, from: u32, to: u32, path: String) {
+fn story_set_on_disk_claims(world: &mut VardeWorld, from: u32, to: u32, path: String) {
     let claimed = build_step("s1e1", &path, "new", "changed", from, to, "");
     let contents = build_story(
         "aaaaaaaaaaaa",
@@ -6833,14 +6833,14 @@ fn story_set_on_disk_claims(world: &mut CrimeWorld, from: u32, to: u32, path: St
         "main..HEAD",
         vec![("The keys".to_string(), vec![claimed])],
     );
-    let dir = world.state.root.join(".crime/stories");
+    let dir = world.state.root.join(".varde/stories");
     world
         .files
         .insert(dir.join("aaaaaaaaaaaa-bbbbbbbbbbbb.json"), contents);
 }
 
 #[given(expr = "that range is what {string} resolves to")]
-fn range_resolves_to(world: &mut CrimeWorld, spelling: String) {
+fn range_resolves_to(world: &mut VardeWorld, spelling: String) {
     let range = world
         .last_authored_range
         .clone()
@@ -6849,17 +6849,17 @@ fn range_resolves_to(world: &mut CrimeWorld, spelling: String) {
 }
 
 #[given(expr = "{string} is not a commit in this repository")]
-fn revision_unresolvable(world: &mut CrimeWorld, revision: String) {
+fn revision_unresolvable(world: &mut VardeWorld, revision: String) {
     world.unresolvable.insert(revision);
 }
 
 #[then(expr = "the tree pane shows the spine")]
-fn tree_shows_spine(world: &mut CrimeWorld) {
+fn tree_shows_spine(world: &mut VardeWorld) {
     assert_eq!(world.state.story_listing, story::Listing::Spine);
 }
 
 #[then(expr = "the tree pane shows the review list")]
-fn tree_shows_review_list(world: &mut CrimeWorld) {
+fn tree_shows_review_list(world: &mut VardeWorld) {
     assert_eq!(world.state.story_listing, story::Listing::Files);
     let mut visible: Vec<PathBuf> = tree::visible_rows(&world.state)
         .into_iter()
@@ -6875,7 +6875,7 @@ fn tree_shows_review_list(world: &mut CrimeWorld) {
 }
 
 #[then("the spine lists:")]
-fn spine_lists(world: &mut CrimeWorld, step: &Step) {
+fn spine_lists(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<(String, usize)> = step
         .table()
         .expect("table")
@@ -6892,37 +6892,37 @@ fn spine_lists(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "the tree pane has no filter box")]
-fn tree_has_no_filter_box(world: &mut CrimeWorld) {
+fn tree_has_no_filter_box(world: &mut VardeWorld) {
     assert_eq!(tree::filter_rows(world.state.view), 0);
 }
 
 #[then(expr = "the spine's title is {string}")]
-fn spine_title_is(world: &mut CrimeWorld, expected: String) {
+fn spine_title_is(world: &mut VardeWorld, expected: String) {
     assert_eq!(story::title(&world.state), Some(expected.as_str()));
 }
 
 #[then(expr = "the spine has no title")]
-fn spine_has_no_title(world: &mut CrimeWorld) {
+fn spine_has_no_title(world: &mut VardeWorld) {
     assert_eq!(story::title(&world.state), None);
 }
 
 #[then(expr = "the spine reserves a row for the title")]
-fn spine_reserves_a_row_for_the_title(world: &mut CrimeWorld) {
+fn spine_reserves_a_row_for_the_title(world: &mut VardeWorld) {
     assert_eq!(story::title_rows(&world.state), 1);
 }
 
 #[then(expr = "the spine reserves no row for the title")]
-fn spine_reserves_no_row_for_the_title(world: &mut CrimeWorld) {
+fn spine_reserves_no_row_for_the_title(world: &mut VardeWorld) {
     assert_eq!(story::title_rows(&world.state), 0);
 }
 
 #[then(expr = "the spine view starts at row {int}")]
-fn spine_view_starts(world: &mut CrimeWorld, row: usize) {
+fn spine_view_starts(world: &mut VardeWorld, row: usize) {
     assert_eq!(world.state.spine_scroll + 1, row);
 }
 
 #[then(expr = "the story view state is {string}")]
-fn story_view_state(world: &mut CrimeWorld, expected: String) {
+fn story_view_state(world: &mut VardeWorld, expected: String) {
     assert_eq!(story::view_state(&world.state), expected);
 }
 
@@ -6930,7 +6930,7 @@ fn story_view_state(world: &mut CrimeWorld, expected: String) {
 /// left rereading a 70KB artifact. The Step's id and the fault's own word,
 /// never the sentence around them.
 #[then(expr = "the refusal names step {string} as {string}")]
-fn refusal_names_step(world: &mut CrimeWorld, id: String, fault: String) {
+fn refusal_names_step(world: &mut VardeWorld, id: String, fault: String) {
     let story::Set::Refused { because } = &world.state.story_set else {
         panic!("the set was not refused: {:?}", world.state.story_set);
     };
@@ -6942,7 +6942,7 @@ fn refusal_names_step(world: &mut CrimeWorld, id: String, fault: String) {
 /// never the sentence around them — the same pair a refusal names, because the
 /// two must not drift apart.
 #[then(expr = "the fix request names step {string} as {string}")]
-fn fix_request_names_step(world: &mut CrimeWorld, id: String, fault: String) {
+fn fix_request_names_step(world: &mut VardeWorld, id: String, fault: String) {
     assert!(
         matches!(world.state.story_set, story::Set::Fixing { .. }),
         "the set is not being fixed: {:?}",
@@ -6955,25 +6955,25 @@ fn fix_request_names_step(world: &mut CrimeWorld, id: String, fault: String) {
 /// A fix request that named a passing Step would have the AI rewriting the
 /// whole set, which is the ten minutes this exists to save.
 #[then(expr = "the fix request does not name step {string}")]
-fn fix_request_does_not_name_step(world: &mut CrimeWorld, id: String) {
+fn fix_request_does_not_name_step(world: &mut VardeWorld, id: String) {
     let request = fix_request(world);
     assert!(!request.contains(&format!("`{id}`:")), "{request}");
 }
 
 #[then(expr = "the fix request names the file {string}")]
-fn fix_request_names_the_file(world: &mut CrimeWorld, path: String) {
+fn fix_request_names_the_file(world: &mut VardeWorld, path: String) {
     let request = fix_request(world);
     assert!(request.contains(&path), "{request}");
 }
 
-fn fix_request(world: &CrimeWorld) -> String {
+fn fix_request(world: &VardeWorld) -> String {
     let sent = ai_sends(world);
     assert!(sent.len() > 1, "no fix request was sent: {sent:?}");
     sent.last().expect("a send").clone()
 }
 
 #[then(expr = "the cursor is on line {int} of {string}")]
-fn cursor_on_line_of(world: &mut CrimeWorld, line: usize, path: String) {
+fn cursor_on_line_of(world: &mut VardeWorld, line: usize, path: String) {
     let expected = world.state.root.join(&path);
     assert_eq!(world.state.current_buffer, Some(expected.clone()));
     let buffer = world
@@ -6985,18 +6985,18 @@ fn cursor_on_line_of(world: &mut CrimeWorld, line: usize, path: String) {
 }
 
 #[then(expr = "the band claim is {string}")]
-fn band_claim_is(world: &mut CrimeWorld, expected: String) {
+fn band_claim_is(world: &mut VardeWorld, expected: String) {
     let claim = story::current_step(&world.state).map(|step| step.claim.clone());
     assert_eq!(claim, Some(expected));
 }
 
 #[then(expr = "the step menu is empty")]
-fn step_menu_is_empty(world: &mut CrimeWorld) {
+fn step_menu_is_empty(world: &mut VardeWorld) {
     assert!(story::step_menu(&world.state).is_empty());
 }
 
 #[then("the step menu lists:")]
-fn step_menu_lists(world: &mut CrimeWorld, step: &Step) {
+fn step_menu_lists(world: &mut VardeWorld, step: &Step) {
     let table = step.table().expect("table");
     let headers = &table.rows[0];
     let expected: Vec<(String, bool)> = table
@@ -7022,7 +7022,7 @@ fn step_menu_lists(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "the band values are:")]
-fn band_values_are(world: &mut CrimeWorld, step: &Step) {
+fn band_values_are(world: &mut VardeWorld, step: &Step) {
     let table = step.table().expect("table");
     let headers = &table.rows[0];
     let expected: Vec<(String, String, String)> = table
@@ -7061,7 +7061,7 @@ fn band_values_are(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "the band has no values row")]
-fn band_has_no_values_row(world: &mut CrimeWorld) {
+fn band_has_no_values_row(world: &mut VardeWorld) {
     let empty = story::current_step(&world.state)
         .map(|step| step.values.is_empty())
         .unwrap_or(true);
@@ -7069,7 +7069,7 @@ fn band_has_no_values_row(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the overlay sections are:")]
-fn overlay_sections_are(world: &mut CrimeWorld, step: &Step) {
+fn overlay_sections_are(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -7087,7 +7087,7 @@ fn overlay_sections_are(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "the view is {string}")]
-fn the_view_is(world: &mut CrimeWorld, name: String) {
+fn the_view_is(world: &mut VardeWorld, name: String) {
     let expected = match name.as_str() {
         "edit" => View::Edit,
         "review" => View::Review,
@@ -7098,7 +7098,7 @@ fn the_view_is(world: &mut CrimeWorld, name: String) {
 }
 
 #[then(expr = "{string} was opened in the editor")]
-fn was_opened_in_the_editor(world: &mut CrimeWorld, path: String) {
+fn was_opened_in_the_editor(world: &mut VardeWorld, path: String) {
     let expected = world.state.root.join(&path);
     assert!(
         world.opened.contains(&expected),
@@ -7108,12 +7108,12 @@ fn was_opened_in_the_editor(world: &mut CrimeWorld, path: String) {
 }
 
 #[then(expr = "the editor scrolled down")]
-fn editor_scrolled_down(world: &mut CrimeWorld) {
+fn editor_scrolled_down(world: &mut VardeWorld) {
     assert!(world.state.editor_scroll > 0);
 }
 
 #[then(expr = "the spine is empty")]
-fn spine_is_empty(world: &mut CrimeWorld) {
+fn spine_is_empty(world: &mut VardeWorld) {
     assert!(story::spine(&world.state).is_empty());
 }
 
@@ -7123,7 +7123,7 @@ fn spine_is_empty(world: &mut CrimeWorld) {
 #[when(expr = "I run {string} in the editor")]
 #[given(expr = "I run {string}")]
 #[when(expr = "I run {string}")]
-fn run_story_command(world: &mut CrimeWorld, line: String) {
+fn run_story_command(world: &mut VardeWorld, line: String) {
     assert!(line.starts_with(':'), "not a : command: {line:?}");
     let mut drafts = std::mem::take(&mut world.drafts);
     for c in line.chars() {
@@ -7147,7 +7147,7 @@ fn plain_key(c: char) -> terminput::KeyEvent {
 }
 
 #[given(expr = "{string} resolves to {string}")]
-fn origin_head_resolves_to(world: &mut CrimeWorld, source: String, revision: String) {
+fn origin_head_resolves_to(world: &mut VardeWorld, source: String, revision: String) {
     match source.as_str() {
         "origin/HEAD" => world.origin_head = Some(revision),
         "HEAD" => {
@@ -7160,7 +7160,7 @@ fn origin_head_resolves_to(world: &mut CrimeWorld, source: String, revision: Str
 }
 
 #[given(regex = r#"^the repository resolves (.+) to "(.+)"$"#)]
-fn ladder_candidate_resolves_to(world: &mut CrimeWorld, source: String, branch: String) {
+fn ladder_candidate_resolves_to(world: &mut VardeWorld, source: String, branch: String) {
     match source.as_str() {
         "\"origin/HEAD\"" => world.origin_head = Some(branch),
         "the upstream branch" => world.upstream_branch = Some(branch),
@@ -7179,10 +7179,10 @@ fn ladder_candidate_resolves_to(world: &mut CrimeWorld, source: String, branch: 
 // ancestry — a candidate that resolves is used as-is, and where the two have
 // parted is git's question, asked by the three dots the spelling carries.
 #[given(expr = "{string} has commits {string} does not")]
-fn has_commits_the_other_does_not(_world: &mut CrimeWorld, _branch: String, _of: String) {}
+fn has_commits_the_other_does_not(_world: &mut VardeWorld, _branch: String, _of: String) {}
 
 #[given(expr = "the repository resolves no default branch")]
-fn no_default_branch_resolves(world: &mut CrimeWorld) {
+fn no_default_branch_resolves(world: &mut VardeWorld) {
     world.origin_head = None;
     world.upstream_branch = None;
     world.default_branch_config = None;
@@ -7193,7 +7193,7 @@ fn no_default_branch_resolves(world: &mut CrimeWorld) {
 /// which is what the list is ordered by — a bare number, because a scenario
 /// about ordering is about which is newer and nothing else.
 #[given(expr = "the repository has branches:")]
-fn repository_has_branches(world: &mut CrimeWorld, step: &Step) {
+fn repository_has_branches(world: &mut VardeWorld, step: &Step) {
     let rows = step.table().expect("a table of branches").rows.clone();
     world.branch_refs = rows
         .into_iter()
@@ -7214,7 +7214,7 @@ fn repository_has_branches(world: &mut CrimeWorld, step: &Step) {
 /// puts in the picker. Newer than every branch the scenario declared, because
 /// a branch pushed after the clone is the newest thing there is to list.
 #[when(expr = "the branch {string} appears on the remote")]
-fn branch_appears_on_the_remote(world: &mut CrimeWorld, name: String) {
+fn branch_appears_on_the_remote(world: &mut VardeWorld, name: String) {
     let when = world
         .branch_refs
         .iter()
@@ -7230,7 +7230,7 @@ fn branch_appears_on_the_remote(world: &mut CrimeWorld, name: String) {
 }
 
 #[given(expr = "git is installed")]
-fn git_is_installed(world: &mut CrimeWorld) {
+fn git_is_installed(world: &mut VardeWorld) {
     world.git_on_path = true;
     world.tell_core();
 }
@@ -7238,7 +7238,7 @@ fn git_is_installed(world: &mut CrimeWorld) {
 /// The one runtime dependency a Guest repo adds. Stated rather than assumed,
 /// because the core is told what is on the machine and never remembers it.
 #[given(expr = "git is not installed")]
-fn git_is_not_installed(world: &mut CrimeWorld) {
+fn git_is_not_installed(world: &mut VardeWorld) {
     world.git_on_path = false;
     world.tell_core();
 }
@@ -7249,7 +7249,7 @@ fn git_is_not_installed(world: &mut CrimeWorld) {
 /// Sidecar is spelled is not a scenario's business, so the step derives it
 /// the way the step for a review written outside every workspace does.
 #[then(expr = "the terminal has cloned {string} into the Sidecar")]
-fn terminal_has_cloned(world: &mut CrimeWorld, url: String) {
+fn terminal_has_cloned(world: &mut VardeWorld, url: String) {
     // The last command, not the only one: a session that has already cloned
     // one repository can clone a second. Cloning this URL *twice* is still
     // held against, since that is the whole of what a fetch exists to avoid.
@@ -7288,7 +7288,7 @@ fn terminal_has_cloned(world: &mut CrimeWorld, url: String) {
 /// URL, because a fetch given a URL updates no remote-tracking ref — how the
 /// line is spelled is `story::download_command`'s own unit test.
 #[then(expr = "the terminal has fetched {string}")]
-fn terminal_has_fetched(world: &mut CrimeWorld, url: String) {
+fn terminal_has_fetched(world: &mut VardeWorld, url: String) {
     let guest = Path::new(SIDECAR).join(story::guest_name(&url));
     let sentinel = Path::new(SIDECAR).join(story::DOWNLOAD_SENTINEL);
     let fetch = world.executed.last().expect("a command");
@@ -7318,7 +7318,7 @@ fn terminal_has_fetched(world: &mut CrimeWorld, url: String) {
 /// under review, and nothing about it is thrown away because a download of
 /// something newer did not arrive.
 #[then(expr = "the Guest repo is still there")]
-fn guest_repo_is_still_there(world: &mut CrimeWorld) {
+fn guest_repo_is_still_there(world: &mut VardeWorld) {
     let guest = PathBuf::from(SIDECAR).join(story::guest_name("git@github.com:them/theirs.git"));
     assert_eq!(world.state.guest.as_ref(), Some(&guest));
     assert!(
@@ -7331,11 +7331,11 @@ fn guest_repo_is_still_there(world: &mut CrimeWorld) {
 }
 
 /// Absolute and in the Sidecar, both of them: the prompt goes to a session
-/// whose working directory CRIME did not set and does not move, so a relative
+/// whose working directory Varde did not set and does not move, so a relative
 /// path names a file somewhere nobody agreed on — and in the workspace it
-/// would be a file in a folder CRIME promises to write nothing into.
+/// would be a file in a folder Varde promises to write nothing into.
 #[then(expr = "the authoring prompt names the story set in the Sidecar")]
-fn prompt_names_the_set_in_the_sidecar(world: &mut CrimeWorld) {
+fn prompt_names_the_set_in_the_sidecar(world: &mut VardeWorld) {
     let prompt = ai_sends(world).first().cloned().expect("a prompt");
     let named: Vec<&str> = prompt
         .split_whitespace()
@@ -7357,7 +7357,7 @@ fn prompt_names_the_set_in_the_sidecar(world: &mut CrimeWorld) {
 /// Written beside the set, which for a Guest repo means beside it in the
 /// Sidecar: the prompt has already pointed the AI at this exact path.
 #[then(expr = "the story context file was written into the Sidecar")]
-fn context_written_into_the_sidecar(world: &mut CrimeWorld) {
+fn context_written_into_the_sidecar(world: &mut VardeWorld) {
     let written: Vec<&PathBuf> = world
         .wrote
         .iter()
@@ -7374,9 +7374,9 @@ fn context_written_into_the_sidecar(world: &mut CrimeWorld) {
 }
 
 /// The clone and nothing else: the authoring session's working directory is
-/// nothing CRIME moves, so no `cd` and no second command follow it.
+/// nothing Varde moves, so no `cd` and no second command follow it.
 #[then(expr = "the terminal has run nothing but the clone")]
-fn terminal_ran_only_the_clone(world: &mut CrimeWorld) {
+fn terminal_ran_only_the_clone(world: &mut VardeWorld) {
     let [clone] = world.executed.as_slice() else {
         panic!("executed: {:?}", world.executed);
     };
@@ -7385,7 +7385,7 @@ fn terminal_ran_only_the_clone(world: &mut CrimeWorld) {
 
 /// A file in the clone rather than in the workspace — the Sidecar path the
 /// core derived, so a scenario never spells the Sidecar itself.
-fn guest_path(world: &CrimeWorld, file: &str) -> PathBuf {
+fn guest_path(world: &VardeWorld, file: &str) -> PathBuf {
     world
         .state
         .guest
@@ -7396,7 +7396,7 @@ fn guest_path(world: &CrimeWorld, file: &str) -> PathBuf {
 
 #[given(expr = "the Guest repo's file {string} holds:")]
 #[when(expr = "the Guest repo's file {string} holds:")]
-fn guest_file_holds(world: &mut CrimeWorld, file: String, step: &Step) {
+fn guest_file_holds(world: &mut VardeWorld, file: String, step: &Step) {
     let contents = step
         .docstring()
         .expect("docstring")
@@ -7414,7 +7414,7 @@ fn guest_file_holds(world: &mut CrimeWorld, file: String, step: &Step) {
 /// A Guest repo's file as its range's base held it — the "held:" of the clone.
 #[given(expr = "the Guest repo's file {string} held:")]
 #[when(expr = "the Guest repo's file {string} held:")]
-fn guest_file_held(world: &mut CrimeWorld, file: String, step: &Step) {
+fn guest_file_held(world: &mut VardeWorld, file: String, step: &Step) {
     let contents = step
         .docstring()
         .expect("docstring")
@@ -7428,7 +7428,7 @@ fn guest_file_held(world: &mut CrimeWorld, file: String, step: &Step) {
 }
 
 #[when(expr = "the Guest repo's file {string} is opened in the editor")]
-fn guest_file_is_opened(world: &mut CrimeWorld, file: String) {
+fn guest_file_is_opened(world: &mut VardeWorld, file: String) {
     let path = guest_path(world, &file);
     let contents = world.files.get(&path).cloned().unwrap_or_default();
     world.send(Event::BufferOpened {
@@ -7440,7 +7440,7 @@ fn guest_file_is_opened(world: &mut CrimeWorld, file: String) {
 }
 
 #[then(expr = "the Guest repo's file {string} was opened in the editor")]
-fn guest_file_was_opened(world: &mut CrimeWorld, file: String) {
+fn guest_file_was_opened(world: &mut VardeWorld, file: String) {
     let path = guest_path(world, &file);
     assert!(
         world.opened.contains(&path),
@@ -7457,7 +7457,7 @@ fn guest_file_was_opened(world: &mut CrimeWorld, file: String) {
 /// rather than a file that never comes.
 #[when(expr = "the clone finishes with exit status {string}")]
 #[when(expr = "the fetch finishes with exit status {string}")]
-fn clone_finishes(world: &mut CrimeWorld, status: String) {
+fn clone_finishes(world: &mut VardeWorld, status: String) {
     let story::Set::Downloading { url, .. } = world.state.story_set.clone() else {
         panic!("no download in flight: {:?}", world.state.story_set);
     };
@@ -7471,7 +7471,7 @@ fn clone_finishes(world: &mut CrimeWorld, status: String) {
 }
 
 #[given(expr = "I was on the branch {string}")]
-fn on_the_branch(world: &mut CrimeWorld, name: String) {
+fn on_the_branch(world: &mut VardeWorld, name: String) {
     world.on_branch = name;
 }
 
@@ -7479,8 +7479,8 @@ fn on_the_branch(world: &mut CrimeWorld, name: String) {
 /// the picker answers to is the router's answer, and walking is what holds the
 /// selection to being reachable with no modifier (R31.11).
 #[when(expr = "I pick the branch {string}")]
-fn pick_the_branch(world: &mut CrimeWorld, name: String) {
-    let row = |world: &CrimeWorld| match &world.state.modal {
+fn pick_the_branch(world: &mut VardeWorld, name: String) {
+    let row = |world: &VardeWorld| match &world.state.modal {
         Modal::Branches { row, .. } => *row,
         other => panic!("expected a branch picker, got {other:?}"),
     };
@@ -7502,19 +7502,19 @@ fn pick_the_branch(world: &mut CrimeWorld, name: String) {
 /// branch is walked to rather than reached into: what narrows the list is the
 /// keys a reviewer presses.
 #[when(expr = "I type {string} in the picker")]
-fn type_in_the_picker(world: &mut CrimeWorld, text: String) {
+fn type_in_the_picker(world: &mut VardeWorld, text: String) {
     for character in text.chars() {
         press_key(world, terminput::KeyCode::Char(character));
     }
 }
 
 #[then("the picker lists nothing")]
-fn picker_lists_nothing(world: &mut CrimeWorld) {
+fn picker_lists_nothing(world: &mut VardeWorld) {
     assert_eq!(shown_branches(world), Vec::<String>::new());
 }
 
 #[then(expr = "the picker lists:")]
-fn picker_lists(world: &mut CrimeWorld, step: &Step) {
+fn picker_lists(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("a table of branch names")
@@ -7525,14 +7525,14 @@ fn picker_lists(world: &mut CrimeWorld, step: &Step) {
     assert_eq!(shown_branches(world), expected);
 }
 
-fn shown_branches(world: &CrimeWorld) -> Vec<String> {
+fn shown_branches(world: &VardeWorld) -> Vec<String> {
     match &world.state.modal {
         Modal::Branches { refs, filter, .. } => story::branches(refs, filter),
         other => panic!("expected a branch picker, got {other:?}"),
     }
 }
 
-fn press_key(world: &mut CrimeWorld, code: terminput::KeyCode) {
+fn press_key(world: &mut VardeWorld, code: terminput::KeyCode) {
     let mut drafts = std::mem::take(&mut world.drafts);
     for event in keys::on_key_event(&world.state, &mut drafts, terminput::KeyEvent::new(code), 0) {
         world.send(event);
@@ -7541,14 +7541,14 @@ fn press_key(world: &mut CrimeWorld, code: terminput::KeyCode) {
 }
 
 #[then(expr = "the branch {string} was checked out")]
-fn branch_was_checked_out(world: &mut CrimeWorld, name: String) {
+fn branch_was_checked_out(world: &mut VardeWorld, name: String) {
     assert_eq!(world.checkouts, [(world.state.root.clone(), name)]);
 }
 
 /// In the clone, not in the workspace: the branch belongs to a repository the
-/// folder CRIME was opened on knows nothing about.
+/// folder Varde was opened on knows nothing about.
 #[then(expr = "the branch {string} was checked out in the Guest repo")]
-fn branch_was_checked_out_in_the_guest(world: &mut CrimeWorld, name: String) {
+fn branch_was_checked_out_in_the_guest(world: &mut VardeWorld, name: String) {
     let guest = world
         .state
         .guest
@@ -7563,7 +7563,7 @@ fn branch_was_checked_out_in_the_guest(world: &mut CrimeWorld, name: String) {
 }
 
 #[then(expr = "no branch was checked out")]
-fn no_branch_was_checked_out(world: &mut CrimeWorld) {
+fn no_branch_was_checked_out(world: &mut VardeWorld) {
     assert!(
         world.checkouts.is_empty(),
         "checked out: {:?}",
@@ -7571,16 +7571,16 @@ fn no_branch_was_checked_out(world: &mut CrimeWorld) {
     );
 }
 
-/// Both branches, because CRIME does not check the original one back out: the
+/// Both branches, because Varde does not check the original one back out: the
 /// promise is that Story view says where the reviewer is *and* where they were.
 #[then(expr = "the story view is on the branch {string} and left the branch {string}")]
-fn story_view_names_the_branches(world: &mut CrimeWorld, onto: String, left: String) {
+fn story_view_names_the_branches(world: &mut VardeWorld, onto: String, left: String) {
     assert_eq!(world.state.branch, Some(onto));
     assert_eq!(world.state.left_branch, Some(left));
 }
 
 #[then(expr = "the story range is {string}")]
-fn story_range_is(world: &mut CrimeWorld, expected: String) {
+fn story_range_is(world: &mut VardeWorld, expected: String) {
     match &world.state.modal {
         Modal::ConfirmStory { spelling, .. } => assert_eq!(spelling, &expected),
         other => panic!("expected a ConfirmStory modal, got {other:?}"),
@@ -7588,7 +7588,7 @@ fn story_range_is(world: &mut CrimeWorld, expected: String) {
 }
 
 #[then(expr = "the modal is {string}")]
-fn modal_is(world: &mut CrimeWorld, expected: String) {
+fn modal_is(world: &mut VardeWorld, expected: String) {
     let actual = match &world.state.modal {
         Modal::None => "none",
         Modal::ConfirmStory { .. } => "confirm-story",
@@ -7609,22 +7609,22 @@ fn modal_is(world: &mut CrimeWorld, expected: String) {
 }
 
 #[then(expr = "the overlay is {string}")]
-fn overlay_is(world: &mut CrimeWorld, expected: String) {
+fn overlay_is(world: &mut VardeWorld, expected: String) {
     modal_is(world, expected);
 }
 
 #[then(expr = "the overlay offers {int} choices")]
-fn overlay_offers_choices(world: &mut CrimeWorld, count: usize) {
+fn overlay_offers_choices(world: &mut VardeWorld, count: usize) {
     assert_eq!(story::prediction_choices(&world.state).len(), count);
 }
 
 #[then(expr = "the overlay offers no choices")]
-fn overlay_offers_no_choices(world: &mut CrimeWorld) {
+fn overlay_offers_no_choices(world: &mut VardeWorld) {
     overlay_offers_choices(world, 0);
 }
 
 #[then(expr = "the overlay shows the feedback for choice {int}")]
-fn overlay_shows_feedback_for_choice(world: &mut CrimeWorld, choice: usize) {
+fn overlay_shows_feedback_for_choice(world: &mut VardeWorld, choice: usize) {
     let step = story::current_step(&world.state).expect("a step");
     let prediction = step.prediction.as_ref().expect("a prediction");
     let expected = prediction.choices[choice - 1].feedback.as_str();
@@ -7634,7 +7634,7 @@ fn overlay_shows_feedback_for_choice(world: &mut CrimeWorld, choice: usize) {
 /// A wrong pick's feedback is its own choice's, never the correct choice's —
 /// the one thing revealing it would remove any reason to think afterwards.
 #[then(expr = "the overlay does not show the correct choice")]
-fn overlay_does_not_show_correct_choice(world: &mut CrimeWorld) {
+fn overlay_does_not_show_correct_choice(world: &mut VardeWorld) {
     let step = story::current_step(&world.state).expect("a step");
     let prediction = step.prediction.as_ref().expect("a prediction");
     let correct = prediction
@@ -7649,7 +7649,7 @@ fn overlay_does_not_show_correct_choice(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the walkthrough records step {int} as put")]
-fn walkthrough_records_step_as_put(world: &mut CrimeWorld, step_number: usize) {
+fn walkthrough_records_step_as_put(world: &mut VardeWorld, step_number: usize) {
     let Some(story::Walking::Story { story, .. }) = world.state.walking else {
         panic!("walking a story");
     };
@@ -7664,7 +7664,7 @@ fn walkthrough_records_step_as_put(world: &mut CrimeWorld, step_number: usize) {
 /// `walkthrough_records_step_as_put` makes rather than inventing a second one
 /// that could tell a different story.
 #[then(expr = "the walkthrough holds no choice")]
-fn walkthrough_holds_no_choice(world: &mut CrimeWorld) {
+fn walkthrough_holds_no_choice(world: &mut VardeWorld) {
     let Some(story::Walking::Story { step, .. }) = world.state.walking else {
         panic!("walking a story");
     };
@@ -7672,7 +7672,7 @@ fn walkthrough_holds_no_choice(world: &mut CrimeWorld) {
 }
 
 #[when(expr = "the story set is re-authored")]
-fn story_set_is_re_authored(world: &mut CrimeWorld) {
+fn story_set_is_re_authored(world: &mut VardeWorld) {
     let story::Set::Loaded(artifact) = &world.state.story_set else {
         panic!("no story set loaded");
     };
@@ -7684,44 +7684,44 @@ fn story_set_is_re_authored(world: &mut CrimeWorld) {
 }
 
 #[given(expr = "an AI session is running")]
-fn ai_running_bare(world: &mut CrimeWorld) {
+fn ai_running_bare(world: &mut VardeWorld) {
     ai_running(world);
 }
 
 #[given(expr = "no AI session is running")]
-fn ai_not_running_bare(world: &mut CrimeWorld) {
+fn ai_not_running_bare(world: &mut VardeWorld) {
     ai_not_running(world);
 }
 
 // "And I ran ..." continues whatever concrete keyword came before it, so this
 // needs registering as a Given as well as the When `run_story_command` already is.
 #[given(expr = "I ran {string}")]
-fn ran_story_command(world: &mut CrimeWorld, line: String) {
+fn ran_story_command(world: &mut VardeWorld, line: String) {
     run_story_command(world, line);
 }
 
 #[when(expr = "I confirm the story range")]
-fn confirm_story_range(world: &mut CrimeWorld) {
+fn confirm_story_range(world: &mut VardeWorld) {
     world.send(Event::ConfirmStory);
 }
 
 #[when(expr = "I decline the story range")]
-fn decline_story_range(world: &mut CrimeWorld) {
+fn decline_story_range(world: &mut VardeWorld) {
     world.send(Event::Cancel);
 }
 
 #[then(expr = "the AI pane was sent a prompt naming the range {string}")]
-fn prompt_names_the_range(world: &mut CrimeWorld, range: String) {
+fn prompt_names_the_range(world: &mut VardeWorld, range: String) {
     prompt_contains(world, range);
 }
 
 #[then(expr = "the AI session {string} was started")]
-fn the_ai_session_was_started(world: &mut CrimeWorld, command: String) {
+fn the_ai_session_was_started(world: &mut VardeWorld, command: String) {
     ai_started_with(world, command);
 }
 
 #[then(expr = "the AI pane was sent a prompt naming the file {string}")]
-fn prompt_names_the_file(world: &mut CrimeWorld, path: String) {
+fn prompt_names_the_file(world: &mut VardeWorld, path: String) {
     prompt_contains(world, path);
 }
 
@@ -7730,13 +7730,13 @@ fn prompt_names_the_file(world: &mut CrimeWorld, path: String) {
 /// confirmed range is authored to, the same map "that range is what … resolves
 /// to" already populates for an already-authored range.
 #[given(expr = "{string} resolves to base {string} and head {string}")]
-fn spelling_resolves_to_oids(world: &mut CrimeWorld, spelling: String, base: String, head: String) {
+fn spelling_resolves_to_oids(world: &mut VardeWorld, spelling: String, base: String, head: String) {
     world.resolved_oids.insert(spelling, (base, head));
 }
 
 #[given(expr = "the project holds {int} story sets")]
-fn seed_story_sets(world: &mut CrimeWorld, count: usize) {
-    let dir = world.state.root.join(".crime/stories");
+fn seed_story_sets(world: &mut VardeWorld, count: usize) {
+    let dir = world.state.root.join(".varde/stories");
     for index in 0..count {
         let name = format!("story-{index:02}.json");
         world.state.story_sets.push(name.clone());
@@ -7748,16 +7748,16 @@ fn seed_story_sets(world: &mut CrimeWorld, count: usize) {
 }
 
 #[when(expr = "a new story set is written")]
-fn a_new_story_set_is_written(world: &mut CrimeWorld) {
-    let dir = world.state.root.join(".crime/stories");
+fn a_new_story_set_is_written(world: &mut VardeWorld) {
+    let dir = world.state.root.join(".varde/stories");
     let name = "story-new.json".to_string();
     world.files.insert(dir.join(&name), "{}".to_string());
     world.send(Event::StoryFileWritten(name));
 }
 
 #[then(expr = "{int} story sets remain")]
-fn story_sets_remain(world: &mut CrimeWorld, expected: usize) {
-    let dir = world.state.root.join(".crime/stories");
+fn story_sets_remain(world: &mut VardeWorld, expected: usize) {
+    let dir = world.state.root.join(".varde/stories");
     let count = world
         .files
         .keys()
@@ -7768,42 +7768,42 @@ fn story_sets_remain(world: &mut CrimeWorld, expected: usize) {
 }
 
 #[then(expr = "the oldest story set was pruned")]
-fn oldest_story_set_was_pruned(world: &mut CrimeWorld) {
-    let dir = world.state.root.join(".crime/stories");
+fn oldest_story_set_was_pruned(world: &mut VardeWorld) {
+    let dir = world.state.root.join(".varde/stories");
     assert!(!world.files.contains_key(&dir.join("story-00.json")));
 }
 
 #[then(expr = "the oldest story set's companion file was pruned")]
-fn oldest_companion_file_was_pruned(world: &mut CrimeWorld) {
-    let dir = world.state.root.join(".crime/stories");
+fn oldest_companion_file_was_pruned(world: &mut VardeWorld) {
+    let dir = world.state.root.join(".varde/stories");
     assert!(!world.files.contains_key(&dir.join("story-00.context.md")));
     assert!(world.files.contains_key(&dir.join("story-01.context.md")));
 }
 
 #[then(expr = "the file {string} was written")]
-fn the_file_was_written(world: &mut CrimeWorld, path: String) {
+fn the_file_was_written(world: &mut VardeWorld, path: String) {
     let full = world.state.root.join(&path);
     assert!(world.wrote.contains(&full), "{:?}", world.wrote);
 }
 
 #[then(expr = "no keys were sent to the AI pane")]
-fn no_keys_to_ai_pane(world: &mut CrimeWorld) {
+fn no_keys_to_ai_pane(world: &mut VardeWorld) {
     assert!(ai_sends(world).is_empty(), "{:?}", world.keys_sent);
 }
 
 #[then(expr = "no AI session was started")]
-fn no_ai_session_started(world: &mut CrimeWorld) {
+fn no_ai_session_started(world: &mut VardeWorld) {
     assert!(world.ai_spawned.is_empty());
 }
 
 #[then(expr = "the remainder holds {int} unclaimed hunk")]
 #[then(expr = "the remainder holds {int} unclaimed hunks")]
-fn remainder_holds_unclaimed(world: &mut CrimeWorld, count: usize) {
+fn remainder_holds_unclaimed(world: &mut VardeWorld, count: usize) {
     assert_eq!(story::remainder(&world.state).unclaimed, count);
 }
 
 #[then("the remainder lists:")]
-fn remainder_lists(world: &mut CrimeWorld, step: &Step) {
+fn remainder_lists(world: &mut VardeWorld, step: &Step) {
     let mut expected: Vec<String> = step
         .table()
         .expect("table")
@@ -7819,7 +7819,7 @@ fn remainder_lists(world: &mut CrimeWorld, step: &Step) {
 
 #[then(expr = "the remainder reports {int} unwalked deletion")]
 #[then(expr = "the remainder reports {int} unwalked deletions")]
-fn remainder_reports_unwalked_deletions(world: &mut CrimeWorld, count: usize) {
+fn remainder_reports_unwalked_deletions(world: &mut VardeWorld, count: usize) {
     assert_eq!(
         story::remainder(&world.state).unwalked_deletions,
         Some(count)
@@ -7827,29 +7827,29 @@ fn remainder_reports_unwalked_deletions(world: &mut CrimeWorld, count: usize) {
 }
 
 #[then(expr = "the remainder reports no deletions line")]
-fn remainder_reports_no_deletions_line(world: &mut CrimeWorld) {
+fn remainder_reports_no_deletions_line(world: &mut VardeWorld) {
     assert_eq!(story::remainder(&world.state).unwalked_deletions, None);
 }
 
 #[then(expr = "the spine reports {int} stale step")]
 #[then(expr = "the spine reports {int} stale steps")]
-fn spine_reports_stale_steps(world: &mut CrimeWorld, count: usize) {
+fn spine_reports_stale_steps(world: &mut VardeWorld, count: usize) {
     let total: usize = story::spine(&world.state).iter().map(|row| row.stale).sum();
     assert_eq!(total, count);
 }
 
 #[then(expr = "the review list is unchanged")]
-fn review_list_unchanged(world: &mut CrimeWorld) {
+fn review_list_unchanged(world: &mut VardeWorld) {
     assert_eq!(Some(review::list(&world.state)), world.repo_before);
 }
 
 // ---- F26: markdown preview ----
 
-fn preview_rows(world: &CrimeWorld) -> Vec<crime::preview::Row> {
-    crime::preview_rows(&world.state)
+fn preview_rows(world: &VardeWorld) -> Vec<varde::preview::Row> {
+    varde::preview_rows(&world.state)
 }
 
-fn row_at(world: &CrimeWorld, number: usize) -> crime::preview::Row {
+fn row_at(world: &VardeWorld, number: usize) -> varde::preview::Row {
     let rows = preview_rows(world);
     rows.get(number - 1)
         .cloned()
@@ -7857,7 +7857,7 @@ fn row_at(world: &CrimeWorld, number: usize) -> crime::preview::Row {
 }
 
 #[when(expr = "{string} is opened in the editor")]
-fn open_file_in_editor(world: &mut CrimeWorld, path: String) {
+fn open_file_in_editor(world: &mut VardeWorld, path: String) {
     let contents = world
         .files
         .get(&abs(world, &path))
@@ -7867,7 +7867,7 @@ fn open_file_in_editor(world: &mut CrimeWorld, path: String) {
 }
 
 #[given(expr = "no file is open in the editor")]
-fn nothing_is_open(world: &mut CrimeWorld) {
+fn nothing_is_open(world: &mut VardeWorld) {
     world.state.current_buffer = None;
 }
 
@@ -7875,7 +7875,7 @@ fn nothing_is_open(world: &mut CrimeWorld) {
 /// it takes to make the pane that wide is solved for here — a magic terminal
 /// size in the feature file would say nothing about what the scenario is for.
 #[given(expr = "the editor pane is {int} columns wide")]
-fn editor_pane_is_columns_wide(world: &mut CrimeWorld, columns: u16) {
+fn editor_pane_is_columns_wide(world: &mut VardeWorld, columns: u16) {
     let height = 40;
     let width = (columns..600)
         .find(|width| {
@@ -7905,39 +7905,39 @@ fn editor_pane_is_columns_wide(world: &mut CrimeWorld, columns: u16) {
 /// as one.
 #[given(expr = "the editor is showing preview")]
 #[then(expr = "the editor is showing preview")]
-fn showing_preview(world: &mut CrimeWorld) {
-    assert!(crime::previewing(&world.state), "not previewing");
+fn showing_preview(world: &mut VardeWorld) {
+    assert!(varde::previewing(&world.state), "not previewing");
 }
 
 #[then(expr = "the editor is not showing preview")]
-fn not_showing_preview(world: &mut CrimeWorld) {
-    assert!(!crime::previewing(&world.state), "previewing");
+fn not_showing_preview(world: &mut VardeWorld) {
+    assert!(!varde::previewing(&world.state), "previewing");
 }
 
 #[then(expr = "the editor is showing source")]
-fn showing_source(world: &mut CrimeWorld) {
+fn showing_source(world: &mut VardeWorld) {
     assert!(world.state.current_buffer.is_some(), "no file open");
-    assert!(!crime::previewing(&world.state), "previewing");
+    assert!(!varde::previewing(&world.state), "previewing");
 }
 
 #[then(expr = "the editor is showing a diff")]
-fn showing_a_diff(world: &mut CrimeWorld) {
+fn showing_a_diff(world: &mut VardeWorld) {
     assert!(world.state.diff.is_some(), "no diff");
 }
 
 #[then(expr = "the editor is showing a story step")]
-fn showing_a_story_step(world: &mut CrimeWorld) {
+fn showing_a_story_step(world: &mut VardeWorld) {
     assert!(story::current_step(&world.state).is_some(), "no step");
 }
 
 #[then(expr = "the editor refuses with {string}")]
-fn editor_refuses_with(world: &mut CrimeWorld, reason: String) {
+fn editor_refuses_with(world: &mut VardeWorld, reason: String) {
     assert_eq!(
         world
             .state
             .refusal
             .as_ref()
-            .map(crime::preview::Refusal::as_str),
+            .map(varde::preview::Refusal::as_str),
         Some(reason.as_str())
     );
 }
@@ -7945,7 +7945,7 @@ fn editor_refuses_with(world: &mut CrimeWorld, reason: String) {
 /// Review view substitutes the editor's whole rectangle, so a diff has to be on
 /// screen for the scenario to be about anything.
 #[when(expr = "I switch to review view")]
-fn switch_to_review_view(world: &mut CrimeWorld) {
+fn switch_to_review_view(world: &mut VardeWorld) {
     let path = world
         .state
         .current_buffer
@@ -7985,7 +7985,7 @@ fn switch_to_review_view(world: &mut CrimeWorld) {
 /// Walking is set directly for the reason "I am walking" sets it directly: this
 /// is scenario setup, not the thing under test.
 #[when(expr = "I walk a story step pointing at {string}")]
-fn walk_a_step_pointing_at(world: &mut CrimeWorld, file: String) {
+fn walk_a_step_pointing_at(world: &mut VardeWorld, file: String) {
     let full = world.state.root.join(&file);
     let held = world
         .state
@@ -8016,30 +8016,30 @@ fn walk_a_step_pointing_at(world: &mut CrimeWorld, file: String) {
 }
 
 #[then(expr = "row {int} is a heading")]
-fn row_is_a_heading(world: &mut CrimeWorld, number: usize) {
+fn row_is_a_heading(world: &mut VardeWorld, number: usize) {
     assert!(matches!(
         row_at(world, number).kind,
-        crime::preview::RowKind::Heading(_)
+        varde::preview::RowKind::Heading(_)
     ));
 }
 
 #[then(expr = "row {int} is metadata")]
-fn row_is_metadata(world: &mut CrimeWorld, number: usize) {
+fn row_is_metadata(world: &mut VardeWorld, number: usize) {
     assert_eq!(
         row_at(world, number).kind,
-        crime::preview::RowKind::Metadata
+        varde::preview::RowKind::Metadata
     );
 }
 
 #[then(expr = "the last row is a paragraph")]
-fn last_row_is_a_paragraph(world: &mut CrimeWorld) {
+fn last_row_is_a_paragraph(world: &mut VardeWorld) {
     let rows = preview_rows(world);
     let last = rows.last().expect("no rows");
-    assert_eq!(last.kind, crime::preview::RowKind::Paragraph, "{rows:?}");
+    assert_eq!(last.kind, varde::preview::RowKind::Paragraph, "{rows:?}");
 }
 
 #[then(expr = "row {int} holds {string}")]
-fn row_holds(world: &mut CrimeWorld, number: usize, text: String) {
+fn row_holds(world: &mut VardeWorld, number: usize, text: String) {
     let row = row_at(world, number);
     assert!(
         row.text().contains(&text),
@@ -8049,7 +8049,7 @@ fn row_holds(world: &mut CrimeWorld, number: usize, text: String) {
 }
 
 #[then(expr = "no row holds {string}")]
-fn no_row_holds(world: &mut CrimeWorld, text: String) {
+fn no_row_holds(world: &mut VardeWorld, text: String) {
     let rows = preview_rows(world);
     assert!(
         !rows.iter().any(|row| row.text().contains(&text)),
@@ -8058,42 +8058,42 @@ fn no_row_holds(world: &mut CrimeWorld, text: String) {
 }
 
 #[then(expr = "there is more than {int} row")]
-fn more_than_rows(world: &mut CrimeWorld, count: usize) {
+fn more_than_rows(world: &mut VardeWorld, count: usize) {
     let rows = preview_rows(world);
     assert!(rows.len() > count, "{rows:?}");
 }
 
 #[then(expr = "every row is a paragraph")]
-fn every_row_is_a_paragraph(world: &mut CrimeWorld) {
+fn every_row_is_a_paragraph(world: &mut VardeWorld) {
     let rows = preview_rows(world);
     assert!(!rows.is_empty(), "no rows");
     assert!(
         rows.iter()
-            .all(|row| row.kind == crime::preview::RowKind::Paragraph),
+            .all(|row| row.kind == varde::preview::RowKind::Paragraph),
         "{rows:?}"
     );
 }
 
 #[then(expr = "every row comes from source line {int}")]
-fn every_row_comes_from_line(world: &mut CrimeWorld, line: usize) {
+fn every_row_comes_from_line(world: &mut VardeWorld, line: usize) {
     let rows = preview_rows(world);
     assert!(!rows.is_empty(), "no rows");
     assert!(rows.iter().all(|row| row.line == line), "{rows:?}");
 }
 
 #[then(expr = "every row is a diagram")]
-fn every_row_is_a_diagram(world: &mut CrimeWorld) {
+fn every_row_is_a_diagram(world: &mut VardeWorld) {
     let rows = preview_rows(world);
     assert!(!rows.is_empty(), "no rows");
     assert!(
         rows.iter()
-            .all(|row| row.kind == crime::preview::RowKind::Diagram),
+            .all(|row| row.kind == varde::preview::RowKind::Diagram),
         "{rows:?}"
     );
 }
 
 #[then(expr = "some row holds {string}")]
-fn some_row_holds(world: &mut CrimeWorld, text: String) {
+fn some_row_holds(world: &mut VardeWorld, text: String) {
     let rows = preview_rows(world);
     assert!(
         rows.iter().any(|row| row.text().contains(&text)),
@@ -8102,40 +8102,40 @@ fn some_row_holds(world: &mut CrimeWorld, text: String) {
 }
 
 #[then(expr = "the diagram was refused with {string}")]
-fn diagram_was_refused_with(world: &mut CrimeWorld, reason: String) {
+fn diagram_was_refused_with(world: &mut VardeWorld, reason: String) {
     let rows = preview_rows(world);
     assert!(
         rows.iter().any(
-            |row| row.refused.map(crime::preview::DiagramRefusal::as_str) == Some(reason.as_str())
+            |row| row.refused.map(varde::preview::DiagramRefusal::as_str) == Some(reason.as_str())
         ),
         "{rows:?}"
     );
 }
 
 #[then(expr = "there is {int} code row")]
-fn there_is_n_code_rows(world: &mut CrimeWorld, count: usize) {
+fn there_is_n_code_rows(world: &mut VardeWorld, count: usize) {
     let rows = preview_rows(world);
     let code = rows
         .iter()
-        .filter(|row| row.kind == crime::preview::RowKind::Code)
+        .filter(|row| row.kind == varde::preview::RowKind::Code)
         .count();
     assert_eq!(code, count, "{rows:?}");
 }
 
-fn the_code_row(world: &CrimeWorld) -> crime::preview::Row {
+fn the_code_row(world: &VardeWorld) -> varde::preview::Row {
     preview_rows(world)
         .into_iter()
-        .find(|row| row.kind == crime::preview::RowKind::Code)
+        .find(|row| row.kind == varde::preview::RowKind::Code)
         .unwrap_or_else(|| panic!("no code row"))
 }
 
 #[then(expr = "the code row holds {string}")]
-fn the_code_row_holds(world: &mut CrimeWorld, text: String) {
+fn the_code_row_holds(world: &mut VardeWorld, text: String) {
     let row = the_code_row(world);
     assert!(row.text().contains(&text), "{:?}", row.text());
 }
 
-fn code_row_kind(world: &CrimeWorld, text: &str) -> Option<crime::highlight::Kind> {
+fn code_row_kind(world: &VardeWorld, text: &str) -> Option<varde::highlight::Kind> {
     let row = the_code_row(world);
     row.pieces
         .iter()
@@ -8145,42 +8145,42 @@ fn code_row_kind(world: &CrimeWorld, text: &str) -> Option<crime::highlight::Kin
 }
 
 #[then(expr = "{string} in the code row is a keyword")]
-fn token_in_code_row_is_a_keyword(world: &mut CrimeWorld, text: String) {
+fn token_in_code_row_is_a_keyword(world: &mut VardeWorld, text: String) {
     assert_eq!(
         code_row_kind(world, &text),
-        Some(crime::highlight::Kind::Keyword)
+        Some(varde::highlight::Kind::Keyword)
     );
 }
 
 #[then(expr = "{string} in the code row is a type")]
-fn token_in_code_row_is_a_type(world: &mut CrimeWorld, text: String) {
+fn token_in_code_row_is_a_type(world: &mut VardeWorld, text: String) {
     assert_eq!(
         code_row_kind(world, &text),
-        Some(crime::highlight::Kind::Type)
+        Some(varde::highlight::Kind::Type)
     );
 }
 
 #[then(expr = "{string} in the code row is a function")]
-fn token_in_code_row_is_a_function(world: &mut CrimeWorld, text: String) {
+fn token_in_code_row_is_a_function(world: &mut VardeWorld, text: String) {
     assert_eq!(
         code_row_kind(world, &text),
-        Some(crime::highlight::Kind::Function)
+        Some(varde::highlight::Kind::Function)
     );
 }
 
 #[then(expr = "every token in the code row is plain text")]
-fn every_token_in_code_row_is_plain(world: &mut CrimeWorld) {
+fn every_token_in_code_row_is_plain(world: &mut VardeWorld) {
     let row = the_code_row(world);
     assert!(
         row.pieces
             .iter()
-            .all(|piece| piece.token == Some(crime::highlight::Kind::Plain)),
+            .all(|piece| piece.token == Some(varde::highlight::Kind::Plain)),
         "{row:?}"
     );
 }
 
 #[then(expr = "the cursor is on row {int}")]
-fn cursor_is_on_row(world: &mut CrimeWorld, number: usize) {
+fn cursor_is_on_row(world: &mut VardeWorld, number: usize) {
     assert_eq!(current_buffer(world).row, number);
 }
 
@@ -8188,12 +8188,12 @@ fn cursor_is_on_row(world: &mut CrimeWorld, number: usize) {
 /// a rendered column indexes what is drawn, so a scenario that asserted the
 /// source pair here would pass on a cursor nobody can see.
 #[then(expr = "the cursor is on row {int} column {int}")]
-fn cursor_is_on_row_column(world: &mut CrimeWorld, row: usize, column: usize) {
+fn cursor_is_on_row_column(world: &mut VardeWorld, row: usize, column: usize) {
     let buffer = current_buffer(world);
     assert_eq!((buffer.row, buffer.row_column), (row, column));
 }
 
-fn row_holding(world: &CrimeWorld, text: &str) -> usize {
+fn row_holding(world: &VardeWorld, text: &str) -> usize {
     let rows = preview_rows(world);
     rows.iter()
         .position(|row| row.text().contains(text))
@@ -8202,48 +8202,48 @@ fn row_holding(world: &CrimeWorld, text: &str) -> usize {
 }
 
 #[given(expr = "the cursor is on the row holding {string}")]
-fn place_cursor_on_row_holding(world: &mut CrimeWorld, text: String) {
+fn place_cursor_on_row_holding(world: &mut VardeWorld, text: String) {
     let row = row_holding(world, &text);
     current_buffer_mut(world).row = row;
 }
 
 #[then(expr = "the cursor is on the row holding {string}")]
-fn cursor_is_on_row_holding(world: &mut CrimeWorld, text: String) {
+fn cursor_is_on_row_holding(world: &mut VardeWorld, text: String) {
     let row = row_holding(world, &text);
     assert_eq!(current_buffer(world).row, row);
 }
 
 #[then(expr = "the cursor is on source line {int}")]
-fn cursor_is_on_source_line(world: &mut CrimeWorld, line: usize) {
+fn cursor_is_on_source_line(world: &mut VardeWorld, line: usize) {
     let number = current_buffer(world).row;
     assert_eq!(row_at(world, number).line, line);
 }
 
 #[then(expr = "the editor has no line-number gutter")]
-fn no_line_number_gutter(world: &mut CrimeWorld) {
-    assert_eq!(crime::gutter(&world.state), 0);
+fn no_line_number_gutter(world: &mut VardeWorld) {
+    assert_eq!(varde::gutter(&world.state), 0);
 }
 
 #[then(expr = "the editor has a line-number gutter")]
-fn a_line_number_gutter(world: &mut CrimeWorld) {
-    assert_ne!(crime::gutter(&world.state), 0);
+fn a_line_number_gutter(world: &mut VardeWorld) {
+    assert_ne!(varde::gutter(&world.state), 0);
 }
 
 /// The mode clause is the part of the title the core owns; the file name beside
 /// it is `ui`'s to compose, and a `ui` unit test holds the two together.
 #[then(expr = "the editor title says {string}")]
-fn editor_title_says(world: &mut CrimeWorld, word: String) {
-    assert_eq!(crime::mode_label(&world.state, current_buffer(world)), word);
+fn editor_title_says(world: &mut VardeWorld, word: String) {
+    assert_eq!(varde::mode_label(&world.state, current_buffer(world)), word);
 }
 
 #[then(expr = "the editor title does not say {string}")]
-fn editor_title_does_not_say(world: &mut CrimeWorld, word: String) {
-    assert_ne!(crime::mode_label(&world.state, current_buffer(world)), word);
+fn editor_title_does_not_say(world: &mut VardeWorld, word: String) {
+    assert_ne!(varde::mode_label(&world.state, current_buffer(world)), word);
 }
 
 #[given(expr = "I type {string} into the buffer as its only line")]
 #[when(expr = "I type {string} into the buffer as its only line")]
-fn type_as_only_line(world: &mut CrimeWorld, text: String) {
+fn type_as_only_line(world: &mut VardeWorld, text: String) {
     for key in ['d', 'd', 'i'] {
         world.send(Event::EditorKey(key));
     }
@@ -8334,7 +8334,7 @@ fn figures_from(step: &Step, unparsed: usize, prefix: &str) -> Figures {
 }
 
 #[given(expr = "the risk threshold is {int}")]
-fn risk_threshold(world: &mut CrimeWorld, threshold: u32) {
+fn risk_threshold(world: &mut VardeWorld, threshold: u32) {
     world.state.risk_threshold = threshold;
     world.startup.project_config = Some(format!("[risk]\nthreshold = {threshold}\n"));
 }
@@ -8342,15 +8342,15 @@ fn risk_threshold(world: &mut CrimeWorld, threshold: u32) {
 /// No coverage report is read anywhere yet, so this is the only situation
 /// there is — the step exists to make the scenario say which one it is.
 #[given(expr = "no test coverage was read")]
-fn no_test_coverage(_world: &mut CrimeWorld) {}
+fn no_test_coverage(_world: &mut VardeWorld) {}
 
 #[given(expr = "every file in the workspace is in a language the analyser does not handle")]
-fn nothing_analysable(_world: &mut CrimeWorld) {}
+fn nothing_analysable(_world: &mut VardeWorld) {}
 
 /// The edge's own sequence: an answer only exists because a request was made,
-/// so a scenario that says the figures arrived without having opened CRIME gets
+/// so a scenario that says the figures arrived without having opened Varde gets
 /// the request too — the core takes an answer only while one is waiting.
-fn deliver(world: &mut CrimeWorld, scope: Scope, figures: Figures, before: Option<Figures>) {
+fn deliver(world: &mut VardeWorld, scope: Scope, figures: Figures, before: Option<Figures>) {
     if !world.state.risk.in_flight() {
         let asked = risk::analyse(&mut world.state, scope);
         world.apply(vec![asked]);
@@ -8363,7 +8363,7 @@ fn deliver(world: &mut CrimeWorld, scope: Scope, figures: Figures, before: Optio
 }
 
 #[when(expr = "the analysis finishes")]
-fn analysis_finishes(world: &mut CrimeWorld) {
+fn analysis_finishes(world: &mut VardeWorld) {
     deliver(world, Scope::Workspace, Figures::default(), None);
 }
 
@@ -8372,7 +8372,7 @@ fn analysis_finishes(world: &mut CrimeWorld) {
 /// a Function's line lands on line 1 — the buffer clamps to what it holds — and
 /// "the cursor is on line 17" would pass for a file that was never there.
 #[given(expr = "the figures were computed for the scope {string}:")]
-fn figures_were_computed(world: &mut CrimeWorld, name: String, step: &Step) {
+fn figures_were_computed(world: &mut VardeWorld, name: String, step: &Step) {
     let computed = figures(step, 0);
     for function in &computed.functions {
         let lines = function.line.max(1);
@@ -8392,36 +8392,36 @@ fn figures_were_computed(world: &mut CrimeWorld, name: String, step: &Step) {
 }
 
 #[when(expr = "the figures arrive for the scope {string}:")]
-fn figures_arrive(world: &mut CrimeWorld, name: String, step: &Step) {
+fn figures_arrive(world: &mut VardeWorld, name: String, step: &Step) {
     deliver(world, scope(&name), figures(step, 0), None);
 }
 
 #[when(expr = "the figure goes stale")]
-fn figure_goes_stale(world: &mut CrimeWorld) {
+fn figure_goes_stale(world: &mut VardeWorld) {
     risk::went_stale(&mut world.state.risk);
 }
 
 #[given(expr = "the figure has gone stale")]
-fn figure_has_gone_stale(world: &mut CrimeWorld) {
+fn figure_has_gone_stale(world: &mut VardeWorld) {
     risk::went_stale(&mut world.state.risk);
 }
 
 /// The other half of the pair, so the explicit recompute is specified against
 /// both: a request that only worked on a stale figure would pass one of them.
 #[given(expr = "the figure has not gone stale")]
-fn figure_has_not_gone_stale(world: &mut CrimeWorld) {
+fn figure_has_not_gone_stale(world: &mut VardeWorld) {
     assert_eq!(risk::view_state(&world.state), "computed");
 }
 
 #[when(expr = "I ask for the figures to be recomputed")]
-fn ask_for_recompute(world: &mut CrimeWorld) {
+fn ask_for_recompute(world: &mut VardeWorld) {
     world.send(Event::RecomputeRisk);
 }
 
 /// The cache as a previous run left it: one Function, so the figure it restores
 /// is a figure rather than a workspace with nothing analysed.
 #[given(expr = "the figures were recorded at the commit {string}")]
-fn figures_recorded_at_commit(world: &mut CrimeWorld, commit: String) {
+fn figures_recorded_at_commit(world: &mut VardeWorld, commit: String) {
     let figures = Figures {
         functions: vec![Function {
             file: "src/keys.rs".to_string(),
@@ -8439,43 +8439,43 @@ fn figures_recorded_at_commit(world: &mut CrimeWorld, commit: String) {
     world.startup.risk_json = Some(risk::persist(&figures, &commit));
 }
 
-fn written_figures(world: &CrimeWorld) -> risk::Persisted {
+fn written_figures(world: &VardeWorld) -> risk::Persisted {
     let path =
-        crime::crime_dir(&world.startup.root, world.startup.sidecar.as_deref()).join(risk::FILE);
+        varde::varde_dir(&world.startup.root, world.startup.sidecar.as_deref()).join(risk::FILE);
     let json = world
         .files
         .get(&path)
         .unwrap_or_else(|| panic!("nothing at {path:?}: {:?}", world.files.keys()));
-    serde_json::from_str(json).expect("CRIME's own shape")
+    serde_json::from_str(json).expect("Varde's own shape")
 }
 
 #[then(expr = "the figures were written to {string}")]
-fn figures_were_written(world: &mut CrimeWorld, path: String) {
-    assert_eq!(path, format!("{}/{}", crime::CRIME_DIR, risk::FILE));
+fn figures_were_written(world: &mut VardeWorld, path: String) {
+    assert_eq!(path, format!("{}/{}", varde::VARDE_DIR, risk::FILE));
     written_figures(world);
 }
 
 #[then(expr = "the written figures record the commit {string}")]
-fn written_figures_record_commit(world: &mut CrimeWorld, commit: String) {
+fn written_figures_record_commit(world: &mut VardeWorld, commit: String) {
     assert_eq!(written_figures(world).commit, commit);
 }
 
 #[then(expr = "the written figures record the metric {string}")]
-fn written_figures_record_metric(world: &mut CrimeWorld, metric: String) {
+fn written_figures_record_metric(world: &mut VardeWorld, metric: String) {
     assert_eq!(written_figures(world).metric, metric);
 }
 
 /// Field for field against the table, so the file's shape is pinned rather than
 /// merely present — and the analyser's types cannot appear in it, because the
-/// step deserializes CRIME's own.
+/// step deserializes Varde's own.
 #[then(expr = "the written figures list:")]
-fn written_figures_list(world: &mut CrimeWorld, step: &Step) {
+fn written_figures_list(world: &mut VardeWorld, step: &Step) {
     assert_eq!(written_figures(world).functions, figures(step, 0).functions);
 }
 
 #[when(expr = "the figures arrive for the scope {string} with {int} files Unparsed:")]
 fn figures_arrive_with_unparsed(
-    world: &mut CrimeWorld,
+    world: &mut VardeWorld,
     name: String,
     unparsed: usize,
     step: &Step,
@@ -8487,13 +8487,13 @@ fn figures_arrive_with_unparsed(
 /// thread would leave it: `asked` is ahead of `answered`, so "computing" is a
 /// state a scenario can stand in.
 #[given(expr = "an analysis is in flight over the scope {string}")]
-fn analysis_in_flight(world: &mut CrimeWorld, name: String) {
+fn analysis_in_flight(world: &mut VardeWorld, name: String) {
     let asked = risk::analyse(&mut world.state, scope(&name));
     world.apply(vec![asked]);
 }
 
 #[then(expr = "an analysis was asked for over the scope {string}")]
-fn analysis_asked_for(world: &mut CrimeWorld, name: String) {
+fn analysis_asked_for(world: &mut VardeWorld, name: String) {
     assert!(
         world
             .analyses
@@ -8505,7 +8505,7 @@ fn analysis_asked_for(world: &mut CrimeWorld, name: String) {
 }
 
 #[then(expr = "no analysis was asked for over the scope {string}")]
-fn no_analysis_asked_for_scope(world: &mut CrimeWorld, name: String) {
+fn no_analysis_asked_for_scope(world: &mut VardeWorld, name: String) {
     assert!(
         !world
             .analyses
@@ -8520,7 +8520,7 @@ fn no_analysis_asked_for_scope(world: &mut CrimeWorld, name: String) {
 /// promise is that a recompute supersedes rather than queues and a queue would
 /// be the plausible-looking implementation.
 #[then(expr = "{int} analysis is in flight")]
-fn analyses_in_flight(world: &mut CrimeWorld, expected: usize) {
+fn analyses_in_flight(world: &mut VardeWorld, expected: usize) {
     assert_eq!(usize::from(world.state.risk.in_flight()), expected);
 }
 
@@ -8528,7 +8528,7 @@ fn analyses_in_flight(world: &mut CrimeWorld, expected: usize) {
 /// and the figure it carries must not appear. A core that took the last answer
 /// to arrive would show it.
 #[then(expr = "the earlier analysis was superseded")]
-fn earlier_analysis_superseded(world: &mut CrimeWorld) {
+fn earlier_analysis_superseded(world: &mut VardeWorld) {
     let generation = world
         .analyses
         .first()
@@ -8566,7 +8566,7 @@ fn earlier_analysis_superseded(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "no analysis was asked for")]
-fn no_analysis_asked_for(world: &mut CrimeWorld) {
+fn no_analysis_asked_for(world: &mut VardeWorld) {
     assert!(world.analyses.is_empty(), "asked for {:?}", world.analyses);
 }
 
@@ -8574,35 +8574,35 @@ fn no_analysis_asked_for(world: &mut CrimeWorld) {
 /// spinner exists to rule out, so a scenario that names the job also holds the
 /// border to saying what is being worked on.
 #[then(expr = "the job in flight is {string}")]
-fn the_job_in_flight(world: &mut CrimeWorld, expected: String) {
+fn the_job_in_flight(world: &mut VardeWorld, expected: String) {
     let (name, caption) = risk::job(&world.state).expect("no job in flight");
     assert_eq!(name, expected);
     assert!(!caption.is_empty(), "a spinner with no caption");
 }
 
 #[then(expr = "the tree border risk state is {string}")]
-fn tree_border_risk_state(world: &mut CrimeWorld, expected: String) {
+fn tree_border_risk_state(world: &mut VardeWorld, expected: String) {
     assert_eq!(risk::view_state(&world.state), expected);
 }
 
 #[then(expr = "the risk count is {int}")]
-fn the_risk_count(world: &mut CrimeWorld, expected: usize) {
+fn the_risk_count(world: &mut VardeWorld, expected: usize) {
     assert_eq!(risk::risk_count(&world.state), Some(expected));
 }
 
 #[then(expr = "no risk count is shown")]
-fn no_risk_count(world: &mut CrimeWorld) {
+fn no_risk_count(world: &mut VardeWorld) {
     assert_eq!(risk::risk_count(&world.state), None);
 }
 
 #[then(expr = "the risk metric is {string}")]
-fn the_risk_metric(world: &mut CrimeWorld, expected: String) {
+fn the_risk_metric(world: &mut VardeWorld, expected: String) {
     assert_eq!(risk::METRIC, expected);
     assert!(world.state.risk.figures().is_some(), "no figures to label");
 }
 
 #[then(expr = "the unparsed count is {int}")]
-fn the_unparsed_count(world: &mut CrimeWorld, expected: usize) {
+fn the_unparsed_count(world: &mut VardeWorld, expected: usize) {
     match world.state.risk.figures() {
         Some(figures) => assert_eq!(figures.unparsed, expected),
         None => panic!("no figures: {:?}", world.state.risk),
@@ -8612,7 +8612,7 @@ fn the_unparsed_count(world: &mut CrimeWorld, expected: usize) {
 // ---- F28: the Risk list pane ----
 
 #[then(expr = "the view palette offers {string} in the group {string} under the key {string}")]
-fn palette_offers_entry(world: &mut CrimeWorld, entry: String, group: String, key: String) {
+fn palette_offers_entry(world: &mut VardeWorld, entry: String, group: String, key: String) {
     assert_eq!(world.state.modal, Modal::Palette);
     let offered: Vec<(String, char, String)> = PALETTE
         .iter()
@@ -8643,7 +8643,7 @@ fn palette_offers_entry(world: &mut CrimeWorld, entry: String, group: String, ke
 /// and every scenario about the pane's own keys would be pressing them at
 /// whatever pane the default focus is on.
 #[given(expr = "the Risk list is shown")]
-fn risk_list_is_shown(world: &mut CrimeWorld) {
+fn risk_list_is_shown(world: &mut VardeWorld) {
     if world.state.corner != layout::Corner::Risk {
         world.send(Event::ToggleRiskList);
     }
@@ -8651,39 +8651,39 @@ fn risk_list_is_shown(world: &mut CrimeWorld) {
 }
 
 #[given(expr = "the Risk list is hidden")]
-fn risk_list_is_hidden(world: &mut CrimeWorld) {
+fn risk_list_is_hidden(world: &mut VardeWorld) {
     world.state.corner = layout::Corner::Hidden;
 }
 
 #[when(expr = "I show the Risk list")]
-fn show_risk_list(world: &mut CrimeWorld) {
+fn show_risk_list(world: &mut VardeWorld) {
     assert_eq!(world.state.corner, layout::Corner::Hidden);
     world.send(Event::ToggleRiskList);
 }
 
 #[then(expr = "the Risk list is shown")]
-fn risk_list_should_be_shown(world: &mut CrimeWorld) {
+fn risk_list_should_be_shown(world: &mut VardeWorld) {
     assert_eq!(world.state.corner, layout::Corner::Risk);
 }
 
 #[then(expr = "the Risk list is hidden")]
-fn risk_list_should_be_hidden(world: &mut CrimeWorld) {
+fn risk_list_should_be_hidden(world: &mut VardeWorld) {
     assert_ne!(world.state.corner, layout::Corner::Risk);
 }
 
 #[given(expr = "the Risk list pane has focus")]
-fn risk_pane_has_focus(world: &mut CrimeWorld) {
+fn risk_pane_has_focus(world: &mut VardeWorld) {
     world.state.focus = Pane::Risk;
 }
 
 #[then(expr = "the Risk list pane has focus")]
-fn risk_pane_should_have_focus(world: &mut CrimeWorld) {
+fn risk_pane_should_have_focus(world: &mut VardeWorld) {
     assert_eq!(world.state.focus, Pane::Risk);
 }
 
 #[given(expr = "the project {string} records the Risk list as {word}")]
-fn state_records_risk_list(world: &mut CrimeWorld, path: String, shown: String) {
-    assert_eq!(path, ".crime/state.json");
+fn state_records_risk_list(world: &mut VardeWorld, path: String, shown: String) {
+    assert_eq!(path, ".varde/state.json");
     let recorded = match shown.as_str() {
         "shown" => "Shown",
         "hidden" => "Hidden",
@@ -8693,14 +8693,14 @@ fn state_records_risk_list(world: &mut CrimeWorld, path: String, shown: String) 
 }
 
 #[when(expr = "I show every Function in the Risk list")]
-fn show_every_function(world: &mut CrimeWorld) {
+fn show_every_function(world: &mut VardeWorld) {
     world.send(Event::ToggleRiskAll);
 }
 
 /// The rows as the pane draws them: the Function, its figure, and — where the
 /// table asks for one — how far the change moved it.
 #[then("the Risk list shows:")]
-fn risk_list_shows(world: &mut CrimeWorld, step: &Step) {
+fn risk_list_shows(world: &mut VardeWorld, step: &Step) {
     let table = step.table().expect("a table");
     let deltas = table.rows[0].iter().any(|heading| heading == "delta");
     let expected: Vec<(String, u32, Option<i64>)> = table
@@ -8731,7 +8731,7 @@ fn risk_list_shows(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "the Risk list is empty")]
-fn risk_list_is_empty(world: &mut CrimeWorld) {
+fn risk_list_is_empty(world: &mut VardeWorld) {
     assert!(
         risk::list(&world.state).is_empty(),
         "{:?}",
@@ -8740,14 +8740,14 @@ fn risk_list_is_empty(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the Risk list state is {string}")]
-fn risk_list_state(world: &mut CrimeWorld, expected: String) {
+fn risk_list_state(world: &mut VardeWorld, expected: String) {
     assert_eq!(risk::view_state(&world.state), expected);
 }
 
 /// On top of the figure the Background computed, the way the edge would have
 /// counted them alongside it.
 #[given(expr = "{int} files were Unparsed")]
-fn files_were_unparsed(world: &mut CrimeWorld, count: usize) {
+fn files_were_unparsed(world: &mut VardeWorld, count: usize) {
     match &mut world.state.risk.figure {
         risk::Figure::Current(figures) | risk::Figure::Stale(figures) => figures.unparsed = count,
         risk::Figure::None => panic!("no figure to count them against"),
@@ -8755,12 +8755,12 @@ fn files_were_unparsed(world: &mut CrimeWorld, count: usize) {
 }
 
 #[given(expr = "no figures have been computed")]
-fn no_figures_computed(world: &mut CrimeWorld) {
+fn no_figures_computed(world: &mut VardeWorld) {
     world.state.risk.figure = risk::Figure::None;
 }
 
 #[then(expr = "the Risk list unparsed count is {int}")]
-fn risk_list_unparsed(world: &mut CrimeWorld, expected: usize) {
+fn risk_list_unparsed(world: &mut VardeWorld, expected: usize) {
     assert_eq!(risk::unparsed(&world.state), expected);
 }
 
@@ -8768,7 +8768,7 @@ fn risk_list_unparsed(world: &mut CrimeWorld, expected: usize) {
 
 /// The selection by the name of the Function it is on: an index is what the
 /// core holds, but a scenario about a worklist names the row.
-fn risk_row(world: &CrimeWorld, function: &str) -> usize {
+fn risk_row(world: &VardeWorld, function: &str) -> usize {
     risk::list(&world.state)
         .iter()
         .position(|row| row.name == function)
@@ -8784,12 +8784,12 @@ fn risk_row(world: &CrimeWorld, function: &str) -> usize {
 }
 
 #[given(expr = "the Risk list selection is {string}")]
-fn risk_selection_is(world: &mut CrimeWorld, function: String) {
+fn risk_selection_is(world: &mut VardeWorld, function: String) {
     world.state.risk_selection = risk_row(world, &function);
 }
 
 #[then(expr = "the Risk list selection is {string}")]
-fn risk_selection_should_be(world: &mut CrimeWorld, function: String) {
+fn risk_selection_should_be(world: &mut VardeWorld, function: String) {
     assert_eq!(
         risk::selected(&world.state).map(|row| row.name.clone()),
         Some(function)
@@ -8798,7 +8798,7 @@ fn risk_selection_should_be(world: &mut CrimeWorld, function: String) {
 
 #[given(expr = "the Risk list selection is the first row")]
 #[then(expr = "the Risk list selection is the first row")]
-fn risk_selection_is_the_first_row(world: &mut CrimeWorld) {
+fn risk_selection_is_the_first_row(world: &mut VardeWorld) {
     assert_eq!(world.state.risk_selection, 0);
 }
 
@@ -8807,16 +8807,16 @@ fn risk_selection_is_the_first_row(world: &mut CrimeWorld) {
 /// behaviour under test and a Given that set the index would still hold if the
 /// motion stopped reaching it.
 #[given(expr = "the keyboard is on the Risk list pane actions")]
-fn keyboard_is_on_the_pane_actions(world: &mut CrimeWorld) {
+fn keyboard_is_on_the_pane_actions(world: &mut VardeWorld) {
     world.state.focus = Pane::Risk;
     for _ in 0..=risk::list(&world.state).len() {
-        world.send(Event::MoveSelection(crime::Direction::Down));
+        world.send(Event::MoveSelection(varde::Direction::Down));
     }
     assert!(risk::on_actions(&world.state));
 }
 
 #[then(expr = "the keyboard is on the Risk list pane actions")]
-fn keyboard_should_be_on_the_pane_actions(world: &mut CrimeWorld) {
+fn keyboard_should_be_on_the_pane_actions(world: &mut VardeWorld) {
     assert!(
         risk::on_actions(&world.state),
         "on row {}",
@@ -8828,7 +8828,7 @@ fn keyboard_should_be_on_the_pane_actions(world: &mut CrimeWorld) {
 /// and the action Enter runs are read from one list, so the step cannot agree
 /// with a renderer that has drifted from it.
 #[then(expr = "the armed Risk list action is {string}")]
-fn armed_risk_action_is(world: &mut CrimeWorld, expected: String) {
+fn armed_risk_action_is(world: &mut VardeWorld, expected: String) {
     let actions = match risk::on_actions(&world.state) {
         true => risk::pane_actions(&world.state),
         false => risk::row_actions(&world.state),
@@ -8841,12 +8841,12 @@ fn armed_risk_action_is(world: &mut CrimeWorld, expected: String) {
 }
 
 #[then(expr = "no Risk list action is armed")]
-fn no_risk_action_is_armed(world: &mut CrimeWorld) {
+fn no_risk_action_is_armed(world: &mut VardeWorld) {
     assert_eq!(world.state.selected_action, None);
 }
 
 #[then(expr = "the Risk list border shows the file {string}")]
-fn risk_border_shows_file(world: &mut CrimeWorld, file: String) {
+fn risk_border_shows_file(world: &mut VardeWorld, file: String) {
     assert_eq!(
         risk::selected(&world.state).map(|row| row.file.clone()),
         Some(file)
@@ -8856,7 +8856,7 @@ fn risk_border_shows_file(world: &mut CrimeWorld, file: String) {
 /// The click the mouse would report, by the row it lands on — `mouse` resolves a
 /// screen position into this index, and its own test pins that arithmetic.
 #[when(expr = "I click the Risk list row {string}")]
-fn click_risk_row(world: &mut CrimeWorld, function: String) {
+fn click_risk_row(world: &mut VardeWorld, function: String) {
     let index = risk_row(world, &function);
     world.send(Event::ClickRiskRow(index));
 }
@@ -8865,7 +8865,7 @@ fn click_risk_row(world: &mut CrimeWorld, function: String) {
 /// happen at all. Descending figures, all above the threshold, so the list holds
 /// every one of them in the order they are made.
 #[given(expr = "the Risk list holds {int} Functions")]
-fn risk_list_holds(world: &mut CrimeWorld, count: u32) {
+fn risk_list_holds(world: &mut VardeWorld, count: u32) {
     let functions = (0..count)
         .map(|which| Function {
             file: format!("src/{which}.rs"),
@@ -8885,14 +8885,14 @@ fn risk_list_holds(world: &mut CrimeWorld, count: u32) {
 }
 
 #[then(expr = "the Risk list first visible row is row {int}")]
-fn risk_first_visible_row(world: &mut CrimeWorld, row: usize) {
+fn risk_first_visible_row(world: &mut VardeWorld, row: usize) {
     assert_eq!(world.state.risk_scroll, row);
 }
 
 #[then(expr = "the Risk list selection is in view")]
-fn risk_selection_in_view(world: &mut CrimeWorld) {
+fn risk_selection_in_view(world: &mut VardeWorld) {
     let first = world.state.risk_scroll;
-    let last = first + crime::corner_rows(&world.state).max(1);
+    let last = first + varde::corner_rows(&world.state).max(1);
     assert!(
         (first..last).contains(&world.state.risk_selection),
         "row {} is not among the rows {first}..{last} on screen",
@@ -8903,7 +8903,7 @@ fn risk_selection_in_view(world: &mut CrimeWorld) {
 // ---- F29: a single Function's refactor ----
 
 #[then("the Risk list row actions offered are:")]
-fn risk_row_actions_offered(world: &mut CrimeWorld, step: &Step) {
+fn risk_row_actions_offered(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -8922,30 +8922,30 @@ fn risk_row_actions_offered(world: &mut CrimeWorld, step: &Step) {
 /// raise the one event the row's icon and the armed Enter both raise.
 #[given(expr = "I ask for a refactor of the Function {string}")]
 #[when(expr = "I ask for a refactor of the Function {string}")]
-fn ask_for_a_refactor(world: &mut CrimeWorld, function: String) {
+fn ask_for_a_refactor(world: &mut VardeWorld, function: String) {
     world.state.risk_selection = risk_row(world, &function);
     world.send(Event::RowAction(risk::REFACTOR));
 }
 
 #[when(expr = "I click the {string} action on the Risk list row {string}")]
-fn click_risk_row_action(world: &mut CrimeWorld, action: String, row: String) {
+fn click_risk_row_action(world: &mut VardeWorld, action: String, row: String) {
     assert_eq!(action, risk::REFACTOR, "unknown action {action:?}");
     ask_for_a_refactor(world, row);
 }
 
 #[then(expr = "the AI pane was sent a prompt naming the Function {string}")]
-fn prompt_names_the_function(world: &mut CrimeWorld, function: String) {
+fn prompt_names_the_function(world: &mut VardeWorld, function: String) {
     prompt_contains(world, function);
 }
 
 #[then(expr = "the AI pane was sent a prompt naming the figure {int}")]
-fn prompt_names_the_figure(world: &mut CrimeWorld, figure: u32) {
+fn prompt_names_the_figure(world: &mut VardeWorld, figure: u32) {
     prompt_contains(world, figure.to_string());
 }
 
 #[then(expr = "exactly {int} prompt was sent to the AI")]
 #[then(expr = "exactly {int} prompts were sent to the AI")]
-fn exactly_this_many_prompts(world: &mut CrimeWorld, expected: usize) {
+fn exactly_this_many_prompts(world: &mut VardeWorld, expected: usize) {
     assert_eq!(ai_sends(world).len(), expected, "{:?}", world.keys_sent);
 }
 
@@ -8954,7 +8954,7 @@ fn exactly_this_many_prompts(world: &mut CrimeWorld, expected: usize) {
 /// names are the ones a plausible prompt would reach for, the configured
 /// command among them — a scenario sets `ai.command` to one of them.
 #[then(expr = "the prompt names no AI provider")]
-fn prompt_names_no_provider(world: &mut CrimeWorld) {
+fn prompt_names_no_provider(world: &mut VardeWorld) {
     let sent = ai_sends(world).join("\n").to_lowercase();
     for provider in [
         "claude",
@@ -8981,7 +8981,7 @@ fn prompt_names_no_provider(world: &mut CrimeWorld) {
 /// Adds a key under `[risk]`, keeping what an earlier step put there: the
 /// Refactor loop's Background configures three of them, and a step that
 /// replaced the file would leave the last one standing alone.
-fn risk_config(world: &mut CrimeWorld, line: &str) {
+fn risk_config(world: &mut VardeWorld, line: &str) {
     let mut config = world
         .startup
         .project_config
@@ -8996,19 +8996,19 @@ fn risk_config(world: &mut CrimeWorld, line: &str) {
 }
 
 #[given(expr = "the configured test command is {string}")]
-fn configured_test_command(world: &mut CrimeWorld, command: String) {
+fn configured_test_command(world: &mut VardeWorld, command: String) {
     world.state.test_command = Some(command.clone());
     risk_config(world, &format!("test_command = {command:?}"));
 }
 
 #[given(expr = "no {string} is configured")]
-fn nothing_configured(world: &mut CrimeWorld, key: String) {
+fn nothing_configured(world: &mut VardeWorld, key: String) {
     assert_eq!(key, "risk.test_command", "unknown key {key:?}");
     world.state.test_command = None;
 }
 
 #[given(expr = "the iteration cap is {int}")]
-fn iteration_cap(world: &mut CrimeWorld, cap: u32) {
+fn iteration_cap(world: &mut VardeWorld, cap: u32) {
     world.state.max_iterations = cap;
     risk_config(world, &format!("max_iterations = {cap}"));
 }
@@ -9016,7 +9016,7 @@ fn iteration_cap(world: &mut CrimeWorld, cap: u32) {
 /// A file in the project's root, which is what the shape is read off: the
 /// marker the project holds is what says which command its tests are behind.
 #[given(expr = "the project holds {string}")]
-fn project_holds_file(world: &mut CrimeWorld, name: String) {
+fn project_holds_file(world: &mut VardeWorld, name: String) {
     let root = world.state.root.clone();
     world.state.contents.entry(root).or_default().push(Entry {
         name,
@@ -9025,13 +9025,13 @@ fn project_holds_file(world: &mut CrimeWorld, name: String) {
 }
 
 #[given(expr = "the project's shape names no test command")]
-fn shape_names_no_test_command(world: &mut CrimeWorld) {
+fn shape_names_no_test_command(world: &mut VardeWorld) {
     let root = world.state.root.clone();
     world.state.contents.insert(root, Vec::new());
 }
 
 #[then(expr = "the loop's test command is {string}")]
-fn loop_test_command(world: &mut CrimeWorld, expected: String) {
+fn loop_test_command(world: &mut VardeWorld, expected: String) {
     assert_eq!(
         world
             .state
@@ -9045,7 +9045,7 @@ fn loop_test_command(world: &mut CrimeWorld, expected: String) {
 
 #[given(expr = "I start the Refactor loop over the scope {string}")]
 #[when(expr = "I start the Refactor loop over the scope {string}")]
-fn start_the_loop(world: &mut CrimeWorld, name: String) {
+fn start_the_loop(world: &mut VardeWorld, name: String) {
     world.send(Event::StartRefactorLoop(scope(&name)));
 }
 
@@ -9054,8 +9054,8 @@ fn start_the_loop(world: &mut CrimeWorld, name: String) {
 /// forward through the Gate, because passing it is the only way an Iteration
 /// after the first exists.
 #[given(expr = "the Refactor loop is on Iteration {int} over the scope {string}")]
-fn loop_is_on_iteration(world: &mut CrimeWorld, number: u32, name: String) {
-    let on = |world: &CrimeWorld| {
+fn loop_is_on_iteration(world: &mut VardeWorld, number: u32, name: String) {
+    let on = |world: &VardeWorld| {
         world
             .state
             .refactor
@@ -9089,23 +9089,23 @@ fn loop_is_on_iteration(world: &mut CrimeWorld, number: u32, name: String) {
 }
 
 #[then(expr = "the Refactor loop is running")]
-fn loop_is_running(world: &mut CrimeWorld) {
+fn loop_is_running(world: &mut VardeWorld) {
     assert!(world.state.refactor.running.is_some());
 }
 
 #[then(expr = "{int} Refactor loop is running")]
-fn this_many_loops_running(world: &mut CrimeWorld, count: usize) {
+fn this_many_loops_running(world: &mut VardeWorld, count: usize) {
     assert_eq!(world.state.refactor.running.iter().count(), count);
 }
 
 #[then(expr = "no Refactor loop is running")]
 #[then(expr = "the Refactor loop is not running")]
-fn loop_is_not_running(world: &mut CrimeWorld) {
+fn loop_is_not_running(world: &mut VardeWorld) {
     assert_eq!(world.state.refactor.running, None);
 }
 
 #[then(expr = "the Refactor loop refusal is {string}")]
-fn loop_refusal(world: &mut CrimeWorld, expected: String) {
+fn loop_refusal(world: &mut VardeWorld, expected: String) {
     assert_eq!(
         world.state.refactor.refusal,
         Some(expected.as_str()),
@@ -9115,7 +9115,7 @@ fn loop_refusal(world: &mut CrimeWorld, expected: String) {
 }
 
 #[then(expr = "the Refactor loop wait state is {string}")]
-fn loop_wait_state(world: &mut CrimeWorld, expected: String) {
+fn loop_wait_state(world: &mut VardeWorld, expected: String) {
     assert_eq!(
         world
             .state
@@ -9132,7 +9132,7 @@ fn loop_wait_state(world: &mut CrimeWorld, expected: String) {
 /// — an Iteration without its cap says nothing about how much of the run is
 /// left, and a pane that says neither is the hang a caption exists to rule out.
 #[then(expr = "the Refactor loop status shows Iteration {int} of {int}")]
-fn loop_status_shows(world: &mut CrimeWorld, number: u32, cap: u32) {
+fn loop_status_shows(world: &mut VardeWorld, number: u32, cap: u32) {
     assert_eq!(
         world
             .state
@@ -9155,7 +9155,7 @@ fn loop_status_shows(world: &mut CrimeWorld, number: u32, cap: u32) {
 /// its baseline. Drifting apart is a pane showing the previous pass's numbers
 /// while the Gate measures against these.
 #[then(expr = "the Risk list shows the figure for Iteration {int}")]
-fn risk_list_shows_iteration_figure(world: &mut CrimeWorld, number: u32) {
+fn risk_list_shows_iteration_figure(world: &mut VardeWorld, number: u32) {
     let iteration = world
         .state
         .refactor
@@ -9167,7 +9167,7 @@ fn risk_list_shows_iteration_figure(world: &mut CrimeWorld, number: u32) {
 }
 
 #[then("the Risk list pane actions offered are:")]
-fn risk_pane_actions_offered(world: &mut CrimeWorld, step: &Step) {
+fn risk_pane_actions_offered(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -9186,7 +9186,7 @@ fn risk_pane_actions_offered(world: &mut CrimeWorld, step: &Step) {
 /// event both reach — the action is looked up in the list the pane draws
 /// rather than spelled again here.
 #[when(expr = "I click the {string} action on the Risk list pane")]
-fn click_risk_pane_action(world: &mut CrimeWorld, action: String) {
+fn click_risk_pane_action(world: &mut VardeWorld, action: String) {
     let named = risk::pane_actions(&world.state)
         .into_iter()
         .find(|offered| *offered == action)
@@ -9195,7 +9195,7 @@ fn click_risk_pane_action(world: &mut CrimeWorld, action: String) {
 }
 
 #[when(expr = "I stop the Refactor loop")]
-fn stop_the_loop(world: &mut CrimeWorld) {
+fn stop_the_loop(world: &mut VardeWorld) {
     world.send(Event::StopRefactorLoop);
 }
 
@@ -9204,29 +9204,29 @@ fn stop_the_loop(world: &mut CrimeWorld) {
 /// assertion after it pass vacuously.
 #[given(expr = "the Refactor loop stopped because {string}")]
 #[then(expr = "the Refactor loop stopped because {string}")]
-fn loop_stopped_because(world: &mut CrimeWorld, expected: String) {
+fn loop_stopped_because(world: &mut VardeWorld, expected: String) {
     assert_eq!(world.state.refactor.stopped, Some(expected.as_str()));
 }
 
 #[then(expr = "the Refactor loop last test result is {string}")]
-fn loop_last_test_result(world: &mut CrimeWorld, expected: String) {
+fn loop_last_test_result(world: &mut VardeWorld, expected: String) {
     assert_eq!(world.state.refactor.last_test(), Some(expected.as_str()));
 }
 
 #[then(expr = "no Refactor loop last test result is reported")]
-fn no_loop_last_test_result(world: &mut CrimeWorld) {
+fn no_loop_last_test_result(world: &mut VardeWorld) {
     assert_eq!(world.state.refactor.last_test(), None);
 }
 
 /// What the border trails after the figure, which is what a finished run leaves
 /// behind: `None` is the border saying nothing rather than saying "idle".
 #[then(expr = "the Risk list border says nothing about the loop")]
-fn border_says_nothing_about_the_loop(world: &mut CrimeWorld) {
+fn border_says_nothing_about_the_loop(world: &mut VardeWorld) {
     assert_eq!(risk::status(&world.state), None);
 }
 
 #[then("the Refactor loop reports the tests' output:")]
-fn loop_reports_output(world: &mut CrimeWorld, step: &Step) {
+fn loop_reports_output(world: &mut VardeWorld, step: &Step) {
     let expected = step.docstring().expect("docstring").trim();
     let reported = world
         .state
@@ -9238,7 +9238,7 @@ fn loop_reports_output(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "the sentinel {string} was deleted")]
-fn sentinel_was_deleted(world: &mut CrimeWorld, path: String) {
+fn sentinel_was_deleted(world: &mut VardeWorld, path: String) {
     let path = abs(world, &path);
     assert!(
         world.deleted.contains(&path),
@@ -9248,7 +9248,7 @@ fn sentinel_was_deleted(world: &mut CrimeWorld, path: String) {
 }
 
 #[given(expr = "the sentinel {string} already exists")]
-fn sentinel_already_exists(world: &mut CrimeWorld, path: String) {
+fn sentinel_already_exists(world: &mut VardeWorld, path: String) {
     let path = abs(world, &path);
     world.files.insert(path, String::new());
 }
@@ -9256,7 +9256,7 @@ fn sentinel_already_exists(world: &mut CrimeWorld, path: String) {
 /// The watcher that already exists is what sees it — the same event a file
 /// landing anywhere else in the workspace arrives as.
 #[when(expr = "the sentinel {string} appears")]
-fn sentinel_appears(world: &mut CrimeWorld, path: String) {
+fn sentinel_appears(world: &mut VardeWorld, path: String) {
     let path = abs(world, &path);
     world.files.insert(path.clone(), String::new());
     world.send(Event::FilesAppeared(vec![(path, tree::Kind::File)]));
@@ -9266,24 +9266,24 @@ fn sentinel_appears(world: &mut CrimeWorld, path: String) {
 /// silence hands the core exactly what the edge hands it while a job runs — the
 /// ticks a spinner turns on and no event at all besides.
 #[when(expr = "the clock advances {int} minutes")]
-fn clock_advances(world: &mut CrimeWorld, minutes: u64) {
+fn clock_advances(world: &mut VardeWorld, minutes: u64) {
     for _ in 0..minutes {
         world.send(Event::Tick);
     }
 }
 
 #[then(expr = "the test command {string} was run")]
-fn test_command_was_run(world: &mut CrimeWorld, expected: String) {
+fn test_command_was_run(world: &mut VardeWorld, expected: String) {
     assert_eq!(world.tests_run, vec![expected]);
 }
 
 #[then(expr = "no test command was run")]
-fn no_test_command_was_run(world: &mut CrimeWorld) {
+fn no_test_command_was_run(world: &mut VardeWorld) {
     assert!(world.tests_run.is_empty(), "{:?}", world.tests_run);
 }
 
 #[then(expr = "a snapshot was taken for Iteration {int}")]
-fn snapshot_was_taken(world: &mut CrimeWorld, iteration: u32) {
+fn snapshot_was_taken(world: &mut VardeWorld, iteration: u32) {
     assert!(
         world.snapshots.contains_key(&iteration),
         "snapshots: {:?}",
@@ -9294,7 +9294,7 @@ fn snapshot_was_taken(world: &mut CrimeWorld, iteration: u32) {
 /// What the session did with the pass: the files it edited, which is what a
 /// revert is measured against. Their contents change; nothing else does.
 #[given("the Iteration touched:")]
-fn iteration_touched(world: &mut CrimeWorld, step: &Step) {
+fn iteration_touched(world: &mut VardeWorld, step: &Step) {
     for row in &step.table().expect("table").rows {
         let file = row[0].clone();
         let edited = format!(
@@ -9308,7 +9308,7 @@ fn iteration_touched(world: &mut CrimeWorld, step: &Step) {
 /// A file the user had already edited when the loop started: what the last
 /// commit holds, and what their own uncommitted work left in it.
 #[given(expr = "{string} had uncommitted changes before the loop started")]
-fn had_uncommitted_changes(world: &mut CrimeWorld, file: String) {
+fn had_uncommitted_changes(world: &mut VardeWorld, file: String) {
     let committed = world.tree().get(&file).cloned().unwrap_or_default();
     let mine = format!("{committed}my own uncommitted edit\n");
     world.committed.insert(file.clone(), committed);
@@ -9326,7 +9326,7 @@ fn had_uncommitted_changes(world: &mut CrimeWorld, file: String) {
 
 #[given("the tests finish failing:")]
 #[when("the tests finish failing:")]
-fn tests_finish_failing(world: &mut CrimeWorld, step: &Step) {
+fn tests_finish_failing(world: &mut VardeWorld, step: &Step) {
     let output = step.docstring().expect("docstring").trim().to_string();
     world.send(Event::TestsFinished {
         passed: false,
@@ -9336,7 +9336,7 @@ fn tests_finish_failing(world: &mut CrimeWorld, step: &Step) {
 
 #[given("the tests finished passing")]
 #[when("the tests finish passing")]
-fn tests_finish_passing(world: &mut CrimeWorld) {
+fn tests_finish_passing(world: &mut VardeWorld) {
     world.send(Event::TestsFinished {
         passed: true,
         output: "ok".to_string(),
@@ -9344,7 +9344,7 @@ fn tests_finish_passing(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "Iteration {int} was restored from its snapshot")]
-fn iteration_was_restored(world: &mut CrimeWorld, iteration: u32) {
+fn iteration_was_restored(world: &mut VardeWorld, iteration: u32) {
     assert!(
         world.restores.contains(&iteration),
         "restores: {:?}",
@@ -9353,7 +9353,7 @@ fn iteration_was_restored(world: &mut CrimeWorld, iteration: u32) {
 }
 
 #[then(expr = "Iteration {int} was not restored from its snapshot")]
-fn iteration_was_not_restored(world: &mut CrimeWorld, iteration: u32) {
+fn iteration_was_not_restored(world: &mut VardeWorld, iteration: u32) {
     assert!(
         !world.restores.contains(&iteration),
         "restores: {:?}",
@@ -9362,7 +9362,7 @@ fn iteration_was_not_restored(world: &mut CrimeWorld, iteration: u32) {
 }
 
 #[then("the files restored are:")]
-fn files_restored_are(world: &mut CrimeWorld, step: &Step) {
+fn files_restored_are(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -9374,7 +9374,7 @@ fn files_restored_are(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "{string} was not restored")]
-fn was_not_restored(world: &mut CrimeWorld, file: String) {
+fn was_not_restored(world: &mut VardeWorld, file: String) {
     assert!(!world.restored.contains(&file), "{:?}", world.restored);
 }
 
@@ -9382,7 +9382,7 @@ fn was_not_restored(world: &mut CrimeWorld, file: String) {
 /// when the first Iteration was snapshotted — files the run created included, so
 /// a session that wrote outside its Scope is caught rather than missed.
 #[then("the files the loop changed are:")]
-fn files_the_loop_changed(world: &mut CrimeWorld, step: &Step) {
+fn files_the_loop_changed(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -9397,14 +9397,14 @@ fn files_the_loop_changed(world: &mut CrimeWorld, step: &Step) {
 /// reviewing is a file the loop may not touch, and the user's own uncommitted
 /// work in it is still there afterwards.
 #[then(expr = "{string} is unchanged by the loop")]
-fn unchanged_by_the_loop(world: &mut CrimeWorld, file: String) {
+fn unchanged_by_the_loop(world: &mut VardeWorld, file: String) {
     assert!(
         !loop_changed(world).contains(&file),
         "the loop changed {file}"
     );
 }
 
-fn loop_changed(world: &CrimeWorld) -> Vec<String> {
+fn loop_changed(world: &VardeWorld) -> Vec<String> {
     let before = world.snapshots.get(&1).expect("a snapshot for Iteration 1");
     world
         .tree()
@@ -9415,13 +9415,13 @@ fn loop_changed(world: &CrimeWorld) -> Vec<String> {
 }
 
 #[then(expr = "{string} holds the uncommitted changes it held before the loop started")]
-fn holds_my_uncommitted_changes(world: &mut CrimeWorld, file: String) {
+fn holds_my_uncommitted_changes(world: &mut VardeWorld, file: String) {
     let mine = world.mine.get(&file).expect("a file the scenario edited");
     assert_eq!(world.tree().get(&file), Some(mine));
 }
 
 #[then(expr = "{string} was not restored from the last commit")]
-fn not_restored_from_the_commit(world: &mut CrimeWorld, file: String) {
+fn not_restored_from_the_commit(world: &mut VardeWorld, file: String) {
     let committed = world.committed.get(&file).expect("a committed side");
     assert_ne!(world.tree().get(&file), Some(committed));
 }
@@ -9430,7 +9430,7 @@ fn not_restored_from_the_commit(world: &mut CrimeWorld, file: String) {
 /// history, per Iteration or at the end. Both channels a commit could come
 /// down, since neither is allowed to carry one.
 #[then(expr = "nothing was committed")]
-fn nothing_was_committed(world: &mut CrimeWorld) {
+fn nothing_was_committed(world: &mut VardeWorld) {
     for command in world.executed.iter().chain(world.tests_run.iter()) {
         assert!(!command.contains("commit"), "committed: {command:?}");
     }
@@ -9438,7 +9438,7 @@ fn nothing_was_committed(world: &mut CrimeWorld) {
 
 /// Any of the prompts, not only the first: an Iteration's own prompt went
 /// before whatever the Gate has to explain afterwards.
-fn any_prompt_contains(world: &CrimeWorld, needle: &str) {
+fn any_prompt_contains(world: &VardeWorld, needle: &str) {
     let sent = ai_sends(world);
     assert!(
         sent.iter().any(|prompt| prompt.contains(needle)),
@@ -9448,19 +9448,19 @@ fn any_prompt_contains(world: &CrimeWorld, needle: &str) {
 }
 
 #[then(expr = "the AI pane was sent a prompt naming the scope {string}")]
-fn prompt_names_the_scope(world: &mut CrimeWorld, name: String) {
+fn prompt_names_the_scope(world: &mut VardeWorld, name: String) {
     any_prompt_contains(world, scope(&name).as_str());
 }
 
 #[then(expr = "the AI pane was sent a prompt naming the target threshold {string}")]
-fn prompt_names_the_target(world: &mut CrimeWorld, threshold: String) {
+fn prompt_names_the_target(world: &mut VardeWorld, threshold: String) {
     any_prompt_contains(world, &threshold);
 }
 
 #[then(
     expr = "the AI pane was sent a prompt instructing the session to follow the repo's convention files"
 )]
-fn prompt_names_convention_files(world: &mut CrimeWorld) {
+fn prompt_names_convention_files(world: &mut VardeWorld) {
     any_prompt_contains(world, "convention files this repository holds");
 }
 
@@ -9468,24 +9468,24 @@ fn prompt_names_convention_files(world: &mut CrimeWorld) {
 /// third condition reverts — but a revert costs an Iteration, and the row
 /// action has no Gate behind it at all, so the wording has to say it up front.
 #[then(expr = "the AI pane was sent a prompt asking for splits that stand on their own")]
-fn prompt_asks_for_meaningful_splits(world: &mut CrimeWorld) {
+fn prompt_asks_for_meaningful_splits(world: &mut VardeWorld) {
     any_prompt_contains(world, "the symptom, not the goal");
 }
 
 /// The other direction: naming what a good split is only constrains a session
 /// if the prompt also names the shape that fails, so both halves are pinned.
 #[then(expr = "the AI pane was sent a prompt naming structural scattering as a failed pass")]
-fn prompt_names_scattering(world: &mut CrimeWorld) {
+fn prompt_names_scattering(world: &mut VardeWorld) {
     any_prompt_contains(world, "structural scattering");
 }
 
 #[then(expr = "the AI pane was sent a prompt naming the Gate condition {string}")]
-fn prompt_names_the_condition(world: &mut CrimeWorld, condition: String) {
+fn prompt_names_the_condition(world: &mut VardeWorld, condition: String) {
     any_prompt_contains(world, &condition);
 }
 
 #[then("the AI pane was sent a prompt containing the tests' output")]
-fn prompt_contains_the_output(world: &mut CrimeWorld) {
+fn prompt_contains_the_output(world: &mut VardeWorld) {
     let output = world
         .state
         .refactor
@@ -9497,9 +9497,9 @@ fn prompt_contains_the_output(world: &mut CrimeWorld) {
 }
 
 /// The most project-specific string in the system, kept out of a prompt that
-/// has to work on any workspace — because CRIME runs the tests itself.
+/// has to work on any workspace — because Varde runs the tests itself.
 #[then(expr = "no prompt sent to the AI contains {string}")]
-fn no_prompt_contains(world: &mut CrimeWorld, needle: String) {
+fn no_prompt_contains(world: &mut VardeWorld, needle: String) {
     for prompt in ai_sends(world) {
         assert!(
             !prompt.contains(&needle),
@@ -9514,7 +9514,7 @@ fn no_prompt_contains(world: &mut CrimeWorld, needle: String) {
 /// restored — and the loop having moved on from it, either to the next
 /// Iteration or to a stop at the cap. Nothing else produces that pair.
 #[then(expr = "Iteration {int} passed the Gate")]
-fn iteration_passed_the_gate(world: &mut CrimeWorld, iteration: u32) {
+fn iteration_passed_the_gate(world: &mut VardeWorld, iteration: u32) {
     iteration_was_not_restored(world, iteration);
     let moved_on = match world.state.refactor.running.as_ref() {
         Some(running) => running.number == iteration + 1,
@@ -9534,10 +9534,10 @@ fn iteration_passed_the_gate(world: &mut CrimeWorld, iteration: u32) {
 /// The figure it delivers halves the worst Function, which is what a real pass
 /// looks like: the count falls by one and every other metric with it, so the
 /// Gate's three conditions are satisfied by the same answer.
-fn pass_the_gate(world: &mut CrimeWorld, scope: Scope) {
+fn pass_the_gate(world: &mut VardeWorld, scope: Scope) {
     measured_baseline(world);
     session_edits(world);
-    sentinel_appears(world, format!("{}/{}", crime::CRIME_DIR, risk::SENTINEL));
+    sentinel_appears(world, format!("{}/{}", varde::VARDE_DIR, risk::SENTINEL));
     tests_finish_passing(world);
     let mut functions = world
         .state
@@ -9586,7 +9586,7 @@ fn pass_the_gate(world: &mut CrimeWorld, scope: Scope) {
 ///
 /// Invented by the world and never asserted on: every figure a scenario reads is
 /// one a step named. What it stands in for is the answer the edge would deliver.
-fn measured_baseline(world: &mut CrimeWorld) {
+fn measured_baseline(world: &mut VardeWorld) {
     let waiting = world
         .state
         .refactor
@@ -9621,11 +9621,11 @@ fn measured_baseline(world: &mut CrimeWorld) {
 
 /// The session's own pass, as a session obeying the prompt it was handed would
 /// make it: every file under review the prompt named is edited, and nothing
-/// else. CRIME cannot stop a session touching a file it was not given, so the
+/// else. Varde cannot stop a session touching a file it was not given, so the
 /// prompt is the whole of what keeps a review-scoped loop inside its Scope —
 /// which is what makes "the loop changed these files and no others" an
 /// assertion about the prompt rather than about this glue.
-fn session_edits(world: &mut CrimeWorld) {
+fn session_edits(world: &mut VardeWorld) {
     let prompt = ai_sends(world).last().cloned().unwrap_or_default();
     let named: Vec<String> = review::list(&world.state)
         .into_iter()
@@ -9643,14 +9643,14 @@ fn session_edits(world: &mut CrimeWorld) {
 #[given(expr = "{int} Iteration has passed the Gate over the scope {string}")]
 #[given(expr = "Iteration {int} passed the Gate over the scope {string}")]
 #[when(expr = "Iteration {int} passes the Gate over the scope {string}")]
-fn an_iteration_has_passed_the_gate(world: &mut CrimeWorld, number: u32, name: String) {
+fn an_iteration_has_passed_the_gate(world: &mut VardeWorld, number: u32, name: String) {
     loop_is_on_iteration(world, number, name.clone());
     pass_the_gate(world, scope(&name));
     iteration_passed_the_gate(world, number);
 }
 
 #[then(expr = "the Refactor loop is on Iteration {int}")]
-fn loop_is_now_on_iteration(world: &mut CrimeWorld, number: u32) {
+fn loop_is_now_on_iteration(world: &mut VardeWorld, number: u32) {
     assert_eq!(
         world
             .state
@@ -9665,7 +9665,7 @@ fn loop_is_now_on_iteration(world: &mut CrimeWorld, number: u32) {
 /// The figures arrived and nothing has been decided on them yet: no verdict, no
 /// revert, and no Iteration counted as passed.
 #[then("the Gate has not been evaluated")]
-fn the_gate_has_not_been_evaluated(world: &mut CrimeWorld) {
+fn the_gate_has_not_been_evaluated(world: &mut VardeWorld) {
     assert_eq!(world.state.refactor.stopped, None);
     assert!(world.restores.is_empty(), "restores: {:?}", world.restores);
     // Still on the Iteration whose figures are being measured: an accepted one
@@ -9685,7 +9685,7 @@ fn the_gate_has_not_been_evaluated(world: &mut CrimeWorld) {
 /// is a statement about the whole tree, so a file the Iteration created would
 /// fail this even though the restore walks the snapshot.
 #[then(expr = "the working tree holds no change from Iteration {int}")]
-fn tree_holds_no_change(world: &mut CrimeWorld, iteration: u32) {
+fn tree_holds_no_change(world: &mut VardeWorld, iteration: u32) {
     let snapshot = world
         .snapshots
         .get(&iteration)
@@ -9697,7 +9697,7 @@ fn tree_holds_no_change(world: &mut CrimeWorld, iteration: u32) {
 /// The row action is one prompt and no Iteration: nothing to snapshot, because
 /// there is no Gate behind it and so nothing that could revert.
 #[then(expr = "no snapshot was taken")]
-fn no_snapshot_was_taken(world: &mut CrimeWorld) {
+fn no_snapshot_was_taken(world: &mut VardeWorld) {
     assert!(
         world.snapshots.is_empty(),
         "snapshots: {:?}",
@@ -9712,14 +9712,14 @@ fn no_snapshot_was_taken(world: &mut CrimeWorld) {
 /// the edge does, so nothing about the delta's base is arranged behind the
 /// diff's back.
 #[given(expr = "the review diff is measured from {string}")]
-fn review_diff_measured_from(world: &mut CrimeWorld, revision: String) {
+fn review_diff_measured_from(world: &mut VardeWorld, revision: String) {
     world.head = Some(revision.clone());
     world.startup.head = Some(revision);
     world.tell_core();
 }
 
 #[given(expr = "{string} is modified")]
-fn file_is_modified(world: &mut CrimeWorld, path: String) {
+fn file_is_modified(world: &mut VardeWorld, path: String) {
     let mut files = world.state.repo.clone().unwrap_or_default();
     files.push(GitFile {
         path,
@@ -9728,7 +9728,7 @@ fn file_is_modified(world: &mut CrimeWorld, path: String) {
     world.state.repo = Some(files);
 }
 
-fn last_analysis(world: &CrimeWorld) -> &Analysis {
+fn last_analysis(world: &VardeWorld) -> &Analysis {
     world.analyses.last().expect("an analysis was asked for")
 }
 
@@ -9736,7 +9736,7 @@ fn last_analysis(world: &CrimeWorld) -> &Analysis {
 /// and the workspace's is a figure nobody can act on, so the request is held to
 /// naming the Scope and nothing beside it.
 #[then(expr = "the analysis covers exactly:")]
-fn analysis_covers_exactly(world: &mut CrimeWorld, step: &Step) {
+fn analysis_covers_exactly(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("a table")
@@ -9752,7 +9752,7 @@ fn analysis_covers_exactly(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "the review risk base revision is {string}")]
-fn review_risk_base_is(world: &mut CrimeWorld, expected: String) {
+fn review_risk_base_is(world: &mut VardeWorld, expected: String) {
     assert_eq!(
         last_analysis(world).base.as_deref(),
         Some(expected.as_str())
@@ -9764,7 +9764,7 @@ fn review_risk_base_is(world: &mut CrimeWorld, expected: String) {
 /// against `review::base` — what Review view measures its diff from — so the two
 /// cannot come to be measured from two different places.
 #[then(expr = "the review risk base revision is the revision the review diff is measured from")]
-fn review_risk_base_is_the_diffs(world: &mut CrimeWorld) {
+fn review_risk_base_is_the_diffs(world: &mut VardeWorld) {
     assert_eq!(
         last_analysis(world).base.as_deref(),
         review::base(&world.state),
@@ -9775,12 +9775,12 @@ fn review_risk_base_is_the_diffs(world: &mut CrimeWorld) {
 /// The answer for a review-scoped analysis: both sides measured in one job, the
 /// `was …` columns being the same Functions at the base revision.
 #[when(expr = "the review figures arrive:")]
-fn review_figures_arrive(world: &mut CrimeWorld, step: &Step) {
+fn review_figures_arrive(world: &mut VardeWorld, step: &Step) {
     let before = figures_from(step, 0, "was ");
     deliver(world, Scope::Review, figures(step, 0), Some(before));
 }
 
-fn review_delta(world: &CrimeWorld) -> (i64, bool) {
+fn review_delta(world: &VardeWorld) -> (i64, bool) {
     match risk::shown(&world.state) {
         Some(risk::Shown::Delta { delta, worse }) => (delta, worse),
         other => panic!("the border is not showing a delta: {other:?}"),
@@ -9788,12 +9788,12 @@ fn review_delta(world: &CrimeWorld) -> (i64, bool) {
 }
 
 #[then(expr = "the tree border shows the review delta")]
-fn border_shows_review_delta(world: &mut CrimeWorld) {
+fn border_shows_review_delta(world: &mut VardeWorld) {
     review_delta(world);
 }
 
 #[then(expr = "the tree border shows the workspace risk count")]
-fn border_shows_workspace_count(world: &mut CrimeWorld) {
+fn border_shows_workspace_count(world: &mut VardeWorld) {
     match risk::shown(&world.state) {
         Some(risk::Shown::Count(_)) => {}
         other => panic!("the border is not showing the workspace count: {other:?}"),
@@ -9801,12 +9801,12 @@ fn border_shows_workspace_count(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the review risk delta is {int}")]
-fn review_risk_delta_is(world: &mut CrimeWorld, expected: i64) {
+fn review_risk_delta_is(world: &mut VardeWorld, expected: i64) {
     assert_eq!(review_delta(world).0, expected);
 }
 
 #[then(expr = "the review risk is marked worse")]
-fn review_risk_marked_worse(world: &mut CrimeWorld) {
+fn review_risk_marked_worse(world: &mut VardeWorld) {
     assert!(review_delta(world).1, "the change is not marked worse");
     let drawn = risk::border(&world.state).expect("a border");
     assert!(
@@ -9816,7 +9816,7 @@ fn review_risk_marked_worse(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the review risk is not marked worse")]
-fn review_risk_not_marked_worse(world: &mut CrimeWorld) {
+fn review_risk_not_marked_worse(world: &mut VardeWorld) {
     assert!(!review_delta(world).1, "the change is marked worse");
     let drawn = risk::border(&world.state).expect("a border");
     assert!(
@@ -9829,7 +9829,7 @@ fn review_risk_not_marked_worse(world: &mut CrimeWorld) {
 /// is not an improvement: a fabricated zero for it would read as a clean bill of
 /// health nobody was given.
 #[then(expr = "{string} contributes no figure")]
-fn contributes_no_figure(world: &mut CrimeWorld, path: String) {
+fn contributes_no_figure(world: &mut VardeWorld, path: String) {
     let named: Vec<&String> = world
         .state
         .risk
@@ -9847,7 +9847,7 @@ fn contributes_no_figure(world: &mut CrimeWorld, path: String) {
 // the buffer. No scenario runs one: the world plays the edge, and everything a
 // server says arrives as canned JSON.
 
-/// CRIME started on the template alone, whose rows say which files each
+/// Varde started on the template alone, whose rows say which files each
 /// language claims: a server or formatter a scenario configures "for rust"
 /// serves what the shipped rust row serves, and a language nothing ships
 /// claims nothing.
@@ -9858,7 +9858,7 @@ fn shipped() -> State {
 }
 
 #[given(expr = "a language server {string} is configured for {string}")]
-fn server_configured(world: &mut CrimeWorld, command: String, language: String) {
+fn server_configured(world: &mut VardeWorld, command: String, language: String) {
     world.state.servers.insert(
         language.clone(),
         Server {
@@ -9882,7 +9882,7 @@ fn server_configured(world: &mut CrimeWorld, command: String, language: String) 
 /// arbitrary — what the Scenarios below turn on is that the conversation
 /// reaches ready, not what is on `PATH`.
 #[given(expr = "a language server for {string} is ready")]
-fn server_is_ready(world: &mut CrimeWorld, language: String) {
+fn server_is_ready(world: &mut VardeWorld, language: String) {
     world.lsp_answers.insert(language.clone());
     world
         .state
@@ -9911,7 +9911,7 @@ fn server_is_ready(world: &mut CrimeWorld, language: String) {
 /// exist without one, and needs "no language server was started" to stay a
 /// statement about the whole run.
 #[given(expr = "a language server for {string} is already running")]
-fn server_is_already_running(world: &mut CrimeWorld, language: String) {
+fn server_is_already_running(world: &mut VardeWorld, language: String) {
     let command = format!("{language}-language-server");
     world.lsp_answers.insert(language.clone());
     world
@@ -9940,7 +9940,7 @@ fn server_is_already_running(world: &mut CrimeWorld, language: String) {
 /// is a row in a table, which is what lets a Scenario name two of them at all
 /// (R31.1, ADR 0011).
 #[given(expr = "{string} files are also served by the language server for {string}")]
-fn files_also_served_by(world: &mut CrimeWorld, language: String, also: String) {
+fn files_also_served_by(world: &mut VardeWorld, language: String, also: String) {
     world
         .state
         .servers
@@ -9950,14 +9950,14 @@ fn files_also_served_by(world: &mut CrimeWorld, language: String, also: String) 
         .push(also);
 }
 
-/// A server whose configuration names a request it puts to its client and CRIME
+/// A server whose configuration names a request it puts to its client and Varde
 /// will not answer — so it has, by construction, questions it cannot answer on
 /// its own. What the Scenario turns on is the *notice*: reporting that server as
-/// knowing nothing is CRIME blaming somebody else for its own refusal.
+/// knowing nothing is Varde blaming somebody else for its own refusal.
 #[given(
-    expr = "the language server for {string} relays {string} to a companion CRIME does not run"
+    expr = "the language server for {string} relays {string} to a companion Varde does not run"
 )]
-fn server_relays_to_a_companion(world: &mut CrimeWorld, language: String, request: String) {
+fn server_relays_to_a_companion(world: &mut VardeWorld, language: String, request: String) {
     world
         .state
         .servers
@@ -9977,32 +9977,32 @@ fn server_relays_to_a_companion(world: &mut CrimeWorld, language: String, reques
 /// something starts one, and said out loud because it is the precondition the
 /// Scenario turns on rather than an accident of the Background.
 #[given(expr = "there is no language server running for {string}")]
-fn no_server_running_for(world: &mut CrimeWorld, language: String) {
+fn no_server_running_for(world: &mut VardeWorld, language: String) {
     world.lsp_running.remove(&language);
     world.tell_core();
 }
 
 #[given(expr = "there is no language server configured for {string}")]
-fn no_server_for(world: &mut CrimeWorld, language: String) {
+fn no_server_for(world: &mut VardeWorld, language: String) {
     world.state.servers.remove(&language);
 }
 
 #[given(expr = "the language server for {string} fails to start")]
 #[when(expr = "the language server for {string} fails to start")]
-fn server_fails_to_start(world: &mut CrimeWorld, language: String) {
+fn server_fails_to_start(world: &mut VardeWorld, language: String) {
     world.lsp_fails.insert(language.clone());
     world.lsp_is_gone(&language, Gone::FailedToStart);
 }
 
 #[given(expr = "the language server for {string} exits")]
 #[when(expr = "the language server for {string} exits")]
-fn server_exits(world: &mut CrimeWorld, language: String) {
+fn server_exits(world: &mut VardeWorld, language: String) {
     world.lsp_is_gone(&language, Gone::Exited);
 }
 
 #[given(expr = "the language server for {string} replies to {string} with:")]
 #[when(expr = "the language server for {string} replies to {string} with:")]
-fn server_replies(world: &mut CrimeWorld, language: String, method: String, step: &Step) {
+fn server_replies(world: &mut VardeWorld, language: String, method: String, step: &Step) {
     let result: Value = serde_json::from_str(step.docstring().expect("docstring")).expect("json");
     let id = sent(world, &language)
         .iter()
@@ -10015,12 +10015,12 @@ fn server_replies(world: &mut CrimeWorld, language: String, method: String, step
     );
 }
 
-/// A question the server puts to CRIME on a method of its own — a notification,
+/// A question the server puts to Varde on a method of its own — a notification,
 /// so the protocol has no reply for it and the server is left waiting unless
-/// CRIME says something back on the method its configuration names.
+/// Varde says something back on the method its configuration names.
 #[given(expr = "the language server for {string} asks {string} with:")]
 #[when(expr = "the language server for {string} asks {string} with:")]
-fn server_asks(world: &mut CrimeWorld, language: String, method: String, step: &Step) {
+fn server_asks(world: &mut VardeWorld, language: String, method: String, step: &Step) {
     let params: Value = serde_json::from_str(step.docstring().expect("docstring")).expect("json");
     world.lsp_replies(
         &language,
@@ -10029,7 +10029,7 @@ fn server_asks(world: &mut CrimeWorld, language: String, method: String, step: &
 }
 
 #[then(expr = "the language server for {string} was sent {string} with:")]
-fn server_was_sent_with(world: &mut CrimeWorld, language: String, method: String, step: &Step) {
+fn server_was_sent_with(world: &mut VardeWorld, language: String, method: String, step: &Step) {
     let expected: Value = serde_json::from_str(step.docstring().expect("docstring")).expect("json");
     let messages = sent(world, &language);
     let said = messages
@@ -10045,7 +10045,7 @@ fn server_was_sent_with(world: &mut CrimeWorld, language: String, method: String
 }
 
 /// Every message that language's server was sent, in order.
-fn sent(world: &CrimeWorld, language: &str) -> Vec<Value> {
+fn sent(world: &VardeWorld, language: &str) -> Vec<Value> {
     world
         .lsp_sent
         .iter()
@@ -10058,7 +10058,7 @@ fn sent(world: &CrimeWorld, language: &str) -> Vec<Value> {
 /// what version and what the file held. One shape for `didOpen` and `didChange`
 /// because every assertion below is about the pair, not about which notification
 /// carried it.
-fn documents(world: &CrimeWorld, language: &str) -> Vec<(String, PathBuf, i64, String)> {
+fn documents(world: &VardeWorld, language: &str) -> Vec<(String, PathBuf, i64, String)> {
     sent(world, language)
         .iter()
         .filter_map(|message| {
@@ -10083,7 +10083,7 @@ fn documents(world: &CrimeWorld, language: &str) -> Vec<(String, PathBuf, i64, S
 }
 
 /// The documents a server was told about for one file, in the order it was told.
-fn told_about(world: &CrimeWorld, language: &str, path: &str) -> Vec<(String, i64, String)> {
+fn told_about(world: &VardeWorld, language: &str, path: &str) -> Vec<(String, i64, String)> {
     let absolute = abs(world, path);
     documents(world, language)
         .into_iter()
@@ -10093,7 +10093,7 @@ fn told_about(world: &CrimeWorld, language: &str, path: &str) -> Vec<(String, i6
 }
 
 #[then(expr = "a language server was started with {string}")]
-fn server_was_started_with(world: &mut CrimeWorld, command: String) {
+fn server_was_started_with(world: &mut VardeWorld, command: String) {
     assert!(
         world
             .lsp_started
@@ -10105,7 +10105,7 @@ fn server_was_started_with(world: &mut CrimeWorld, command: String) {
 }
 
 #[then(expr = "the language server for {string} was started with arguments:")]
-fn server_started_with_arguments(world: &mut CrimeWorld, language: String, step: &Step) {
+fn server_started_with_arguments(world: &mut VardeWorld, language: String, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -10123,7 +10123,7 @@ fn server_started_with_arguments(world: &mut CrimeWorld, language: String, step:
 }
 
 #[then(expr = "{int} language server was started for {string}")]
-fn servers_started_for(world: &mut CrimeWorld, count: usize, language: String) {
+fn servers_started_for(world: &mut VardeWorld, count: usize, language: String) {
     let started: Vec<&(String, String)> = world
         .lsp_started
         .iter()
@@ -10138,7 +10138,7 @@ fn servers_started_for(world: &mut CrimeWorld, count: usize, language: String) {
 #[then(expr = "the language server for {string} was sent a {string} request")]
 #[then(expr = "the language server for {string} was sent an {string} request")]
 #[then(expr = "the language server for {string} was sent an {string} notification")]
-fn server_was_sent(world: &mut CrimeWorld, language: String, method: String) {
+fn server_was_sent(world: &mut VardeWorld, language: String, method: String) {
     let messages = sent(world, &language);
     let at = messages
         .iter()
@@ -10164,8 +10164,8 @@ fn server_was_sent(world: &mut CrimeWorld, language: String, method: String) {
 }
 
 /// What the handshake carried in `initializationOptions`, which is the whole of
-/// what a Scenario can say about a key CRIME never reads: it went out verbatim.
-fn initialization_options(world: &CrimeWorld, language: &str) -> Value {
+/// what a Scenario can say about a key Varde never reads: it went out verbatim.
+fn initialization_options(world: &VardeWorld, language: &str) -> Value {
     let messages = sent(world, language);
     let handshake = messages
         .iter()
@@ -10180,17 +10180,17 @@ fn initialization_options(world: &CrimeWorld, language: &str) -> Value {
 }
 
 #[then(expr = "the initialize request for {string} carried initialization options:")]
-fn initialize_carried_options(world: &mut CrimeWorld, language: String, step: &Step) {
+fn initialize_carried_options(world: &mut VardeWorld, language: String, step: &Step) {
     let expected: Value =
         serde_json::from_str(step.docstring().expect("docstring")).expect("valid JSON");
     assert_eq!(initialization_options(world, &language), expected);
 }
 
-/// The one capability CRIME claims. A server may hold its diagnostics back
+/// The one capability Varde claims. A server may hold its diagnostics back
 /// from a client that never said it could receive them, which is silence a
 /// reader cannot tell from a clean file.
-#[then(expr = "the initialize request for {string} said CRIME can be told diagnostics")]
-fn initialize_declared_diagnostics(world: &mut CrimeWorld, language: String) {
+#[then(expr = "the initialize request for {string} said Varde can be told diagnostics")]
+fn initialize_declared_diagnostics(world: &mut VardeWorld, language: String) {
     let messages = sent(world, &language);
     let handshake = messages
         .iter()
@@ -10205,8 +10205,8 @@ fn initialize_declared_diagnostics(world: &mut CrimeWorld, language: String) {
 
 /// The other capability, and the one that is a promise: a server may only send
 /// `${1:…}` to a client that said it could resolve it.
-#[then(expr = "the initialize request for {string} said CRIME can receive snippets")]
-fn initialize_declared_snippets(world: &mut CrimeWorld, language: String) {
+#[then(expr = "the initialize request for {string} said Varde can receive snippets")]
+fn initialize_declared_snippets(world: &mut VardeWorld, language: String) {
     let messages = sent(world, &language);
     let handshake = messages
         .iter()
@@ -10223,8 +10223,8 @@ fn initialize_declared_snippets(world: &mut CrimeWorld, language: String) {
 
 /// The third, and the one this box could not honour until it rendered what it
 /// was sent: a server may answer in either format, and most pick markdown.
-#[then(expr = "the initialize request for {string} said CRIME can read markdown")]
-fn initialize_declared_markdown(world: &mut CrimeWorld, language: String) {
+#[then(expr = "the initialize request for {string} said Varde can read markdown")]
+fn initialize_declared_markdown(world: &mut VardeWorld, language: String) {
     let messages = sent(world, &language);
     let handshake = messages
         .iter()
@@ -10244,13 +10244,13 @@ fn initialize_declared_markdown(world: &mut CrimeWorld, language: String) {
 /// what an absent field reads as here, since either spelling is the same
 /// absence to the server.
 #[then(expr = "the initialize request for {string} carried no initialization options")]
-fn initialize_carried_no_options(world: &mut CrimeWorld, language: String) {
+fn initialize_carried_no_options(world: &mut VardeWorld, language: String) {
     assert_eq!(initialization_options(world, &language), Value::Null);
 }
 
 #[then(expr = "the language server for {string} was sent no {string} request")]
 #[then(expr = "the language server for {string} was sent no {string} notification")]
-fn server_was_sent_nothing(world: &mut CrimeWorld, language: String, method: String) {
+fn server_was_sent_nothing(world: &mut VardeWorld, language: String, method: String) {
     let messages = sent(world, &language);
     assert!(
         !messages.iter().any(|message| message["method"] == method),
@@ -10267,7 +10267,7 @@ fn methods(messages: &[Value]) -> Vec<String> {
 }
 
 #[then(expr = "the language server for {string} is ready")]
-fn server_is_ready_now(world: &mut CrimeWorld, language: String) {
+fn server_is_ready_now(world: &mut VardeWorld, language: String) {
     assert!(
         lsp::ready(&world.state, &language),
         "the handshake has not completed: {:?}",
@@ -10276,7 +10276,7 @@ fn server_is_ready_now(world: &mut CrimeWorld, language: String) {
 }
 
 #[then(expr = "the language server for {string} is not ready")]
-fn server_is_not_ready(world: &mut CrimeWorld, language: String) {
+fn server_is_not_ready(world: &mut VardeWorld, language: String) {
     assert!(
         !lsp::ready(&world.state, &language),
         "the handshake completed anyway"
@@ -10286,7 +10286,7 @@ fn server_is_not_ready(world: &mut CrimeWorld, language: String) {
 /// A reply to a request the Scenario names by id rather than by method — the
 /// one shape that can express a reply nobody asked for.
 #[when(expr = "the language server for {string} replies to request {int} with:")]
-fn server_replies_to_id(world: &mut CrimeWorld, language: String, id: i64, step: &Step) {
+fn server_replies_to_id(world: &mut VardeWorld, language: String, id: i64, step: &Step) {
     let result: Value = serde_json::from_str(step.docstring().expect("docstring")).expect("json");
     world.lsp_replies(
         &language,
@@ -10294,12 +10294,12 @@ fn server_replies_to_id(world: &mut CrimeWorld, language: String, id: i64, step:
     );
 }
 
-/// The reply to the hover CRIME last asked for, under that request's own id —
+/// The reply to the hover Varde last asked for, under that request's own id —
 /// which is what makes the correlation the thing under test rather than
 /// something the step arranges around.
 #[given(expr = "the language server for {string} answers the hover with:")]
 #[when(expr = "the language server for {string} answers the hover with:")]
-fn server_answers_the_hover(world: &mut CrimeWorld, language: String, step: &Step) {
+fn server_answers_the_hover(world: &mut VardeWorld, language: String, step: &Step) {
     let result: Value = serde_json::from_str(step.docstring().expect("docstring")).expect("json");
     world.lsp_replies(
         &language,
@@ -10307,13 +10307,13 @@ fn server_answers_the_hover(world: &mut CrimeWorld, language: String, step: &Ste
     );
 }
 
-/// The reply to the definition CRIME last asked for. The table is in the
+/// The reply to the definition Varde last asked for. The table is in the
 /// editor's own 1-based coordinates, so the step converts to the protocol's
 /// zero-based line and UTF-16 column rather than pinning the protocol's numbers
 /// in the Gherkin — the same direction the hover request assertion converts in.
 #[given(expr = "the language server for {string} answers the definition with:")]
 #[when(expr = "the language server for {string} answers the definition with:")]
-fn server_answers_the_definition(world: &mut CrimeWorld, language: String, step: &Step) {
+fn server_answers_the_definition(world: &mut VardeWorld, language: String, step: &Step) {
     let locations: Vec<Value> = step
         .table()
         .expect("table")
@@ -10341,11 +10341,11 @@ fn server_answers_the_definition(world: &mut CrimeWorld, language: String, step:
 /// has for a symbol with no definition.
 #[given(expr = "the language server for {string} answers the definition with nothing")]
 #[when(expr = "the language server for {string} answers the definition with nothing")]
-fn server_answers_the_definition_with_nothing(world: &mut CrimeWorld, language: String) {
+fn server_answers_the_definition_with_nothing(world: &mut VardeWorld, language: String) {
     answer_definition(world, &language, Value::Null);
 }
 
-fn answer_definition(world: &mut CrimeWorld, language: &str, result: Value) {
+fn answer_definition(world: &mut VardeWorld, language: &str, result: Value) {
     world.lsp_replies(
         language,
         json!({"jsonrpc": "2.0", "id": asked(world, language, "textDocument/definition"), "result": result}),
@@ -10353,7 +10353,7 @@ fn answer_definition(world: &mut CrimeWorld, language: &str, result: Value) {
 }
 
 /// The id of the last request of that method sent to that language's server.
-fn asked(world: &CrimeWorld, language: &str, method: &str) -> Value {
+fn asked(world: &VardeWorld, language: &str, method: &str) -> Value {
     sent(world, language)
         .iter()
         .rev()
@@ -10369,7 +10369,7 @@ fn asked(world: &CrimeWorld, language: &str, method: &str) -> Value {
     expr = "the language server for {string} was sent a {string} request for {string} line {int} column {int}"
 )]
 fn was_sent_request_for(
-    world: &mut CrimeWorld,
+    world: &mut VardeWorld,
     language: String,
     method: String,
     path: String,
@@ -10394,7 +10394,7 @@ fn was_sent_request_for(
 
 /// The absence a plain click promises: the question was never put at all.
 #[then(expr = "the language server for {string} was never sent a {string} request")]
-fn was_never_sent(world: &mut CrimeWorld, language: String, method: String) {
+fn was_never_sent(world: &mut VardeWorld, language: String, method: String) {
     let messages = sent(world, &language);
     assert!(
         !messages.iter().any(|message| message["method"] == method),
@@ -10404,14 +10404,14 @@ fn was_never_sent(world: &mut CrimeWorld, language: String, method: String) {
 }
 
 #[then(expr = "no language server request is outstanding for {string}")]
-fn nothing_outstanding(world: &mut CrimeWorld, language: String) {
+fn nothing_outstanding(world: &mut VardeWorld, language: String) {
     assert_eq!(lsp::outstanding(&world.state, &language), 0);
 }
 
 /// A hover already on screen, arranged the way one arrives: the binding asks,
 /// and the server answers the request it made.
 #[given(expr = "a hover is shown")]
-fn a_hover_is_shown(world: &mut CrimeWorld) {
+fn a_hover_is_shown(world: &mut VardeWorld) {
     press_in_editor(world, "K".to_string());
     let language = "rust".to_string();
     world.lsp_replies(
@@ -10429,7 +10429,7 @@ fn a_hover_is_shown(world: &mut CrimeWorld) {
 /// about: the rows are wrapped before they are measured, so a signature can
 /// straddle two of them and still be what the reader sees.
 #[then(expr = "the hover shows {string}")]
-fn hover_shows(world: &mut CrimeWorld, text: String) {
+fn hover_shows(world: &mut VardeWorld, text: String) {
     assert!(
         words(&hover_rows(world).join(" ")).contains(&words(&text)),
         "the hover shows: {:?}",
@@ -10440,7 +10440,7 @@ fn hover_shows(world: &mut CrimeWorld, text: String) {
 /// What is drawn, row by row — never the markdown the server sent. A row is a
 /// rendered row, so a marker that survived into one is a marker the reader is
 /// looking at.
-fn hover_rows(world: &CrimeWorld) -> Vec<String> {
+fn hover_rows(world: &VardeWorld) -> Vec<String> {
     world
         .state
         .hover
@@ -10448,12 +10448,12 @@ fn hover_rows(world: &CrimeWorld) -> Vec<String> {
         .expect("a hover")
         .lines
         .iter()
-        .map(crime::preview::Row::text)
+        .map(varde::preview::Row::text)
         .collect()
 }
 
 #[then(expr = "no hover row holds {string}")]
-fn no_hover_row_holds(world: &mut CrimeWorld, text: String) {
+fn no_hover_row_holds(world: &mut VardeWorld, text: String) {
     let rows = hover_rows(world);
     assert!(
         !rows.iter().any(|row| row.contains(&text)),
@@ -10461,7 +10461,7 @@ fn no_hover_row_holds(world: &mut CrimeWorld, text: String) {
     );
 }
 
-fn hover_code_row(world: &CrimeWorld) -> crime::preview::Row {
+fn hover_code_row(world: &VardeWorld) -> varde::preview::Row {
     world
         .state
         .hover
@@ -10469,44 +10469,44 @@ fn hover_code_row(world: &CrimeWorld) -> crime::preview::Row {
         .expect("a hover")
         .lines
         .iter()
-        .find(|row| row.kind == crime::preview::RowKind::Code)
+        .find(|row| row.kind == varde::preview::RowKind::Code)
         .unwrap_or_else(|| panic!("no code row in {:?}", hover_rows(world)))
         .clone()
 }
 
 #[then(expr = "the hover has {int} code row")]
-fn hover_has_code_rows(world: &mut CrimeWorld, count: usize) {
+fn hover_has_code_rows(world: &mut VardeWorld, count: usize) {
     let hover = world.state.hover.as_ref().expect("a hover");
     let code = hover
         .lines
         .iter()
-        .filter(|row| row.kind == crime::preview::RowKind::Code)
+        .filter(|row| row.kind == varde::preview::RowKind::Code)
         .count();
     assert_eq!(code, count, "{:?}", hover.lines);
 }
 
 #[then(expr = "{string} in the hover\'s code row is a keyword")]
-fn hover_code_token_is_a_keyword(world: &mut CrimeWorld, text: String) {
+fn hover_code_token_is_a_keyword(world: &mut VardeWorld, text: String) {
     let row = hover_code_row(world);
     let piece = row
         .pieces
         .iter()
         .find(|piece| piece.text == text)
         .unwrap_or_else(|| panic!("no piece {text:?} in {row:?}"));
-    assert_eq!(piece.token, Some(crime::highlight::Kind::Keyword));
+    assert_eq!(piece.token, Some(varde::highlight::Kind::Keyword));
 }
 
 /// Its rows plus the two its border sits on — the number the core placed the
 /// box by, so a cap the renderer would have to clip is a cap that did not
 /// happen.
 #[then(expr = "the hover is no taller than {int} rows")]
-fn hover_is_no_taller_than(world: &mut CrimeWorld, rows: usize) {
+fn hover_is_no_taller_than(world: &mut VardeWorld, rows: usize) {
     let hover = world.state.hover.as_ref().expect("a hover");
     assert!(hover.rows() <= rows, "the box is {} rows", hover.rows());
 }
 
 #[then(expr = "the last hover row says it was cut short")]
-fn last_hover_row_is_cut_short(world: &mut CrimeWorld) {
+fn last_hover_row_is_cut_short(world: &mut VardeWorld) {
     let rows = hover_rows(world);
     assert_eq!(
         rows.last().map(String::as_str),
@@ -10522,7 +10522,7 @@ fn words(text: &str) -> String {
 }
 
 #[then(expr = "no hover is shown")]
-fn no_hover(world: &mut CrimeWorld) {
+fn no_hover(world: &mut VardeWorld) {
     assert!(
         world.state.hover.is_none(),
         "a hover is shown: {:?}",
@@ -10531,7 +10531,7 @@ fn no_hover(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "no hover row is wider than {int} columns")]
-fn hover_fits(world: &mut CrimeWorld, columns: usize) {
+fn hover_fits(world: &mut VardeWorld, columns: usize) {
     for row in hover_rows(world) {
         assert!(
             UnicodeWidthStr::width(row.as_str()) <= columns,
@@ -10541,7 +10541,7 @@ fn hover_fits(world: &mut CrimeWorld, columns: usize) {
 }
 
 #[then(expr = "the hover does not cover line {int}")]
-fn hover_does_not_cover(world: &mut CrimeWorld, line: usize) {
+fn hover_does_not_cover(world: &mut VardeWorld, line: usize) {
     let hover = world.state.hover.as_ref().expect("a hover");
     assert!(
         !hover.covers(line),
@@ -10552,7 +10552,7 @@ fn hover_does_not_cover(world: &mut CrimeWorld, line: usize) {
 }
 
 #[then(expr = "the language server for {string} was sent {int} {string} request")]
-fn was_sent_how_many(world: &mut CrimeWorld, language: String, count: usize, method: String) {
+fn was_sent_how_many(world: &mut VardeWorld, language: String, count: usize, method: String) {
     let messages = sent(world, &language);
     let asked = messages
         .iter()
@@ -10571,7 +10571,7 @@ fn was_sent_how_many(world: &mut CrimeWorld, language: String, count: usize, met
 /// about this step rather than about the debounce.
 #[when(expr = "the debounce window passes")]
 #[given(expr = "the debounce window passes")]
-fn debounce_passes(world: &mut CrimeWorld) {
+fn debounce_passes(world: &mut VardeWorld) {
     if std::mem::take(&mut world.candidates_armed) {
         world.send(Event::CandidatesDue);
     }
@@ -10579,7 +10579,7 @@ fn debounce_passes(world: &mut CrimeWorld) {
 
 #[given(expr = "the pointer moves to line {int} column {int} in the editor")]
 #[when(expr = "the pointer moves to line {int} column {int} in the editor")]
-fn pointer_moves_to(world: &mut CrimeWorld, line: usize, column: usize) {
+fn pointer_moves_to(world: &mut VardeWorld, line: usize, column: usize) {
     world.point(
         Pane::Editor,
         Some((line, column)),
@@ -10588,7 +10588,7 @@ fn pointer_moves_to(world: &mut CrimeWorld, line: usize, column: usize) {
 }
 
 #[when("the pointer moves out of the editor")]
-fn pointer_leaves_the_editor(world: &mut CrimeWorld) {
+fn pointer_leaves_the_editor(world: &mut VardeWorld) {
     world.point(Pane::Editor, None, terminput::KeyModifiers::NONE);
 }
 
@@ -10598,7 +10598,7 @@ fn pointer_leaves_the_editor(world: &mut CrimeWorld) {
 /// about this step.
 #[given(expr = "the pointer rests on line {int} column {int} in the editor")]
 #[when(expr = "the pointer rests on line {int} column {int} in the editor")]
-fn pointer_rests_on(world: &mut CrimeWorld, line: usize, column: usize) {
+fn pointer_rests_on(world: &mut VardeWorld, line: usize, column: usize) {
     world.point(
         Pane::Editor,
         Some((line, column)),
@@ -10610,15 +10610,15 @@ fn pointer_rests_on(world: &mut CrimeWorld, line: usize, column: usize) {
 }
 
 #[then(expr = "the pointer must rest {int} ms before the server is asked")]
-fn dwell_window_is(world: &mut CrimeWorld, window: u64) {
+fn dwell_window_is(world: &mut VardeWorld, window: u64) {
     assert_eq!(world.dwell_armed, Some(window));
 }
 
-/// The reply to the completion CRIME last asked for, under that request's own
+/// The reply to the completion Varde last asked for, under that request's own
 /// id — the same correlation the hover and definition answers go through.
 #[given(expr = "the language server for {string} answers with candidates:")]
 #[when(expr = "the language server for {string} answers with candidates:")]
-fn answers_with_candidates(world: &mut CrimeWorld, language: String, step: &Step) {
+fn answers_with_candidates(world: &mut VardeWorld, language: String, step: &Step) {
     let rows = &step.table().expect("table").rows;
     let header = &rows[0];
     let items: Vec<Value> = rows
@@ -10658,7 +10658,7 @@ fn answers_with_candidates(world: &mut CrimeWorld, language: String, step: &Step
 /// out, because the Scenario is about the *number* — a box as tall as the reply
 /// is what covered the line being typed.
 #[when(expr = "the language server for {string} answers with {int} candidates")]
-fn answers_with_many_candidates(world: &mut CrimeWorld, language: String, many: usize) {
+fn answers_with_many_candidates(world: &mut VardeWorld, language: String, many: usize) {
     let items: Vec<Value> = (1..=many)
         .map(|at| {
             let label = format!("worklist_{at:03}");
@@ -10671,11 +10671,11 @@ fn answers_with_many_candidates(world: &mut CrimeWorld, language: String, many: 
 /// The server saying it knows of nothing that starts like this: an empty list,
 /// which is what a prefix nothing matches answers with.
 #[when(expr = "the language server for {string} answers with no candidates")]
-fn answers_with_no_candidates(world: &mut CrimeWorld, language: String) {
+fn answers_with_no_candidates(world: &mut VardeWorld, language: String) {
     answer_completion(world, &language, json!([]));
 }
 
-fn answer_completion(world: &mut CrimeWorld, language: &str, result: Value) {
+fn answer_completion(world: &mut VardeWorld, language: &str, result: Value) {
     world.lsp_replies(
         language,
         json!({"jsonrpc": "2.0", "id": asked(world, language, "textDocument/completion"), "result": result}),
@@ -10690,7 +10690,7 @@ fn answer_completion(world: &mut CrimeWorld, language: &str, result: Value) {
     expr = "the language server for {string} was asked to format after {string} at line {int} column {int}"
 )]
 fn was_asked_to_format(
-    world: &mut CrimeWorld,
+    world: &mut VardeWorld,
     language: String,
     typed: String,
     line: u64,
@@ -10708,7 +10708,7 @@ fn was_asked_to_format(
     );
 }
 
-/// The reply to the formatting CRIME last asked for, under that request's own
+/// The reply to the formatting Varde last asked for, under that request's own
 /// id — the same correlation the hover, definition and completion answers go
 /// through.
 ///
@@ -10718,7 +10718,7 @@ fn was_asked_to_format(
 /// not cover, which is that column's number exactly.
 #[given(expr = "the language server for {string} answers the formatting with:")]
 #[when(expr = "the language server for {string} answers the formatting with:")]
-fn answers_the_formatting(world: &mut CrimeWorld, language: String, step: &Step) {
+fn answers_the_formatting(world: &mut VardeWorld, language: String, step: &Step) {
     let edits: Vec<Value> = step
         .table()
         .expect("table")
@@ -10750,7 +10750,7 @@ fn answers_the_formatting(world: &mut CrimeWorld, language: String, step: &Step)
 /// Placed the way a reply places it: below the line the cursor is on, which is
 /// the one being typed.
 #[given(expr = "a candidate list is open in the editor with:")]
-fn a_candidate_list_is_open(world: &mut CrimeWorld, step: &Step) {
+fn a_candidate_list_is_open(world: &mut VardeWorld, step: &Step) {
     let items = step
         .table()
         .expect("table")
@@ -10784,7 +10784,7 @@ fn a_candidate_list_is_open(world: &mut CrimeWorld, step: &Step) {
 /// function for both arranging steps: the placement is the thing under test in
 /// the Scenarios above, and a second copy of it here would be a second author
 /// for it.
-fn arrange_candidates(world: &mut CrimeWorld, items: Vec<Candidate>, place: Place) {
+fn arrange_candidates(world: &mut VardeWorld, items: Vec<Candidate>, place: Place) {
     let path = world
         .state
         .current_buffer
@@ -10809,7 +10809,7 @@ fn arrange_candidates(world: &mut CrimeWorld, items: Vec<Candidate>, place: Plac
 }
 
 #[given(expr = "a candidate list is open in the editor with {int} candidates")]
-fn a_long_candidate_list_is_open(world: &mut CrimeWorld, many: usize) {
+fn a_long_candidate_list_is_open(world: &mut VardeWorld, many: usize) {
     let items = (1..=many)
         .map(|at| Candidate {
             label: format!("worklist_{at:03}"),
@@ -10822,7 +10822,7 @@ fn a_long_candidate_list_is_open(world: &mut CrimeWorld, many: usize) {
     arrange_candidates(world, items, Place { line: 1, column: 1 });
 }
 
-fn candidate_list(world: &CrimeWorld) -> &Candidates {
+fn candidate_list(world: &VardeWorld) -> &Candidates {
     match &world.state.modal {
         Modal::Candidates(list) => list,
         modal => panic!("no candidate list is open: {modal:?}"),
@@ -10830,12 +10830,12 @@ fn candidate_list(world: &CrimeWorld) -> &Candidates {
 }
 
 #[then(expr = "the candidate list is open")]
-fn candidate_list_is_open(world: &mut CrimeWorld) {
+fn candidate_list_is_open(world: &mut VardeWorld) {
     assert!(!candidate_list(world).items.is_empty());
 }
 
 #[then(expr = "the candidate list is not open")]
-fn candidate_list_is_not_open(world: &mut CrimeWorld) {
+fn candidate_list_is_not_open(world: &mut VardeWorld) {
     assert!(
         !matches!(world.state.modal, Modal::Candidates(_)),
         "a candidate list is open: {:?}",
@@ -10847,7 +10847,7 @@ fn candidate_list_is_not_open(world: &mut CrimeWorld) {
 /// means: the stops are the ones that have not been visited, so none pending is
 /// none left.
 #[then(expr = "no tab stops are pending")]
-fn no_tab_stops(world: &mut CrimeWorld) {
+fn no_tab_stops(world: &mut VardeWorld) {
     assert!(
         !matches!(world.state.modal, Modal::Stops { .. }),
         "tab stops are pending: {:?}",
@@ -10856,7 +10856,7 @@ fn no_tab_stops(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the candidates are:")]
-fn candidates_are(world: &mut CrimeWorld, step: &Step) {
+fn candidates_are(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -10876,14 +10876,14 @@ fn candidates_are(world: &mut CrimeWorld, step: &Step) {
 /// reply is a box the renderer clamps to the pane and draws over the line
 /// being typed.
 #[then(expr = "the candidate list is {int} rows tall")]
-fn candidate_list_rows(world: &mut CrimeWorld, rows: usize) {
+fn candidate_list_rows(world: &mut VardeWorld, rows: usize) {
     assert_eq!(candidate_list(world).rows(), rows);
 }
 
 /// Which candidate the window starts at — the selection scrolling inside the
 /// box rather than the box growing to hold it.
 #[then(expr = "the first candidate shown is {string}")]
-fn first_candidate_shown(world: &mut CrimeWorld, label: String) {
+fn first_candidate_shown(world: &mut VardeWorld, label: String) {
     let list = candidate_list(world);
     assert_eq!(
         list.shown()[list.first].label,
@@ -10894,17 +10894,17 @@ fn first_candidate_shown(world: &mut CrimeWorld, label: String) {
 }
 
 #[then(expr = "the candidate list starts at column {int}")]
-fn candidate_list_column(world: &mut CrimeWorld, column: usize) {
+fn candidate_list_column(world: &mut VardeWorld, column: usize) {
     assert_eq!(candidate_list(world).column, column);
 }
 
 #[then(expr = "the selected candidate is {string}")]
-fn selected_candidate_is(world: &mut CrimeWorld, label: String) {
+fn selected_candidate_is(world: &mut VardeWorld, label: String) {
     assert_eq!(candidate_list(world).chosen().label, label);
 }
 
 #[then(expr = "the candidate list does not cover line {int}")]
-fn candidates_do_not_cover(world: &mut CrimeWorld, line: usize) {
+fn candidates_do_not_cover(world: &mut VardeWorld, line: usize) {
     let list = candidate_list(world);
     assert!(
         !list.covers(line),
@@ -10915,7 +10915,7 @@ fn candidates_do_not_cover(world: &mut CrimeWorld, line: usize) {
 }
 
 #[then(expr = "the language server for {string} was told {string} is open")]
-fn told_open(world: &mut CrimeWorld, language: String, path: String) {
+fn told_open(world: &mut VardeWorld, language: String, path: String) {
     let told = told_about(world, &language, &path);
     assert!(
         told.iter()
@@ -10925,7 +10925,7 @@ fn told_open(world: &mut CrimeWorld, language: String, path: String) {
 }
 
 #[then(expr = "the language server for {string} was told {string} is a {string} document")]
-fn told_language_id(world: &mut CrimeWorld, language: String, path: String, id: String) {
+fn told_language_id(world: &mut VardeWorld, language: String, path: String, id: String) {
     let uri = format!("file://{}", abs(world, &path).display());
     let ids: Vec<Value> = sent(world, &language)
         .iter()
@@ -10938,7 +10938,7 @@ fn told_language_id(world: &mut CrimeWorld, language: String, path: String, id: 
 }
 
 #[then(expr = "the language server for {string} was told {string} is open with:")]
-fn told_open_with(world: &mut CrimeWorld, language: String, path: String, step: &Step) {
+fn told_open_with(world: &mut VardeWorld, language: String, path: String, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
     let opened: Vec<String> = told_about(world, &language, &path)
         .into_iter()
@@ -10949,7 +10949,7 @@ fn told_open_with(world: &mut CrimeWorld, language: String, path: String, step: 
 }
 
 #[then(expr = "the document version sent for {string} is {int}")]
-fn version_sent(world: &mut CrimeWorld, path: String, expected: i64) {
+fn version_sent(world: &mut VardeWorld, path: String, expected: i64) {
     let told: Vec<(String, i64, String)> = world
         .state
         .servers
@@ -10966,7 +10966,7 @@ fn version_sent(world: &mut CrimeWorld, path: String, expected: i64) {
 }
 
 #[then(expr = "the language server for {string} was told {string} changed")]
-fn told_changed(world: &mut CrimeWorld, language: String, path: String) {
+fn told_changed(world: &mut VardeWorld, language: String, path: String) {
     let told = told_about(world, &language, &path);
     assert!(
         told.iter()
@@ -10976,7 +10976,7 @@ fn told_changed(world: &mut CrimeWorld, language: String, path: String) {
 }
 
 #[then(expr = "the language server for {string} was told {string} changed {int} times")]
-fn told_changed_times(world: &mut CrimeWorld, language: String, path: String, count: usize) {
+fn told_changed_times(world: &mut VardeWorld, language: String, path: String, count: usize) {
     let changes: Vec<(String, i64, String)> = told_about(world, &language, &path)
         .into_iter()
         .filter(|(method, _, _)| method == "textDocument/didChange")
@@ -10985,7 +10985,7 @@ fn told_changed_times(world: &mut CrimeWorld, language: String, path: String, co
 }
 
 #[then(expr = "the language server for {string} was last told {string} holds:")]
-fn last_told_holds(world: &mut CrimeWorld, language: String, path: String, step: &Step) {
+fn last_told_holds(world: &mut VardeWorld, language: String, path: String, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
     let told = told_about(world, &language, &path);
     let (_, _, text) = told
@@ -10995,7 +10995,7 @@ fn last_told_holds(world: &mut CrimeWorld, language: String, path: String, step:
 }
 
 #[then(expr = "the editor says {string}")]
-fn editor_says(world: &mut CrimeWorld, notice: String) {
+fn editor_says(world: &mut VardeWorld, notice: String) {
     assert!(
         world.notices.contains(&notice),
         "the editor says: {:?}",
@@ -11008,7 +11008,7 @@ fn editor_says(world: &mut CrimeWorld, notice: String) {
 /// empty reply, and a Scenario that only checks the right thing happened would
 /// pass with the wrong sentence on screen beside it.
 #[then(expr = "the editor never said {string}")]
-fn editor_never_said(world: &mut CrimeWorld, notice: String) {
+fn editor_never_said(world: &mut VardeWorld, notice: String) {
     assert!(
         !world.notices.contains(&notice),
         "the editor says: {:?}",
@@ -11017,7 +11017,7 @@ fn editor_never_said(world: &mut CrimeWorld, notice: String) {
 }
 
 #[then(expr = "the message names {string}")]
-fn message_names(world: &mut CrimeWorld, name: String) {
+fn message_names(world: &mut VardeWorld, name: String) {
     assert!(
         world.named.contains(&name),
         "the messages named: {:?}",
@@ -11026,7 +11026,7 @@ fn message_names(world: &mut CrimeWorld, name: String) {
 }
 
 #[then(expr = "{string} was reported {int} time")]
-fn reported_times(world: &mut CrimeWorld, notice: String, count: usize) {
+fn reported_times(world: &mut VardeWorld, notice: String, count: usize) {
     let reported = world
         .reported
         .iter()
@@ -11040,7 +11040,7 @@ fn reported_times(world: &mut CrimeWorld, notice: String, count: usize) {
 /// clamps to line 1 and the scenario passes without the jump ever having
 /// happened. Lines wide enough to hold a column, for the same reason.
 #[given(expr = "{string} on disk is {int} lines long")]
-fn is_lines_long(world: &mut CrimeWorld, path: String, lines: usize) {
+fn is_lines_long(world: &mut VardeWorld, path: String, lines: usize) {
     let contents = (1..=lines)
         .map(|line| format!("    // line {line} of a stand-in file"))
         .collect::<Vec<String>>()
@@ -11051,7 +11051,7 @@ fn is_lines_long(world: &mut CrimeWorld, path: String, lines: usize) {
 }
 
 #[given(expr = "{string} on disk holds:")]
-fn on_disk_holds(world: &mut CrimeWorld, path: String, step: &Step) {
+fn on_disk_holds(world: &mut VardeWorld, path: String, step: &Step) {
     let contents = step
         .docstring()
         .expect("docstring")
@@ -11065,7 +11065,7 @@ fn on_disk_holds(world: &mut CrimeWorld, path: String, step: &Step) {
 /// The absence that says the server was told the Buffer rather than the file:
 /// nothing was written, so what a server heard about cannot have come from disk.
 #[then(expr = "{string} on disk still holds:")]
-fn on_disk_still_holds(world: &mut CrimeWorld, path: String, step: &Step) {
+fn on_disk_still_holds(world: &mut VardeWorld, path: String, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
     assert_eq!(
         world.files.get(&abs(world, &path)).map(String::as_str),
@@ -11078,7 +11078,7 @@ fn on_disk_still_holds(world: &mut CrimeWorld, path: String, step: &Step) {
 /// than assigned, because `revision` is bumped by content changes and nothing
 /// else — which is the whole reason it can be a version at all.
 #[given(expr = "{string} is open in the editor at revision {int}")]
-fn open_at_revision(world: &mut CrimeWorld, path: String, revision: u64) {
+fn open_at_revision(world: &mut VardeWorld, path: String, revision: u64) {
     open_clean(world, path.clone());
     world.send(Event::EditorKey('i'));
     for _ in 1..revision {
@@ -11104,7 +11104,7 @@ fn open_at_revision(world: &mut CrimeWorld, path: String, revision: u64) {
 /// One `publishDiagnostics` notification, from a table of lines and severities.
 /// The version is the one the Scenario names, or absent — the protocol's own
 /// optional field, and the difference the stale-version drop turns on.
-fn publish(world: &mut CrimeWorld, language: &str, path: &str, version: Option<i64>, step: &Step) {
+fn publish(world: &mut VardeWorld, language: &str, path: &str, version: Option<i64>, step: &Step) {
     let diagnostics: Vec<Value> = step
         .table()
         .map(|table| table.rows.iter().skip(1).collect::<Vec<_>>())
@@ -11149,7 +11149,7 @@ fn severity_number(severity: &str) -> u8 {
 
 #[given(expr = "the language server for {string} publishes diagnostics for {string}:")]
 #[when(expr = "the language server for {string} publishes diagnostics for {string}:")]
-fn publishes(world: &mut CrimeWorld, language: String, path: String, step: &Step) {
+fn publishes(world: &mut VardeWorld, language: String, path: String, step: &Step) {
     publish(world, &language, &path, None, step);
 }
 
@@ -11160,7 +11160,7 @@ fn publishes(world: &mut CrimeWorld, language: String, path: String, step: &Step
     expr = "the language server for {string} publishes diagnostics for {string} at version {int}:"
 )]
 fn publishes_at_version(
-    world: &mut CrimeWorld,
+    world: &mut VardeWorld,
     language: String,
     path: String,
     version: i64,
@@ -11175,7 +11175,7 @@ fn publishes_at_version(
 #[when(
     expr = "the language server for {string} publishes diagnostics for {string} with no version:"
 )]
-fn publishes_without_version(world: &mut CrimeWorld, language: String, path: String, step: &Step) {
+fn publishes_without_version(world: &mut VardeWorld, language: String, path: String, step: &Step) {
     publish(world, &language, &path, None, step);
 }
 
@@ -11184,7 +11184,7 @@ fn publishes_without_version(world: &mut CrimeWorld, language: String, path: Str
 /// one place they become the protocol's zero-based start and exclusive end.
 #[given(expr = "the language server for {string} publishes diagnostics for {string} with spans:")]
 #[when(expr = "the language server for {string} publishes diagnostics for {string} with spans:")]
-fn publishes_with_spans(world: &mut CrimeWorld, language: String, path: String, step: &Step) {
+fn publishes_with_spans(world: &mut VardeWorld, language: String, path: String, step: &Step) {
     let diagnostics: Vec<Value> = step
         .table()
         .map(|table| table.rows.iter().skip(1).collect::<Vec<_>>())
@@ -11215,7 +11215,7 @@ fn publishes_with_spans(world: &mut CrimeWorld, language: String, path: String, 
 /// What is underlined on a line, as the core answers it — the span already
 /// clamped to the characters the line holds.
 #[then(expr = "the underline on line {int} of {string} covers columns {int} through {int}")]
-fn underline_covers(world: &mut CrimeWorld, line: usize, path: String, from: usize, to: usize) {
+fn underline_covers(world: &mut VardeWorld, line: usize, path: String, from: usize, to: usize) {
     let full = abs(world, &path);
     let spans: Vec<(usize, usize)> = lsp::underlines(&world.state, &full, line)
         .into_iter()
@@ -11228,7 +11228,7 @@ fn underline_covers(world: &mut CrimeWorld, line: usize, path: String, from: usi
 }
 
 #[then(expr = "line {int} of {string} has no underline")]
-fn no_underline(world: &mut CrimeWorld, line: usize, path: String) {
+fn no_underline(world: &mut VardeWorld, line: usize, path: String) {
     let full = abs(world, &path);
     assert_eq!(
         lsp::underlines(&world.state, &full, line),
@@ -11239,7 +11239,7 @@ fn no_underline(world: &mut CrimeWorld, line: usize, path: String) {
 
 #[given(expr = "the pointer rests on line {int} column {int} of the editor")]
 #[when(expr = "the pointer rests on line {int} column {int} of the editor")]
-fn pointer_rests_in_the_editor(world: &mut CrimeWorld, line: usize, column: usize) {
+fn pointer_rests_in_the_editor(world: &mut VardeWorld, line: usize, column: usize) {
     world.point(
         Pane::Editor,
         Some((line, column)),
@@ -11248,7 +11248,7 @@ fn pointer_rests_in_the_editor(world: &mut CrimeWorld, line: usize, column: usiz
 }
 
 #[when(expr = "the pointer rests on row {int} column {int} of the file tree")]
-fn pointer_rests_in_the_tree(world: &mut CrimeWorld, row: usize, column: usize) {
+fn pointer_rests_in_the_tree(world: &mut VardeWorld, row: usize, column: usize) {
     world.point(
         Pane::Tree,
         Some((row, column)),
@@ -11258,7 +11258,7 @@ fn pointer_rests_in_the_tree(world: &mut CrimeWorld, row: usize, column: usize) 
 
 /// What the box beside the line says, wrapped as the reader sees it.
 #[then(expr = "the diagnostic box says {string}")]
-fn diagnostic_box_says(world: &mut CrimeWorld, message: String) {
+fn diagnostic_box_says(world: &mut VardeWorld, message: String) {
     let (lines, _) = lsp::pointed(&world.state).expect("no diagnostic box is shown");
     assert!(
         words(&lines.join(" ")).contains(&words(&message)),
@@ -11269,13 +11269,13 @@ fn diagnostic_box_says(world: &mut CrimeWorld, message: String) {
 /// Beside the line and never on it: a box over the underline hides the
 /// characters it is about.
 #[then(expr = "the diagnostic box sits beside line {int}")]
-fn diagnostic_box_beside(world: &mut CrimeWorld, line: usize) {
+fn diagnostic_box_beside(world: &mut VardeWorld, line: usize) {
     let (_, placement) = lsp::pointed(&world.state).expect("no diagnostic box is shown");
     assert_eq!(placement.from, line + 1);
 }
 
 #[then("no diagnostic box is shown")]
-fn no_diagnostic_box(world: &mut CrimeWorld) {
+fn no_diagnostic_box(world: &mut VardeWorld) {
     assert_eq!(lsp::pointed(&world.state).map(|(lines, _)| lines), None);
 }
 
@@ -11284,7 +11284,7 @@ fn no_diagnostic_box(world: &mut CrimeWorld) {
 /// because it is the precondition the Scenario turns on — a Background that
 /// came to seed diagnostics would make it pass for the wrong reason.
 #[given(expr = "the language server for {string} has published no diagnostics for {string}")]
-fn has_published_nothing(world: &mut CrimeWorld, _language: String, path: String) {
+fn has_published_nothing(world: &mut VardeWorld, _language: String, path: String) {
     let full = abs(world, &path);
     assert!(
         !world.state.diagnostics.contains_key(&full),
@@ -11297,14 +11297,14 @@ fn has_published_nothing(world: &mut CrimeWorld, _language: String, path: String
 /// fact as its never having spoken about it.
 #[given(expr = "the language server for {string} publishes no diagnostics for {string}")]
 #[when(expr = "the language server for {string} publishes no diagnostics for {string}")]
-fn publishes_nothing(world: &mut CrimeWorld, language: String, path: String, step: &Step) {
+fn publishes_nothing(world: &mut VardeWorld, language: String, path: String, step: &Step) {
     publish(world, &language, &path, None, step);
 }
 
 /// Every publisher's, flattened. A Scenario that names a count names what the
 /// file carries, not what one of the servers serving it said — which is the
 /// whole of what two publishers on one path changed.
-fn diagnostics(world: &CrimeWorld, path: &str) -> Vec<lsp::Diagnostic> {
+fn diagnostics(world: &VardeWorld, path: &str) -> Vec<lsp::Diagnostic> {
     world
         .state
         .diagnostics
@@ -11315,14 +11315,14 @@ fn diagnostics(world: &CrimeWorld, path: &str) -> Vec<lsp::Diagnostic> {
 }
 
 #[then(expr = "{string} has no diagnostics")]
-fn no_diagnostics(world: &mut CrimeWorld, path: String) {
+fn no_diagnostics(world: &mut VardeWorld, path: String) {
     let held = diagnostics(world, &path);
     assert!(held.is_empty(), "{path} carries: {held:?}");
 }
 
 #[then(expr = "{string} has {int} diagnostic")]
 #[then(expr = "{string} has {int} diagnostics")]
-fn diagnostic_count(world: &mut CrimeWorld, path: String, count: usize) {
+fn diagnostic_count(world: &mut VardeWorld, path: String, count: usize) {
     let held = diagnostics(world, &path);
     assert_eq!(held.len(), count, "{path} carries: {held:?}");
 }
@@ -11332,7 +11332,7 @@ fn diagnostic_count(world: &mut CrimeWorld, path: String, count: usize) {
 // a row per file under review, and nothing at all where nobody has spoken.
 
 /// One row of the review's counts, by the file it names.
-fn review_row(world: &CrimeWorld, path: &str) -> Option<review::Counts> {
+fn review_row(world: &VardeWorld, path: &str) -> Option<review::Counts> {
     let rows = review::diagnostics(&world.state);
     let (_, counts) = rows
         .iter()
@@ -11342,7 +11342,7 @@ fn review_row(world: &CrimeWorld, path: &str) -> Option<review::Counts> {
 }
 
 #[then(expr = "{string} is not measured in the review")]
-fn not_measured(world: &mut CrimeWorld, path: String) {
+fn not_measured(world: &mut VardeWorld, path: String) {
     assert_eq!(
         review_row(world, &path),
         None,
@@ -11351,7 +11351,7 @@ fn not_measured(world: &mut CrimeWorld, path: String) {
 }
 
 #[then(expr = "{string} is measured in the review")]
-fn is_measured(world: &mut CrimeWorld, path: String) {
+fn is_measured(world: &mut VardeWorld, path: String) {
     assert!(
         review_row(world, &path).is_some(),
         "{path} reads as not measured"
@@ -11362,7 +11362,7 @@ fn is_measured(world: &mut CrimeWorld, path: String) {
 /// measured is not zero, and a step that only checked the number would pass on
 /// a view that conflated them.
 #[then(expr = "the review diagnostic count for {string} is not {int}")]
-fn review_count_is_not(world: &mut CrimeWorld, path: String, count: usize) {
+fn review_count_is_not(world: &mut VardeWorld, path: String, count: usize) {
     let row = review_row(world, &path);
     assert_ne!(
         row.map(|counts| counts.errors + counts.warnings),
@@ -11372,7 +11372,7 @@ fn review_count_is_not(world: &mut CrimeWorld, path: String, count: usize) {
 }
 
 #[then(expr = "the review diagnostic count for {string} is {int}")]
-fn review_count_is(world: &mut CrimeWorld, path: String, count: usize) {
+fn review_count_is(world: &mut VardeWorld, path: String, count: usize) {
     let row = review_row(world, &path);
     assert_eq!(
         row.map(|counts| counts.errors + counts.warnings),
@@ -11385,7 +11385,7 @@ fn review_count_is(world: &mut CrimeWorld, path: String, count: usize) {
 /// has spoken about has no count to put in a column, which is exactly what
 /// `is not measured` above says about it.
 #[then("the review diagnostic counts are:")]
-fn review_counts_are(world: &mut CrimeWorld, step: &Step) {
+fn review_counts_are(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<(String, usize, usize)> = step
         .table()
         .expect("table")
@@ -11409,7 +11409,7 @@ fn review_counts_are(world: &mut CrimeWorld, step: &Step) {
 
 /// Which files the review reports on at all, measured or not.
 #[then("the review diagnostic counts name exactly:")]
-fn review_counts_name(world: &mut CrimeWorld, step: &Step) {
+fn review_counts_name(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -11427,7 +11427,7 @@ fn review_counts_name(world: &mut CrimeWorld, step: &Step) {
 /// The figures, whether or not every file under review is measured — that
 /// distinction is the border's to draw, and `Unmeasured` is the absence the
 /// steps above assert per file.
-fn review_total(world: &CrimeWorld) -> review::Counts {
+fn review_total(world: &VardeWorld) -> review::Counts {
     match review::diagnostic_total(&world.state) {
         review::Total::Whole(total) | review::Total::Partial(total) => total,
         review::Total::Unmeasured => panic!("nothing under review was measured"),
@@ -11435,12 +11435,12 @@ fn review_total(world: &CrimeWorld) -> review::Counts {
 }
 
 #[then(expr = "the review error total is {int}")]
-fn review_error_total(world: &mut CrimeWorld, expected: usize) {
+fn review_error_total(world: &mut VardeWorld, expected: usize) {
     assert_eq!(review_total(world).errors, expected);
 }
 
 #[then(expr = "the review warning total is {int}")]
-fn review_warning_total(world: &mut CrimeWorld, expected: usize) {
+fn review_warning_total(world: &mut VardeWorld, expected: usize) {
     assert_eq!(review_total(world).warnings, expected);
 }
 
@@ -11449,7 +11449,7 @@ fn review_warning_total(world: &mut CrimeWorld, expected: usize) {
 /// answer, polled — and followed by a pass, because a file leaving the review
 /// is a document its server must be told is closed.
 #[when(expr = "{string} is restored to what HEAD holds")]
-fn restored_to_head(world: &mut CrimeWorld, path: String) {
+fn restored_to_head(world: &mut VardeWorld, path: String) {
     let kept: Vec<GitFile> = world
         .state
         .repo
@@ -11464,7 +11464,7 @@ fn restored_to_head(world: &mut CrimeWorld, path: String) {
 }
 
 #[then(expr = "the gutter mark on line {int} of {string} is {string}")]
-fn gutter_mark_is(world: &mut CrimeWorld, line: usize, path: String, severity: String) {
+fn gutter_mark_is(world: &mut VardeWorld, line: usize, path: String, severity: String) {
     let full = abs(world, &path);
     assert_eq!(
         lsp::mark(&world.state, &full, line).map(lsp::Severity::as_str),
@@ -11475,7 +11475,7 @@ fn gutter_mark_is(world: &mut CrimeWorld, line: usize, path: String, severity: S
 }
 
 #[then(expr = "the gutter has no mark on line {int} of {string}")]
-fn gutter_has_no_mark(world: &mut CrimeWorld, line: usize, path: String) {
+fn gutter_has_no_mark(world: &mut VardeWorld, line: usize, path: String) {
     let full = abs(world, &path);
     assert_eq!(
         lsp::mark(&world.state, &full, line).map(lsp::Severity::as_str),
@@ -11485,7 +11485,7 @@ fn gutter_has_no_mark(world: &mut CrimeWorld, line: usize, path: String) {
 }
 
 #[then(expr = "the diagnostic message shown is {string}")]
-fn diagnostic_message_shown(world: &mut CrimeWorld, expected: String) {
+fn diagnostic_message_shown(world: &mut VardeWorld, expected: String) {
     assert_eq!(
         lsp::message_at_cursor(&world.state),
         Some(expected.as_str())
@@ -11493,7 +11493,7 @@ fn diagnostic_message_shown(world: &mut CrimeWorld, expected: String) {
 }
 
 #[then(expr = "no diagnostic message is shown")]
-fn no_diagnostic_message(world: &mut CrimeWorld) {
+fn no_diagnostic_message(world: &mut VardeWorld) {
     assert_eq!(lsp::message_at_cursor(&world.state), None);
 }
 
@@ -11502,9 +11502,9 @@ fn no_diagnostic_message(world: &mut CrimeWorld) {
 /// rather than a column of its own.
 #[given(expr = "the editor gutter width is {int}")]
 #[then(expr = "the editor gutter width is {int}")]
-fn gutter_width_is(world: &mut CrimeWorld, expected: u16) {
+fn gutter_width_is(world: &mut VardeWorld, expected: u16) {
     assert_eq!(
-        crime::gutter(&world.state),
+        varde::gutter(&world.state),
         expected,
         "the gutter changed width"
     );
@@ -11512,7 +11512,7 @@ fn gutter_width_is(world: &mut CrimeWorld, expected: u16) {
 
 #[given(expr = "the cursor is moved to line {int} column {int}")]
 #[when(expr = "the cursor is moved to line {int} column {int}")]
-fn cursor_moved_to(world: &mut CrimeWorld, line: usize, column: usize) {
+fn cursor_moved_to(world: &mut VardeWorld, line: usize, column: usize) {
     world.send(Event::JumpTo(Place { line, column }));
 }
 
@@ -11522,17 +11522,17 @@ fn cursor_moved_to(world: &mut CrimeWorld, line: usize, column: usize) {
 /// configuration — so a scenario that only names configuration has to have
 /// started before it can open the list. Guarded on nothing having started yet,
 /// because starting replaces the whole `State`: a scenario that has already
-/// built one says "CRIME started in the project" itself, first.
-fn started(world: &mut CrimeWorld) {
+/// built one says "Varde started in the project" itself, first.
+fn started(world: &mut VardeWorld) {
     if world.config.is_none() {
-        crime_starts(world);
+        varde_starts(world);
         world.tell_core();
     }
 }
 
 #[given(expr = "the command {string} is on PATH")]
 #[when(expr = "the command {string} is on PATH")]
-fn command_is_on_path(world: &mut CrimeWorld, command: String) {
+fn command_is_on_path(world: &mut VardeWorld, command: String) {
     world.on_path.insert(command);
     probe_lands(world);
 }
@@ -11540,25 +11540,25 @@ fn command_is_on_path(world: &mut CrimeWorld, command: String) {
 /// A fact about this workspace as the edge found it — or did not. Stated the
 /// way `PATH` is, and for the same reason: the core is told and never looks.
 #[given(expr = "the edge resolved {string} to {string}")]
-fn edge_resolved(world: &mut CrimeWorld, name: String, value: String) {
+fn edge_resolved(world: &mut VardeWorld, name: String, value: String) {
     world.workspace_facts.insert(name, value);
     started(world);
     world.tell_core();
 }
 
-/// The same fact appearing while CRIME runs — what an `npm install` finishing
+/// The same fact appearing while Varde runs — what an `npm install` finishing
 /// looks like from the core's side. The pass comes round the way the edge
 /// brings it round after a re-probe, which is what makes "and no restart" an
 /// assertion rather than a hope (R31.24).
 #[when(expr = "the edge resolves {string} to {string}")]
-fn edge_resolves(world: &mut CrimeWorld, name: String, value: String) {
+fn edge_resolves(world: &mut VardeWorld, name: String, value: String) {
     world.workspace_facts.insert(name, value);
     world.tell_core();
     world.send(Event::PathProbed);
 }
 
 #[given(expr = "the edge resolved no {string}")]
-fn edge_resolved_nothing(world: &mut CrimeWorld, name: String) {
+fn edge_resolved_nothing(world: &mut VardeWorld, name: String) {
     world.workspace_facts.remove(&name);
     started(world);
     world.tell_core();
@@ -11566,19 +11566,19 @@ fn edge_resolved_nothing(world: &mut CrimeWorld, name: String) {
 
 #[given(expr = "the command {string} is not on PATH")]
 #[when(expr = "the command {string} is not on PATH")]
-fn command_is_not_on_path(world: &mut CrimeWorld, command: String) {
+fn command_is_not_on_path(world: &mut VardeWorld, command: String) {
     world.on_path.remove(&command);
     probe_lands(world);
 }
 
 /// What `PATH` holds is a fact about the machine, so the step writes the field
 /// and then says a fresh probe has landed — which is exactly what the edge
-/// does, in that order. It is the *landing* that CRIME acts on: a command that
+/// does, in that order. It is the *landing* that Varde acts on: a command that
 /// has appeared is a reason to forget it was missing, and a re-check that still
-/// finds nothing is what offers the restart. Before CRIME has started there is
+/// finds nothing is what offers the restart. Before Varde has started there is
 /// nothing to tell — starting replaces the whole `State` — so the Scenarios
 /// that state `PATH` as a precondition set the field and stop there.
-fn probe_lands(world: &mut CrimeWorld) {
+fn probe_lands(world: &mut VardeWorld) {
     world.tell_core();
     if world.config.is_some() {
         world.send(Event::PathProbed);
@@ -11587,7 +11587,7 @@ fn probe_lands(world: &mut CrimeWorld) {
 
 #[given(expr = "I open the palette")]
 #[when(expr = "I open the palette")]
-fn open_the_palette(world: &mut CrimeWorld) {
+fn open_the_palette(world: &mut VardeWorld) {
     started(world);
     world.send(Event::FallbackBinding);
 }
@@ -11596,19 +11596,19 @@ fn open_the_palette(world: &mut CrimeWorld) {
 /// letter means with a modal up is the router's answer, not the step's.
 #[given(expr = "I press {string} in the palette")]
 #[when(expr = "I press {string} in the palette")]
-fn press_in_palette(world: &mut CrimeWorld, key: String) {
+fn press_in_palette(world: &mut VardeWorld, key: String) {
     route_key(world, &key, 0);
 }
 
 #[given(expr = "I open Tools")]
 #[when(expr = "I open Tools")]
-fn open_tools(world: &mut CrimeWorld) {
+fn open_tools(world: &mut VardeWorld) {
     open_the_palette(world);
     press_in_palette(world, palette_key("Tools").to_string());
 }
 
 #[then(expr = "the palette is listing tools")]
-fn listing_tools(world: &mut CrimeWorld) {
+fn listing_tools(world: &mut VardeWorld) {
     assert!(
         matches!(world.state.modal, Modal::Tools { .. }),
         "not listing tools: {:?}",
@@ -11617,13 +11617,13 @@ fn listing_tools(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the palette is closed")]
-fn palette_is_closed(world: &mut CrimeWorld) {
+fn palette_is_closed(world: &mut VardeWorld) {
     assert_eq!(world.state.modal, Modal::None);
 }
 
 /// A row by its group and name: `rust` is a language server and a formatter,
 /// so a name alone does not say which row is meant.
-fn tool_row(world: &CrimeWorld, kind: tools::Kind, name: &str) -> tools::ToolRow {
+fn tool_row(world: &VardeWorld, kind: tools::Kind, name: &str) -> tools::ToolRow {
     tools::rows(&world.state)
         .into_iter()
         .find(|row| row.kind == kind && row.name == name)
@@ -11652,12 +11652,12 @@ fn kind(word: &str) -> tools::Kind {
 
 /// The language server scenarios' own spelling: a row named by language alone is
 /// the language server's.
-fn server_row(world: &CrimeWorld, language: &str) -> tools::ToolRow {
+fn server_row(world: &VardeWorld, language: &str) -> tools::ToolRow {
     tool_row(world, tools::Kind::Server, language)
 }
 
 #[then(expr = "the {word} row for {string} is {string}")]
-fn kind_row_reads(world: &mut CrimeWorld, group: String, name: String, expected: String) {
+fn kind_row_reads(world: &mut VardeWorld, group: String, name: String, expected: String) {
     assert_eq!(
         tool_row(world, kind(&group), &name).availability.as_str(),
         expected
@@ -11667,7 +11667,7 @@ fn kind_row_reads(world: &mut CrimeWorld, group: String, name: String, expected:
 /// The package manager the row's install needs and this machine lacks, named
 /// on the row because `needs-installer` alone does not say which to install.
 #[then(expr = "the {word} row for {string} needs the installer {string}")]
-fn row_needs_installer(world: &mut CrimeWorld, group: String, name: String, expected: String) {
+fn row_needs_installer(world: &mut VardeWorld, group: String, name: String, expected: String) {
     match tool_row(world, kind(&group), &name).availability {
         tools::Availability::NeedsInstaller { installer } => assert_eq!(installer, expected),
         other => panic!("{name} reads {}", other.as_str()),
@@ -11677,7 +11677,7 @@ fn row_needs_installer(world: &mut CrimeWorld, group: String, name: String, expe
 /// The `[facts.*]` row a server's command is here without, named on the row
 /// because `missing-requirement` alone does not say what to install.
 #[then(expr = "the {word} row for {string} needs the requirement {string}")]
-fn row_needs_requirement(world: &mut CrimeWorld, group: String, name: String, expected: String) {
+fn row_needs_requirement(world: &mut VardeWorld, group: String, name: String, expected: String) {
     match tool_row(world, kind(&group), &name).availability {
         tools::Availability::Unmet { needs } => assert_eq!(needs, expected),
         other => panic!("{name} reads {}", other.as_str()),
@@ -11685,7 +11685,7 @@ fn row_needs_requirement(world: &mut CrimeWorld, group: String, name: String, ex
 }
 
 #[then(expr = "the {word} row for {string} differs from its template")]
-fn row_differs(world: &mut CrimeWorld, group: String, name: String) {
+fn row_differs(world: &mut VardeWorld, group: String, name: String) {
     assert_eq!(
         tool_row(world, kind(&group), &name).origin,
         tools::Origin::Differs
@@ -11693,7 +11693,7 @@ fn row_differs(world: &mut CrimeWorld, group: String, name: String) {
 }
 
 #[then(expr = "the {word} row for {string} is the template's")]
-fn row_is_the_templates(world: &mut CrimeWorld, group: String, name: String) {
+fn row_is_the_templates(world: &mut VardeWorld, group: String, name: String) {
     assert_eq!(
         tool_row(world, kind(&group), &name).origin,
         tools::Origin::Template
@@ -11703,7 +11703,7 @@ fn row_is_the_templates(world: &mut CrimeWorld, group: String, name: String) {
 /// Each group once, in the order the list draws them — which is the order
 /// the rows come in, since the renderer heads a group where its kind changes.
 #[then("the tools list is grouped as:")]
-fn tools_grouped_as(world: &mut CrimeWorld, step: &Step) {
+fn tools_grouped_as(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -11720,24 +11720,24 @@ fn tools_grouped_as(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "the list offers a row for {string}")]
-fn list_offers_row(world: &mut CrimeWorld, language: String) {
+fn list_offers_row(world: &mut VardeWorld, language: String) {
     server_row(world, &language);
 }
 
 #[then(expr = "the row for {string} names the command {string}")]
-fn row_names_command(world: &mut CrimeWorld, language: String, expected: String) {
+fn row_names_command(world: &mut VardeWorld, language: String, expected: String) {
     assert_eq!(server_row(world, &language).command, expected);
 }
 
 #[then(expr = "the row for {string} is {string}")]
-fn row_reads(world: &mut CrimeWorld, language: String, expected: String) {
+fn row_reads(world: &mut VardeWorld, language: String, expected: String) {
     assert_eq!(server_row(world, &language).availability.as_str(), expected);
 }
 
 /// The row's own words for what it cannot do, which is the whole of why the
 /// state exists: `partly-working` on its own tells a reader to go looking.
 #[then(expr = "the row for {string} says it cannot do {string}")]
-fn row_says_it_cannot(world: &mut CrimeWorld, language: String, expected: String) {
+fn row_says_it_cannot(world: &mut VardeWorld, language: String, expected: String) {
     match server_row(world, &language).availability {
         tools::Availability::Partial { without } => assert_eq!(without, expected),
         other => panic!("{language} reads {}", other.as_str()),
@@ -11746,8 +11746,8 @@ fn row_says_it_cannot(world: &mut CrimeWorld, language: String, expected: String
 
 /// Which OS the binary was built for, handed in as `main.rs` hands it in — the
 /// step that makes a Linux row specifiable on a Mac (R31.22).
-#[given(expr = "CRIME was built for {string}")]
-fn built_for(world: &mut CrimeWorld, os: String) {
+#[given(expr = "Varde was built for {string}")]
+fn built_for(world: &mut VardeWorld, os: String) {
     // Both, because a Scenario that never starts still has to look up an
     // install command under it: starting copies `Startup::os` into the state,
     // and one that arranges its own world would otherwise be on no OS at all.
@@ -11761,26 +11761,26 @@ fn built_for(world: &mut CrimeWorld, os: String) {
 /// selection to being reachable with no modifier.
 #[when(expr = "I install the row for {string}")]
 #[given(expr = "I asked to install the row for {string}")]
-fn install_the_row(world: &mut CrimeWorld, language: String) {
+fn install_the_row(world: &mut VardeWorld, language: String) {
     walk_to_row(world, tools::Kind::Server, &language);
     press_in_palette(world, "i".to_string());
 }
 
 #[when(expr = "I take the {word} row for {string}")]
 #[given(expr = "I took the {word} row for {string}")]
-fn take_the_row(world: &mut CrimeWorld, group: String, name: String) {
+fn take_the_row(world: &mut VardeWorld, group: String, name: String) {
     walk_to_row(world, kind(&group), &name);
     press_in_palette(world, "i".to_string());
 }
 
-fn global_config_path(world: &CrimeWorld) -> PathBuf {
-    world.startup.crime_home.join(startup::CONFIG_FILE)
+fn global_config_path(world: &VardeWorld) -> PathBuf {
+    world.startup.varde_home.join(startup::CONFIG_FILE)
 }
 
-/// Edited in another editor after CRIME started, so what CRIME started on
+/// Edited in another editor after Varde started, so what Varde started on
 /// and what is on disk now are two different texts.
 #[given("the global config has since been edited to:")]
-fn global_config_edited(world: &mut CrimeWorld, step: &Step) {
+fn global_config_edited(world: &mut VardeWorld, step: &Step) {
     started(world);
     let path = global_config_path(world);
     let text = step.docstring().expect("docstring").trim().to_string();
@@ -11788,7 +11788,7 @@ fn global_config_edited(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then("the global config still holds everything it held")]
-fn global_config_kept(world: &mut CrimeWorld) {
+fn global_config_kept(world: &mut VardeWorld) {
     let held = world
         .startup
         .global_config
@@ -11799,7 +11799,7 @@ fn global_config_kept(world: &mut CrimeWorld) {
 }
 
 #[then(expr = "the global config names the row {string}")]
-fn global_config_names(world: &mut CrimeWorld, dotted: String) {
+fn global_config_names(world: &mut VardeWorld, dotted: String) {
     let now = &world.files[&global_config_path(world)];
     let table: toml::Table = now.parse().expect("the written file parses");
     let (section, name) = dotted.split_once('.').expect("section.name");
@@ -11813,7 +11813,7 @@ fn global_config_names(world: &mut CrimeWorld, dotted: String) {
 }
 
 #[then(expr = "the global config sets {string} to {string}")]
-fn global_config_sets(world: &mut CrimeWorld, dotted: String, expected: String) {
+fn global_config_sets(world: &mut VardeWorld, dotted: String, expected: String) {
     let now = &world.files[&global_config_path(world)];
     let table: toml::Table = now.parse().expect("the written file parses");
     let (section, key) = dotted.split_once('.').expect("section.key");
@@ -11824,12 +11824,12 @@ fn global_config_sets(world: &mut CrimeWorld, dotted: String, expected: String) 
     );
 }
 
-fn install_sentinel(world: &CrimeWorld) -> PathBuf {
-    crime::crime_dir(&world.startup.root, world.startup.sidecar.as_deref()).join(tools::SENTINEL)
+fn install_sentinel(world: &VardeWorld) -> PathBuf {
+    varde::varde_dir(&world.startup.root, world.startup.sidecar.as_deref()).join(tools::SENTINEL)
 }
 
 #[then(expr = "the shell pane runs {string} reporting its exit status")]
-fn shell_pane_runs_install(world: &mut CrimeWorld, install: String) {
+fn shell_pane_runs_install(world: &mut VardeWorld, install: String) {
     assert_eq!(
         world.executed,
         vec![tools::reported(&install, &install_sentinel(world))]
@@ -11841,7 +11841,7 @@ fn shell_pane_runs_install(world: &mut CrimeWorld, install: String) {
 /// data `PROGRAMS` carries and a config file may replace, so a scenario pinning
 /// the whole string would be a scenario about the data.
 #[then(expr = "the shell pane runs a command mentioning {string}")]
-fn shell_pane_runs_mentioning(world: &mut CrimeWorld, fragment: String) {
+fn shell_pane_runs_mentioning(world: &mut VardeWorld, fragment: String) {
     assert!(
         matches!(world.executed.as_slice(), [run] if run.contains(&fragment)),
         "executed {:?}, which does not mention {fragment:?}",
@@ -11852,7 +11852,7 @@ fn shell_pane_runs_mentioning(world: &mut CrimeWorld, fragment: String) {
 /// The sentinel written and seen by the watcher, as the shell's `echo $?`
 /// and the rename after it leave it.
 #[when(expr = "the install reports the exit status {string}")]
-fn install_reports(world: &mut CrimeWorld, status: String) {
+fn install_reports(world: &mut VardeWorld, status: String) {
     let sentinel = install_sentinel(world);
     world.files.insert(sentinel.clone(), format!("{status}\n"));
     world.send(Event::FilesAppeared(vec![(sentinel, tree::Kind::File)]));
@@ -11864,7 +11864,7 @@ fn install_reports(world: &mut CrimeWorld, status: String) {
 /// modifier. Reopened when it is not up, because `i` closes it — the install
 /// runs in the shell pane and the focus follows it — so a re-check
 /// after an install has no list to walk. `r` leaves it standing.
-fn walk_to_row(world: &mut CrimeWorld, group: tools::Kind, name: &str) {
+fn walk_to_row(world: &mut VardeWorld, group: tools::Kind, name: &str) {
     if !matches!(world.state.modal, Modal::Tools { .. }) {
         open_tools(world);
     }
@@ -11878,7 +11878,7 @@ fn walk_to_row(world: &mut CrimeWorld, group: tools::Kind, name: &str) {
 }
 
 #[then(expr = "the focus is the terminal")]
-fn focus_is_the_terminal(world: &mut CrimeWorld) {
+fn focus_is_the_terminal(world: &mut VardeWorld) {
     assert_eq!(world.state.focus, Pane::Terminal);
 }
 
@@ -11888,7 +11888,7 @@ fn focus_is_the_terminal(world: &mut CrimeWorld) {
 /// from, not the failure it is about. The command is the configured default's,
 /// which is what the Scenario then names on `PATH`.
 #[given(expr = "a language server for {string} failed to start")]
-fn server_failed_to_start(world: &mut CrimeWorld, language: String) {
+fn server_failed_to_start(world: &mut VardeWorld, language: String) {
     started(world);
     world.lsp_is_gone(&language, Gone::FailedToStart);
 }
@@ -11899,7 +11899,7 @@ fn server_failed_to_start(world: &mut CrimeWorld, language: String) {
 /// counted step already spells that, so this is it with the count the Scenario
 /// leaves implicit.
 #[then(expr = "a language server is started for {string}")]
-fn server_is_started_for(world: &mut CrimeWorld, language: String) {
+fn server_is_started_for(world: &mut VardeWorld, language: String) {
     servers_started_for(world, 1, language);
 }
 
@@ -11910,7 +11910,7 @@ fn server_is_started_for(world: &mut CrimeWorld, language: String) {
 /// written a language off before it gets here, so the whole run's effects are
 /// not the promise being made.
 #[then(expr = "no language server is started")]
-fn no_language_server_is_started(world: &mut CrimeWorld) {
+fn no_language_server_is_started(world: &mut VardeWorld) {
     assert!(
         world.lsp_started.is_empty(),
         "a server was started: {:?}",
@@ -11923,18 +11923,18 @@ fn no_language_server_is_started(world: &mut CrimeWorld) {
 /// reach is a re-check nobody makes.
 #[when(expr = "I re-check the row for {string}")]
 #[given(expr = "I re-check the row for {string}")]
-fn recheck_the_row(world: &mut CrimeWorld, language: String) {
+fn recheck_the_row(world: &mut VardeWorld, language: String) {
     walk_to_row(world, tools::Kind::Server, &language);
     press_in_palette(world, "r".to_string());
 }
 
-#[then(expr = "CRIME asks whether to restart")]
-fn asks_whether_to_restart(world: &mut CrimeWorld) {
+#[then(expr = "Varde asks whether to restart")]
+fn asks_whether_to_restart(world: &mut VardeWorld) {
     assert_eq!(world.state.modal, Modal::Restart);
 }
 
-#[then(expr = "CRIME is not asking whether to restart")]
-fn is_not_asking_whether_to_restart(world: &mut CrimeWorld) {
+#[then(expr = "Varde is not asking whether to restart")]
+fn is_not_asking_whether_to_restart(world: &mut VardeWorld) {
     assert_ne!(world.state.modal, Modal::Restart);
 }
 
@@ -11945,15 +11945,15 @@ fn is_not_asking_whether_to_restart(world: &mut CrimeWorld) {
 /// defaults give it both a command and a macOS install command and nothing puts
 /// `zls` on the world's `PATH`; the question itself carries no language, so
 /// which row asked it is not something a Scenario can observe.
-#[given(expr = "CRIME is asking whether to restart")]
-fn is_asking_whether_to_restart(world: &mut CrimeWorld) {
+#[given(expr = "Varde is asking whether to restart")]
+fn is_asking_whether_to_restart(world: &mut VardeWorld) {
     recheck_the_row(world, "zig".to_string());
     command_is_not_on_path(world, "zls".to_string());
     assert_eq!(world.state.modal, Modal::Restart);
 }
 
 #[when(expr = "I decline the restart")]
-fn decline_the_restart(world: &mut CrimeWorld) {
+fn decline_the_restart(world: &mut VardeWorld) {
     route_key(world, "n", 0);
 }
 
@@ -11962,13 +11962,13 @@ fn decline_the_restart(world: &mut CrimeWorld) {
 // and answers it in a step, because what a child made of the text is the fact
 // only the edge can observe ----
 
-/// The reply to the document formatting CRIME last asked for, under that
+/// The reply to the document formatting Varde last asked for, under that
 /// request's own id. The edits are in the editor's own 1-based columns with
 /// `to` the last column covered, exactly as the on-type step spells them, so a
 /// Scenario says what a reader would say rather than what the wire holds.
 #[given(expr = "the language server for {string} answers the document formatting with:")]
 #[when(expr = "the language server for {string} answers the document formatting with:")]
-fn answers_the_document_formatting(world: &mut CrimeWorld, language: String, step: &Step) {
+fn answers_the_document_formatting(world: &mut VardeWorld, language: String, step: &Step) {
     let edits: Vec<Value> = step
         .table()
         .expect("table")
@@ -11996,11 +11996,11 @@ fn answers_the_document_formatting(world: &mut CrimeWorld, language: String, ste
 /// speaks.
 #[given(expr = "the language server for {string} answers the document formatting with nothing")]
 #[when(expr = "the language server for {string} answers the document formatting with nothing")]
-fn answers_the_document_formatting_with_nothing(world: &mut CrimeWorld, language: String) {
+fn answers_the_document_formatting_with_nothing(world: &mut VardeWorld, language: String) {
     document_formatting_reply(world, &language, Value::Null);
 }
 
-fn document_formatting_reply(world: &mut CrimeWorld, language: &str, result: Value) {
+fn document_formatting_reply(world: &mut VardeWorld, language: &str, result: Value) {
     let id = asked(world, language, "textDocument/formatting");
     world.lsp_replies(
         language,
@@ -12009,7 +12009,7 @@ fn document_formatting_reply(world: &mut CrimeWorld, language: &str, result: Val
 }
 
 #[given(expr = "a formatter {string} is configured for {string}")]
-fn formatter_configured(world: &mut CrimeWorld, command: String, language: String) {
+fn formatter_configured(world: &mut VardeWorld, command: String, language: String) {
     world.state.formatters.insert(
         language.clone(),
         Formatter {
@@ -12025,7 +12025,7 @@ fn formatter_configured(world: &mut CrimeWorld, command: String, language: Strin
     );
 }
 
-fn configured_formatter<'a>(world: &'a mut CrimeWorld, language: &str) -> &'a mut Formatter {
+fn configured_formatter<'a>(world: &'a mut VardeWorld, language: &str) -> &'a mut Formatter {
     world
         .state
         .formatters
@@ -12034,7 +12034,7 @@ fn configured_formatter<'a>(world: &'a mut CrimeWorld, language: &str) -> &'a mu
 }
 
 #[given(expr = "the formatter for {string} takes the arguments {string}")]
-fn formatter_takes_arguments(world: &mut CrimeWorld, language: String, args: String) {
+fn formatter_takes_arguments(world: &mut VardeWorld, language: String, args: String) {
     configured_formatter(world, &language).args =
         args.split_whitespace().map(str::to_string).collect();
 }
@@ -12044,7 +12044,7 @@ fn formatter_takes_arguments(world: &mut CrimeWorld, language: String, args: Str
 /// carries the two characters `\n`, not the one the shell reads as Enter.
 #[given(expr = "the formatter for {string} is installed on {string} with:")]
 fn formatter_installed_with_docstring(
-    world: &mut CrimeWorld,
+    world: &mut VardeWorld,
     language: String,
     os: String,
     step: &Step,
@@ -12056,21 +12056,21 @@ fn formatter_installed_with_docstring(
 }
 
 #[given(expr = "the formatter for {string} is installed with {string} on {string}")]
-fn formatter_installed_with(world: &mut CrimeWorld, language: String, command: String, os: String) {
+fn formatter_installed_with(world: &mut VardeWorld, language: String, command: String, os: String) {
     configured_formatter(world, &language)
         .install
         .insert(os, command);
 }
 
 #[given(expr = "the formatter for {string} claims the extension {string}")]
-fn formatter_claims_extension(world: &mut CrimeWorld, language: String, extension: String) {
+fn formatter_claims_extension(world: &mut VardeWorld, language: String, extension: String) {
     configured_formatter(world, &language)
         .extensions
         .push(extension);
 }
 
 #[then(expr = "a formatter is configured for {string}")]
-fn a_formatter_is_configured(world: &mut CrimeWorld, language: String) {
+fn a_formatter_is_configured(world: &mut VardeWorld, language: String) {
     assert!(
         world.state.formatters.contains_key(&language),
         "configured: {:?}",
@@ -12079,7 +12079,7 @@ fn a_formatter_is_configured(world: &mut CrimeWorld, language: String) {
 }
 
 #[then(expr = "there is no formatter configured for {string}")]
-fn no_formatter_configured(world: &mut CrimeWorld, language: String) {
+fn no_formatter_configured(world: &mut VardeWorld, language: String) {
     assert_eq!(
         world.state.formatters.get(&language),
         None,
@@ -12088,7 +12088,7 @@ fn no_formatter_configured(world: &mut CrimeWorld, language: String) {
 }
 
 #[then(expr = "the formatter for {string} is {string}")]
-fn the_formatter_for_is(world: &mut CrimeWorld, language: String, command: String) {
+fn the_formatter_for_is(world: &mut VardeWorld, language: String, command: String) {
     assert_eq!(configured_formatter(world, &language).command, command);
 }
 
@@ -12096,7 +12096,7 @@ fn the_formatter_for_is(world: &mut CrimeWorld, language: String, command: Strin
 /// stdin. Both in one step, because a command run over text nobody named is
 /// half an assertion.
 #[then(expr = "the formatter {string} was run with:")]
-fn formatter_was_run_with(world: &mut CrimeWorld, command: String, step: &Step) {
+fn formatter_was_run_with(world: &mut VardeWorld, command: String, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
     let run = last_run(world);
     let Effect::RunFormatter {
@@ -12109,7 +12109,7 @@ fn formatter_was_run_with(world: &mut CrimeWorld, command: String, step: &Step) 
 }
 
 #[then(expr = "it was run with the arguments {string}")]
-fn it_was_run_with_the_arguments(world: &mut CrimeWorld, expected: String) {
+fn it_was_run_with_the_arguments(world: &mut VardeWorld, expected: String) {
     let Effect::RunFormatter { args, .. } = last_run(world) else {
         unreachable!("only RunFormatter is kept")
     };
@@ -12117,7 +12117,7 @@ fn it_was_run_with_the_arguments(world: &mut CrimeWorld, expected: String) {
 }
 
 #[then(expr = "no formatter was run")]
-fn no_formatter_was_run(world: &mut CrimeWorld) {
+fn no_formatter_was_run(world: &mut VardeWorld) {
     assert!(
         world.formatter_runs.is_empty(),
         "ran: {:?}",
@@ -12130,7 +12130,7 @@ fn no_formatter_was_run(world: &mut CrimeWorld) {
 /// the answer steps below reach for the *last* run, and a run that never
 /// happened leaves the first one there, still current, still applicable.
 #[then(expr = "the formatter was run {int} times")]
-fn the_formatter_was_run_times(world: &mut CrimeWorld, expected: usize) {
+fn the_formatter_was_run_times(world: &mut VardeWorld, expected: usize) {
     assert_eq!(
         world.formatter_runs.len(),
         expected,
@@ -12139,7 +12139,7 @@ fn the_formatter_was_run_times(world: &mut CrimeWorld, expected: usize) {
     );
 }
 
-fn last_run(world: &CrimeWorld) -> Effect {
+fn last_run(world: &VardeWorld) -> Effect {
     world
         .formatter_runs
         .last()
@@ -12154,7 +12154,7 @@ fn last_run(world: &CrimeWorld) -> Effect {
 /// no-restart Scenario turns on.
 #[given(expr = "the formatter answers with:")]
 #[when(expr = "the formatter answers with:")]
-fn formatter_answers_with(world: &mut CrimeWorld, step: &Step) {
+fn formatter_answers_with(world: &mut VardeWorld, step: &Step) {
     let text = step.docstring().expect("docstring").trim_matches('\n');
     formatter_answered(world, format::Answer::Done(text.to_string()));
 }
@@ -12164,24 +12164,24 @@ fn formatter_answers_with(world: &mut CrimeWorld, step: &Step) {
 /// wrote nothing is the whole of what this covers.
 #[given(expr = "the formatter answers with nothing at all")]
 #[when(expr = "the formatter answers with nothing at all")]
-fn formatter_answers_with_nothing(world: &mut CrimeWorld) {
+fn formatter_answers_with_nothing(world: &mut VardeWorld) {
     formatter_answered(world, format::Answer::Done(String::new()));
 }
 
 #[given(expr = "the formatter reports that its command is not installed")]
 #[when(expr = "the formatter reports that its command is not installed")]
-fn formatter_is_not_installed(world: &mut CrimeWorld) {
+fn formatter_is_not_installed(world: &mut VardeWorld) {
     formatter_answered(world, format::Answer::Missing);
 }
 
 #[given(expr = "the formatter fails with:")]
 #[when(expr = "the formatter fails with:")]
-fn formatter_fails_with(world: &mut CrimeWorld, step: &Step) {
+fn formatter_fails_with(world: &mut VardeWorld, step: &Step) {
     let said = step.docstring().expect("docstring").trim_matches('\n');
     formatter_answered(world, format::Answer::Failed(said.to_string()));
 }
 
-fn formatter_answered(world: &mut CrimeWorld, answer: format::Answer) {
+fn formatter_answered(world: &mut VardeWorld, answer: format::Answer) {
     let Effect::RunFormatter {
         language,
         path,
@@ -12205,7 +12205,7 @@ fn formatter_answered(world: &mut CrimeWorld, answer: format::Answer) {
 /// own Given gives: the only way the pane comes to be on screen is being asked
 /// for, and asking for it puts focus in it.
 #[given(expr = "the Buffers pane is shown")]
-fn buffers_pane_is_shown(world: &mut CrimeWorld) {
+fn buffers_pane_is_shown(world: &mut VardeWorld) {
     if world.state.corner != layout::Corner::Buffers {
         world.send(Event::ToggleBuffersList);
     }
@@ -12213,17 +12213,17 @@ fn buffers_pane_is_shown(world: &mut CrimeWorld) {
 }
 
 #[given(expr = "the Buffers pane is hidden")]
-fn buffers_pane_is_hidden(world: &mut CrimeWorld) {
+fn buffers_pane_is_hidden(world: &mut VardeWorld) {
     world.state.corner = layout::Corner::Hidden;
 }
 
 #[then(expr = "the Buffers pane is shown")]
-fn buffers_pane_should_be_shown(world: &mut CrimeWorld) {
+fn buffers_pane_should_be_shown(world: &mut VardeWorld) {
     assert_eq!(world.state.corner, layout::Corner::Buffers);
 }
 
 #[then(expr = "the Buffers pane is hidden")]
-fn buffers_pane_should_be_hidden(world: &mut CrimeWorld) {
+fn buffers_pane_should_be_hidden(world: &mut VardeWorld) {
     assert_ne!(world.state.corner, layout::Corner::Buffers);
 }
 
@@ -12232,7 +12232,7 @@ fn buffers_pane_should_be_hidden(world: &mut CrimeWorld) {
 /// opened the wrong occupant satisfies every one of those. The slot names its
 /// occupant, so the scenarios about a Corner nobody opened ask about the slot.
 #[then(expr = "the corner is empty")]
-fn corner_should_be_empty(world: &mut CrimeWorld) {
+fn corner_should_be_empty(world: &mut VardeWorld) {
     assert_eq!(world.state.corner, layout::Corner::Hidden);
 }
 
@@ -12240,7 +12240,7 @@ fn corner_should_be_empty(world: &mut CrimeWorld) {
 /// same list the renderer walks rather than off `buffers` directly, so a pane
 /// listing something else fails here.
 #[then("the Buffers pane lists:")]
-fn buffers_pane_lists(world: &mut CrimeWorld, step: &Step) {
+fn buffers_pane_lists(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<PathBuf> = step
         .table()
         .expect("table")
@@ -12248,7 +12248,7 @@ fn buffers_pane_lists(world: &mut CrimeWorld, step: &Step) {
         .iter()
         .map(|row| abs(world, &row[0]))
         .collect();
-    let actual: Vec<PathBuf> = crime::buffer_list(&world.state)
+    let actual: Vec<PathBuf> = varde::buffer_list(&world.state)
         .into_iter()
         .cloned()
         .collect();
@@ -12259,38 +12259,38 @@ fn buffers_pane_lists(world: &mut CrimeWorld, step: &Step) {
 /// actually listing: a mark for a file with no row would be a claim about
 /// nothing.
 #[then(expr = "the Buffers pane marks {string} as {string}")]
-fn buffers_pane_marks(world: &mut CrimeWorld, path: String, expected: String) {
+fn buffers_pane_marks(world: &mut VardeWorld, path: String, expected: String) {
     let path = abs(world, &path);
     assert!(
-        crime::buffer_list(&world.state).contains(&&path),
+        varde::buffer_list(&world.state).contains(&&path),
         "{path:?} has no row"
     );
     buffer_mark_is(world, path.to_string_lossy().into_owned(), expected);
 }
 
 #[then(expr = "the Buffers pane selection is {string}")]
-fn buffers_selection_is(world: &mut CrimeWorld, path: String) {
+fn buffers_selection_is(world: &mut VardeWorld, path: String) {
     assert_eq!(
-        crime::buffer_selected(&world.state),
+        varde::buffer_selected(&world.state),
         Some(&abs(world, &path))
     );
 }
 
 #[given(expr = "the Buffers pane selection is the first row")]
 #[then(expr = "the Buffers pane selection is the first row")]
-fn buffers_selection_is_the_first_row(world: &mut CrimeWorld) {
+fn buffers_selection_is_the_first_row(world: &mut VardeWorld) {
     assert_eq!(world.state.buffers_selection, 0);
 }
 
 #[then(expr = "the Buffers pane first visible row is row {int}")]
-fn buffers_first_visible_row(world: &mut CrimeWorld, row: usize) {
+fn buffers_first_visible_row(world: &mut VardeWorld, row: usize) {
     assert_eq!(world.state.buffers_scroll, row);
 }
 
 #[then(expr = "the Buffers pane selection is in view")]
-fn buffers_selection_in_view(world: &mut CrimeWorld) {
+fn buffers_selection_in_view(world: &mut VardeWorld) {
     let first = world.state.buffers_scroll;
-    let last = first + crime::corner_rows(&world.state).max(1);
+    let last = first + varde::corner_rows(&world.state).max(1);
     assert!(
         (first..last).contains(&world.state.buffers_selection),
         "row {} is not among the rows {first}..{last} on screen",
@@ -12299,7 +12299,7 @@ fn buffers_selection_in_view(world: &mut CrimeWorld) {
 }
 
 #[when(expr = "I click Buffers pane row {int}")]
-fn click_buffers_row(world: &mut CrimeWorld, row: usize) {
+fn click_buffers_row(world: &mut VardeWorld, row: usize) {
     world.send(Event::ClickBufferRow(row - 1));
 }
 
@@ -12307,12 +12307,12 @@ fn click_buffers_row(world: &mut CrimeWorld, row: usize) {
 /// the gesture starts with and then the move — fulfilled the way `main` fulfils
 /// one: whatever span comes back is filled with characters off a grid and
 /// handed to `Event::SelectIn`. A pane holding rows must hand back no span at
-/// all, so this drives the press itself rather than `CrimeWorld::drag`'s two
+/// all, so this drives the press itself rather than `VardeWorld::drag`'s two
 /// moves. Which pane it is is the layout's to answer, not the step's: asserting
 /// only that Ctrl+C copies nothing would pass against a pane nobody ever
 /// dragged in.
 #[when("I drag from the corner pane's first row to its second")]
-fn drag_across_corner_rows(world: &mut CrimeWorld) {
+fn drag_across_corner_rows(world: &mut VardeWorld) {
     let panes = world.panes();
     let mut pointer = mouse::Pointer::default();
     for (kind, row) in [
@@ -12348,15 +12348,15 @@ fn drag_across_corner_rows(world: &mut CrimeWorld) {
 /// Enough rows to overflow the pane, opened the way any file is opened, so the
 /// scrolling Scenarios are driving the list the pane actually draws.
 #[given(expr = "{int} files are open in the editor")]
-fn many_files_open(world: &mut CrimeWorld, count: usize) {
+fn many_files_open(world: &mut VardeWorld, count: usize) {
     for index in 1..=count {
         open_named(world, format!("src/file{index:02}.js"));
     }
 }
 
 #[given(expr = "the project {string} records the corner pane as {string}")]
-fn state_records_corner(world: &mut CrimeWorld, path: String, occupant: String) {
-    assert_eq!(path, ".crime/state.json");
+fn state_records_corner(world: &mut VardeWorld, path: String, occupant: String) {
+    assert_eq!(path, ".varde/state.json");
     world.startup.state_json = Some(format!("{{\"corner\": \"{occupant}\"}}"));
 }
 
@@ -12370,7 +12370,7 @@ fn state_records_corner(world: &mut CrimeWorld, path: String, occupant: String) 
 /// the place it arrived at rather than the place it left.
 #[given(expr = "I jump to {string} line {int}")]
 #[when(expr = "I jump to {string} line {int}")]
-fn jump_to_place(world: &mut CrimeWorld, path: String, line: usize) {
+fn jump_to_place(world: &mut VardeWorld, path: String, line: usize) {
     let path = abs(world, &path);
     world.apply(vec![Effect::OpenAt {
         path,
@@ -12379,10 +12379,10 @@ fn jump_to_place(world: &mut CrimeWorld, path: String, line: usize) {
 }
 
 #[then(expr = "the cursor history is empty")]
-fn history_is_empty(world: &mut CrimeWorld) {
+fn history_is_empty(world: &mut VardeWorld) {
     assert_eq!(
-        crime::history::list(&world.state),
-        &[] as &[crime::history::Visit],
+        varde::history::list(&world.state),
+        &[] as &[varde::history::Visit],
     );
 }
 
@@ -12390,7 +12390,7 @@ fn history_is_empty(world: &mut CrimeWorld) {
 /// draws. The whole list, in order, so a place recorded that should not have
 /// been fails here rather than passing as a superset.
 #[then("the cursor history holds:")]
-fn history_holds(world: &mut CrimeWorld, step: &Step) {
+fn history_holds(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<(String, usize)> = step
         .table()
         .expect("table")
@@ -12399,7 +12399,7 @@ fn history_holds(world: &mut CrimeWorld, step: &Step) {
         .skip(1)
         .map(|row| (row[0].clone(), row[1].parse().expect("a line")))
         .collect();
-    let actual: Vec<(String, usize)> = crime::history::list(&world.state)
+    let actual: Vec<(String, usize)> = varde::history::list(&world.state)
         .iter()
         .map(|visit| (visit.file.clone(), visit.line))
         .collect();
@@ -12407,8 +12407,8 @@ fn history_holds(world: &mut CrimeWorld, step: &Step) {
 }
 
 /// A filler Visit, named so the Scenarios can tell one from another.
-fn filler_visit(which: usize) -> crime::history::Visit {
-    crime::history::Visit {
+fn filler_visit(which: usize) -> varde::history::Visit {
+    varde::history::Visit {
         file: match which {
             0 => "src/oldest.rs".to_string(),
             other => format!("src/f{other}.rs"),
@@ -12425,7 +12425,7 @@ fn filler_visit(which: usize) -> crime::history::Visit {
 /// instead would answer the first Ctrl+p from the middle of the list, which is
 /// not the press this pane's boundary is about.
 #[given(expr = "the cursor history holds {int} places")]
-fn history_holds_places(world: &mut CrimeWorld, count: usize) {
+fn history_holds_places(world: &mut VardeWorld, count: usize) {
     world.state.visits = (0..count).map(filler_visit).collect();
     world.state.history_selection = count;
 }
@@ -12433,22 +12433,22 @@ fn history_holds_places(world: &mut CrimeWorld, count: usize) {
 /// The cap itself, so the Scenario about dropping the oldest drives the
 /// boundary rather than a number that happens to be near it.
 #[given(expr = "the cursor history is full")]
-fn history_fill_to_the_cap(world: &mut CrimeWorld) {
-    history_holds_places(world, crime::history::CAP);
+fn history_fill_to_the_cap(world: &mut VardeWorld) {
+    history_holds_places(world, varde::history::CAP);
 }
 
 #[then(expr = "the cursor history is full")]
-fn history_should_be_full(world: &mut CrimeWorld) {
+fn history_should_be_full(world: &mut VardeWorld) {
     assert_eq!(
-        crime::history::list(&world.state).len(),
-        crime::history::CAP
+        varde::history::list(&world.state).len(),
+        varde::history::CAP
     );
 }
 
 #[then(expr = "the cursor history holds no place in {string}")]
-fn history_holds_no_place_in(world: &mut CrimeWorld, file: String) {
+fn history_holds_no_place_in(world: &mut VardeWorld, file: String) {
     assert!(
-        !crime::history::list(&world.state)
+        !varde::history::list(&world.state)
             .iter()
             .any(|visit| visit.file == file),
         "{file} is still listed"
@@ -12459,7 +12459,7 @@ fn history_holds_no_place_in(world: &mut CrimeWorld, file: String) {
 /// and the Buffers pane's own Givens say so: the only way the pane comes to be
 /// on screen is being asked for, and asking for it puts focus in it.
 #[given(expr = "the Cursor history pane is shown")]
-fn history_pane_is_shown(world: &mut CrimeWorld) {
+fn history_pane_is_shown(world: &mut VardeWorld) {
     if world.state.corner != layout::Corner::History {
         world.send(Event::ToggleCursorHistory);
     }
@@ -12467,33 +12467,33 @@ fn history_pane_is_shown(world: &mut CrimeWorld) {
 }
 
 #[given(expr = "the Cursor history pane is hidden")]
-fn history_pane_is_hidden(world: &mut CrimeWorld) {
+fn history_pane_is_hidden(world: &mut VardeWorld) {
     world.state.corner = layout::Corner::Hidden;
 }
 
 #[when(expr = "I show the Cursor history pane")]
-fn show_history_pane(world: &mut CrimeWorld) {
+fn show_history_pane(world: &mut VardeWorld) {
     assert_ne!(world.state.corner, layout::Corner::History);
     world.send(Event::ToggleCursorHistory);
 }
 
 #[then(expr = "the Cursor history pane is shown")]
-fn history_pane_should_be_shown(world: &mut CrimeWorld) {
+fn history_pane_should_be_shown(world: &mut VardeWorld) {
     assert_eq!(world.state.corner, layout::Corner::History);
 }
 
 #[then(expr = "the Cursor history pane is hidden")]
-fn history_pane_should_be_hidden(world: &mut CrimeWorld) {
+fn history_pane_should_be_hidden(world: &mut VardeWorld) {
     assert_ne!(world.state.corner, layout::Corner::History);
 }
 
-fn history_row(world: &CrimeWorld, row: usize) -> crime::history::Visit {
-    crime::history::list(&world.state)
+fn history_row(world: &VardeWorld, row: usize) -> varde::history::Visit {
+    varde::history::list(&world.state)
         .get(row - 1)
         .unwrap_or_else(|| {
             panic!(
                 "no row {row}: {:?}",
-                crime::history::list(&world.state)
+                varde::history::list(&world.state)
                     .iter()
                     .map(|visit| &visit.file)
                     .collect::<Vec<_>>()
@@ -12505,7 +12505,7 @@ fn history_row(world: &CrimeWorld, row: usize) -> crime::history::Visit {
 /// The name, not the path: the pane is the tree's width, and the selected row's
 /// whole path is on the border instead.
 #[then(expr = "Cursor history row {int} names the file {string} on line {int}")]
-fn history_row_names(world: &mut CrimeWorld, row: usize, name: String, line: usize) {
+fn history_row_names(world: &mut VardeWorld, row: usize, name: String, line: usize) {
     let visit = history_row(world, row);
     assert_eq!(
         std::path::Path::new(&visit.file)
@@ -12519,10 +12519,10 @@ fn history_row_names(world: &mut CrimeWorld, row: usize, name: String, line: usi
 /// Through `history::excerpt`, which is where the rule lives — the renderer
 /// only draws it, so a step reading the renderer would be asserting a colour.
 #[then(expr = "Cursor history row {int} shows the excerpt {string}")]
-fn history_row_excerpt(world: &mut CrimeWorld, row: usize, expected: String) {
+fn history_row_excerpt(world: &mut VardeWorld, row: usize, expected: String) {
     let visit = history_row(world, row);
     assert_eq!(
-        crime::history::excerpt(&visit.text, visit.column, crime::history::WORDS),
+        varde::history::excerpt(&visit.text, visit.column, varde::history::WORDS),
         expected
     );
 }
@@ -12531,7 +12531,7 @@ fn history_row_excerpt(world: &mut CrimeWorld, row: usize, expected: String) {
 /// buffer's own keys, so the Scenario changes the text the way anything else
 /// does rather than rewriting state behind the pane's back.
 #[when(expr = "the line Cursor history row {int} recorded is edited")]
-fn edit_the_recorded_line(world: &mut CrimeWorld, row: usize) {
+fn edit_the_recorded_line(world: &mut VardeWorld, row: usize) {
     let visit = history_row(world, row);
     let path = abs(world, &visit.file);
     world.send(Event::ShowBuffer(path));
@@ -12543,29 +12543,29 @@ fn edit_the_recorded_line(world: &mut CrimeWorld, row: usize) {
 }
 
 #[then(expr = "Cursor history row {int} is stale")]
-fn history_row_is_stale(world: &mut CrimeWorld, row: usize) {
+fn history_row_is_stale(world: &mut VardeWorld, row: usize) {
     let visit = history_row(world, row);
     assert!(
-        crime::history::stale(&world.state, &visit),
+        varde::history::stale(&world.state, &visit),
         "{visit:?} still holds what it recorded"
     );
 }
 
 #[then(expr = "Cursor history row {int} is not stale")]
-fn history_row_is_not_stale(world: &mut CrimeWorld, row: usize) {
+fn history_row_is_not_stale(world: &mut VardeWorld, row: usize) {
     let visit = history_row(world, row);
-    assert!(!crime::history::stale(&world.state, &visit), "{visit:?}");
+    assert!(!varde::history::stale(&world.state, &visit), "{visit:?}");
 }
 
 #[given(expr = "the Cursor history selection is row {int}")]
-fn history_selection_is(world: &mut CrimeWorld, row: usize) {
+fn history_selection_is(world: &mut VardeWorld, row: usize) {
     world.state.history_selection = row - 1;
 }
 
 #[then(expr = "the Cursor history selection is row {int}")]
-fn history_selection_should_be(world: &mut CrimeWorld, row: usize) {
+fn history_selection_should_be(world: &mut VardeWorld, row: usize) {
     assert_eq!(
-        crime::history::selected(&world.state),
+        varde::history::selected(&world.state),
         Some(&history_row(world, row))
     );
 }
@@ -12574,16 +12574,16 @@ fn history_selection_should_be(world: &mut CrimeWorld, row: usize) {
 /// anything has been travelled to, which is a place newer than everything
 /// recorded and therefore no row.
 #[then(expr = "the Cursor history selection is nothing")]
-fn history_selection_should_be_nothing(world: &mut CrimeWorld) {
-    assert_eq!(crime::history::selected(&world.state), None);
+fn history_selection_should_be_nothing(world: &mut VardeWorld) {
+    assert_eq!(varde::history::selected(&world.state), None);
     assert_eq!(
         world.state.history_selection,
-        crime::history::list(&world.state).len()
+        varde::history::list(&world.state).len()
     );
 }
 
 #[then("the Cursor history row actions offered are:")]
-fn history_row_actions_offered(world: &mut CrimeWorld, step: &Step) {
+fn history_row_actions_offered(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
         .table()
         .expect("table")
@@ -12591,7 +12591,7 @@ fn history_row_actions_offered(world: &mut CrimeWorld, step: &Step) {
         .iter()
         .map(|row| row[0].clone())
         .collect();
-    let actual: Vec<String> = crime::history::row_actions(&world.state)
+    let actual: Vec<String> = varde::history::row_actions(&world.state)
         .into_iter()
         .map(str::to_string)
         .collect();
@@ -12602,28 +12602,28 @@ fn history_row_actions_offered(world: &mut CrimeWorld, step: &Step) {
 /// exercises the arithmetic that decides whether a click lands on the row or on
 /// its icon rather than sending the event it hopes for.
 #[when(expr = "I click Cursor history row {int}")]
-fn click_history_row(world: &mut CrimeWorld, row: usize) {
+fn click_history_row(world: &mut VardeWorld, row: usize) {
     world.click(Pane::History, (row, 1), terminput::KeyModifiers::NONE);
 }
 
 /// The icon's own columns — the last two the row draws, hard against the
 /// right-hand border, which is where `ui` puts it and where `mouse` looks.
 #[when(expr = "I click the {string} action on Cursor history row {int}")]
-fn click_history_row_action(world: &mut CrimeWorld, action: String, row: usize) {
-    assert_eq!(action, crime::history::GO_TO, "unknown action {action:?}");
+fn click_history_row_action(world: &mut VardeWorld, action: String, row: usize) {
+    assert_eq!(action, varde::history::GO_TO, "unknown action {action:?}");
     let column = world.panes().corner.width.saturating_sub(3) as usize;
     world.click(Pane::History, (row, column), terminput::KeyModifiers::NONE);
 }
 
 #[then(expr = "the Cursor history first visible row is row {int}")]
-fn history_first_visible_row(world: &mut CrimeWorld, row: usize) {
+fn history_first_visible_row(world: &mut VardeWorld, row: usize) {
     assert_eq!(world.state.history_scroll, row);
 }
 
 #[then(expr = "the Cursor history selection is in view")]
-fn history_selection_in_view(world: &mut CrimeWorld) {
+fn history_selection_in_view(world: &mut VardeWorld) {
     let first = world.state.history_scroll;
-    let last = first + crime::corner_rows(&world.state).max(1);
+    let last = first + varde::corner_rows(&world.state).max(1);
     assert!(
         (first..last).contains(&world.state.history_selection),
         "row {} is not among the rows {first}..{last} on screen",
@@ -12638,7 +12638,7 @@ fn history_selection_in_view(world: &mut CrimeWorld) {
 /// core — no scenario names a synthesizer, so these are stand-ins with the
 /// right *shape* rather than the commands `PROGRAMS` ships (ADR 0013).
 #[given("a voice is configured")]
-fn voice_configured(world: &mut CrimeWorld) {
+fn voice_configured(world: &mut VardeWorld) {
     world.state.speech = reading::Speech {
         command: "a-synthesizer".to_string(),
         args: vec!["${voice}".to_string()],
@@ -12657,32 +12657,32 @@ fn voice_configured(world: &mut CrimeWorld) {
 /// three the Background put in place, so what is asserted is which piece is
 /// named and not merely that something refused.
 #[given("no synthesizer is on the PATH")]
-fn no_synthesizer(world: &mut CrimeWorld) {
+fn no_synthesizer(world: &mut VardeWorld) {
     world.voice_child = false;
     world.tell_core();
 }
 
 #[given("no voice is configured")]
-fn no_voice(world: &mut CrimeWorld) {
+fn no_voice(world: &mut VardeWorld) {
     world.state.speech.voice = String::new();
     world.tell_core();
 }
 
 /// Named, and deleted since — or never fetched to where the row says.
 #[given("the voice file is not on disk")]
-fn voice_not_on_disk(world: &mut CrimeWorld) {
+fn voice_not_on_disk(world: &mut VardeWorld) {
     world.voice_on_disk = false;
     world.tell_core();
 }
 
 #[given("no audio player is configured")]
-fn no_player(world: &mut CrimeWorld) {
+fn no_player(world: &mut VardeWorld) {
     world.player_on_path = false;
     world.tell_core();
 }
 
 #[given(expr = "{string} is open in the editor holding {string}")]
-fn open_holding_inline(world: &mut CrimeWorld, path: String, contents: String) {
+fn open_holding_inline(world: &mut VardeWorld, path: String, contents: String) {
     open_buffer(world, &path, &contents);
 }
 
@@ -12690,7 +12690,7 @@ fn open_holding_inline(world: &mut CrimeWorld, path: String, contents: String) {
 /// rather than driven through a drag: the Selection is pre-existing context
 /// here, and which gesture produced it is `selection.feature`'s question.
 #[given(expr = "the selection covers {string}")]
-fn selection_covers(world: &mut CrimeWorld, text: String) {
+fn selection_covers(world: &mut VardeWorld, text: String) {
     let lines: Vec<String> = current_buffer(world)
         .shown()
         .lines()
@@ -12727,7 +12727,7 @@ fn selection_covers(world: &mut CrimeWorld, text: String) {
 }
 
 #[given("the selection covers the whole buffer")]
-fn selection_covers_all(world: &mut CrimeWorld) {
+fn selection_covers_all(world: &mut VardeWorld) {
     let lines: Vec<String> = current_buffer(world)
         .shown()
         .lines()
@@ -12743,12 +12743,12 @@ fn selection_covers_all(world: &mut CrimeWorld) {
 }
 
 #[given("there is no selection")]
-fn no_selection(world: &mut CrimeWorld) {
+fn no_selection(world: &mut VardeWorld) {
     world.state.selection = None;
 }
 
 #[when("a reading is started")]
-fn reading_started(world: &mut CrimeWorld) {
+fn reading_started(world: &mut VardeWorld) {
     world.tree_before = tree::visible_rows(&world.state)
         .iter()
         .map(|row| row.path.clone())
@@ -12761,7 +12761,7 @@ fn reading_started(world: &mut CrimeWorld) {
 /// way there is one — R35.1 leaves no cursor or whole-file route to it.
 #[given(expr = "a reading of {string} is in flight")]
 #[when(expr = "a reading of {string} is started")]
-fn a_reading_is_in_flight(world: &mut CrimeWorld, text: String) {
+fn a_reading_is_in_flight(world: &mut VardeWorld, text: String) {
     open_buffer(world, "guide.md", &text);
     selection_covers_all(world);
     world.send(Event::StartReading);
@@ -12776,7 +12776,7 @@ fn a_reading_is_in_flight(world: &mut CrimeWorld, text: String) {
 /// what a scenario about a Reading's *text* needs, and this is what one about
 /// where the mark sits needs: a buffer with lines of its own to mark.
 #[given("a reading of the whole buffer is in flight")]
-fn a_reading_of_the_buffer_is_in_flight(world: &mut CrimeWorld) {
+fn a_reading_of_the_buffer_is_in_flight(world: &mut VardeWorld) {
     selection_covers_all(world);
     world.send(Event::StartReading);
     assert!(
@@ -12787,12 +12787,12 @@ fn a_reading_of_the_buffer_is_in_flight(world: &mut CrimeWorld) {
 }
 
 #[when("the reading is stopped")]
-fn reading_stopped(world: &mut CrimeWorld) {
+fn reading_stopped(world: &mut VardeWorld) {
     world.send(Event::StopReading);
 }
 
 #[then("the reading is in flight")]
-fn reading_in_flight(world: &mut CrimeWorld) {
+fn reading_in_flight(world: &mut VardeWorld) {
     assert!(
         world.state.reading.is_some(),
         "notices: {:?}",
@@ -12801,20 +12801,20 @@ fn reading_in_flight(world: &mut CrimeWorld) {
 }
 
 #[then("no reading is in flight")]
-fn reading_not_in_flight(world: &mut CrimeWorld) {
+fn reading_not_in_flight(world: &mut VardeWorld) {
     assert!(world.state.reading.is_none());
 }
 
 /// `reading.feature`'s Outline wording for the two above, which is one step
 /// with the outcome substituted into it.
 #[then(expr = "the reading is refused as {string}")]
-fn reading_refused_as(world: &mut CrimeWorld, slug: String) {
+fn reading_refused_as(world: &mut VardeWorld, slug: String) {
     reading_not_in_flight(world);
     reading_refuses(world, slug);
 }
 
 #[then(expr = "the reading refuses with {string}")]
-fn reading_refuses(world: &mut CrimeWorld, slug: String) {
+fn reading_refuses(world: &mut VardeWorld, slug: String) {
     assert!(
         world.notices.contains(&slug),
         "notices: {:?}",
@@ -12826,13 +12826,13 @@ fn reading_refuses(world: &mut CrimeWorld, slug: String) {
 /// combinatorial boundary cases are unit tests beside `reading::utterances`,
 /// because `AGENTS.md` forbids chasing them through behaviour tests.
 #[then(expr = "the reading holds {int} utterances")]
-fn reading_holds_utterances(world: &mut CrimeWorld, count: usize) {
+fn reading_holds_utterances(world: &mut VardeWorld, count: usize) {
     let reading = world.state.reading.as_ref().expect("a reading in flight");
     assert_eq!(reading.utterances.len(), count, "{:?}", reading.utterances);
 }
 
 #[then(expr = "utterance {int} is {string}")]
-fn utterance_is(world: &mut CrimeWorld, at: usize, expected: String) {
+fn utterance_is(world: &mut VardeWorld, at: usize, expected: String) {
     let reading = world.state.reading.as_ref().expect("a reading in flight");
     assert_eq!(
         reading.utterances.get(at - 1).map(|one| one.text.as_str()),
@@ -12843,7 +12843,7 @@ fn utterance_is(world: &mut CrimeWorld, at: usize, expected: String) {
 }
 
 #[then(expr = "the spoken text is {string}")]
-fn spoken_text_is(world: &mut CrimeWorld, expected: String) {
+fn spoken_text_is(world: &mut VardeWorld, expected: String) {
     assert_eq!(world.speaking.as_deref(), Some(expected.as_str()));
     assert_eq!(
         world
@@ -12857,19 +12857,19 @@ fn spoken_text_is(world: &mut CrimeWorld, expected: String) {
 }
 
 #[then("nothing is waiting on the terminal's input line")]
-fn nothing_is_waiting(world: &mut CrimeWorld) {
+fn nothing_is_waiting(world: &mut VardeWorld) {
     assert_eq!(world.terminal_input, "");
 }
 
 #[given("a reading was refused")]
-fn reading_was_refused(world: &mut CrimeWorld) {
+fn reading_was_refused(world: &mut VardeWorld) {
     world.send(Event::StartReading);
     reading_not_in_flight(world);
 }
 
 /// Offered as Tools offers it: the list up, with the install key's row on it.
 #[then(expr = "the {word} row for {string} is offered")]
-fn row_is_offered(world: &mut CrimeWorld, group: String, name: String) {
+fn row_is_offered(world: &mut VardeWorld, group: String, name: String) {
     let Modal::Tools { row } = world.state.modal else {
         panic!("not listing tools: {:?}", world.state.modal);
     };
@@ -12883,10 +12883,10 @@ fn row_is_offered(world: &mut CrimeWorld, group: String, name: String) {
     );
 }
 
-/// R35.10. The stream is CRIME's own scratch and lives outside every
+/// R35.10. The stream is Varde's own scratch and lives outside every
 /// workspace, so nothing a Reading does may name a path under the root.
 #[then("no file was written inside the workspace root")]
-fn nothing_written_in_workspace(world: &mut CrimeWorld) {
+fn nothing_written_in_workspace(world: &mut VardeWorld) {
     let root = world.state.root.clone();
     let inside: Vec<&PathBuf> = world
         .wrote
@@ -12901,7 +12901,7 @@ fn nothing_written_in_workspace(world: &mut CrimeWorld) {
 }
 
 #[then("the file tree is unchanged")]
-fn tree_is_unchanged(world: &mut CrimeWorld) {
+fn tree_is_unchanged(world: &mut VardeWorld) {
     let now: Vec<PathBuf> = tree::visible_rows(&world.state)
         .iter()
         .map(|row| row.path.clone())
@@ -12932,7 +12932,7 @@ fn built(utterances: &[reading::Utterance]) -> Vec<u32> {
 
 /// The edge reporting where the sound has got to, which is the only way the
 /// core learns it.
-fn sound_reached(world: &mut CrimeWorld, at_ms: u32) {
+fn sound_reached(world: &mut VardeWorld, at_ms: u32) {
     let offsets = world.stream.clone();
     world.send(Event::Speaking { at_ms, offsets });
 }
@@ -12941,14 +12941,14 @@ fn sound_reached(world: &mut CrimeWorld, at_ms: u32) {
 /// still inside the first Utterance.
 const PART_WAY: u32 = 300;
 
-fn reading_now(world: &CrimeWorld) -> &reading::Reading {
+fn reading_now(world: &VardeWorld) -> &reading::Reading {
     world.state.reading.as_ref().expect("a reading in flight")
 }
 
 /// The sound sitting at that Utterance's first millisecond, told the way the
 /// edge tells it.
 #[given(expr = "the current utterance is {int}")]
-fn current_utterance_starts(world: &mut CrimeWorld, at: usize) {
+fn current_utterance_starts(world: &mut VardeWorld, at: usize) {
     let at_ms = world.stream[at - 1];
     sound_reached(world, at_ms);
 }
@@ -12957,7 +12957,7 @@ fn current_utterance_starts(world: &mut CrimeWorld, at: usize) {
 /// renderer: `ui` only draws it, so a step reading the screen would be
 /// asserting a colour the ticket says no scenario asserts.
 #[then(expr = "the marked lines are {int} to {int}")]
-fn marked_lines(world: &mut CrimeWorld, from: usize, to: usize) {
+fn marked_lines(world: &mut VardeWorld, from: usize, to: usize) {
     assert_eq!(
         reading::mark(&world.state),
         Some((from, to)),
@@ -12967,12 +12967,12 @@ fn marked_lines(world: &mut CrimeWorld, from: usize, to: usize) {
 }
 
 #[then("no lines are marked")]
-fn no_lines_marked(world: &mut CrimeWorld) {
+fn no_lines_marked(world: &mut VardeWorld) {
     assert_eq!(reading::mark(&world.state), None);
 }
 
 #[then(expr = "the current utterance is {int}")]
-fn current_utterance_is(world: &mut CrimeWorld, at: usize) {
+fn current_utterance_is(world: &mut VardeWorld, at: usize) {
     let reading = reading_now(world);
     assert_eq!(
         reading.at() + 1,
@@ -12987,18 +12987,18 @@ fn current_utterance_is(world: &mut CrimeWorld, at: usize) {
 /// spoken. Driven from the offsets the edge built rather than from a duration
 /// a scenario invented: the boundary is where the stream says it is.
 #[when(expr = "the reading has been speaking for the length of {int} utterances")]
-fn speaking_for(world: &mut CrimeWorld, count: usize) {
+fn speaking_for(world: &mut VardeWorld, count: usize) {
     let at_ms = *world.stream.get(count).expect("that many utterances");
     sound_reached(world, at_ms);
 }
 
 #[when("the next utterance is asked for")]
-fn next_utterance(world: &mut CrimeWorld) {
+fn next_utterance(world: &mut VardeWorld) {
     world.send(Event::NextUtterance);
 }
 
 #[when("the previous utterance is asked for")]
-fn previous_utterance(world: &mut CrimeWorld) {
+fn previous_utterance(world: &mut VardeWorld) {
     world.send(Event::PreviousUtterance);
 }
 
@@ -13008,19 +13008,19 @@ fn previous_utterance(world: &mut CrimeWorld) {
 /// report up to 80ms old. A pause taken at offset zero would let "resumes
 /// where it stopped" pass for a restart.
 #[when("the reading is paused")]
-fn reading_paused(world: &mut CrimeWorld) {
+fn reading_paused(world: &mut VardeWorld) {
     sound_reached(world, PART_WAY);
     world.paused_at = Some(reading_now(world).at_ms);
     world.send(Event::PlayPause);
 }
 
 #[then("the reading is paused")]
-fn reading_is_paused(world: &mut CrimeWorld) {
+fn reading_is_paused(world: &mut VardeWorld) {
     assert!(reading_now(world).paused);
 }
 
 #[when("the reading is resumed")]
-fn reading_resumed(world: &mut CrimeWorld) {
+fn reading_resumed(world: &mut VardeWorld) {
     world.send(Event::PlayPause);
 }
 
@@ -13028,7 +13028,7 @@ fn reading_resumed(world: &mut CrimeWorld) {
 /// scenario is about is the control on the border, and the routing from the
 /// glyph to the event is part of what it promises.
 #[when("the play control is pressed")]
-fn play_control_pressed(world: &mut CrimeWorld) {
+fn play_control_pressed(world: &mut VardeWorld) {
     world.send(Event::PaneAction(reading::PLAY_PAUSE));
 }
 
@@ -13037,7 +13037,7 @@ fn play_control_pressed(world: &mut CrimeWorld) {
 /// start — and nothing was synthesized again, which is what the stream being
 /// untouched says.
 #[then("the reading resumes from where it was paused")]
-fn resumes_where_paused(world: &mut CrimeWorld) {
+fn resumes_where_paused(world: &mut VardeWorld) {
     let paused_at = world.paused_at.expect("a pause to resume from");
     assert_eq!(world.resumed_from, Some(paused_at));
     assert_eq!(reading_now(world).at_ms, paused_at);
@@ -13053,30 +13053,30 @@ fn resumes_where_paused(world: &mut CrimeWorld) {
 /// next was started: a Reading supersedes rather than queueing, and two
 /// streams over one another is what a queue would sound like.
 #[then("exactly one reading is in flight")]
-fn exactly_one_reading(world: &mut CrimeWorld) {
+fn exactly_one_reading(world: &mut VardeWorld) {
     assert!(world.state.reading.is_some());
     assert_eq!(world.players, 1);
 }
 
 #[then("no sound is being played")]
-fn nothing_is_playing(world: &mut CrimeWorld) {
+fn nothing_is_playing(world: &mut VardeWorld) {
     assert_eq!(world.speaking, None);
 }
 
 /// The stream exists to be played and is deleted with the player, so what a
 /// scenario can see of it is the edge holding neither (ADR 0014).
 #[then("no stream file remains")]
-fn no_stream_remains(world: &mut CrimeWorld) {
+fn no_stream_remains(world: &mut VardeWorld) {
     nothing_is_playing(world);
 }
 
 #[given(expr = "the reading speed is {float}")]
-fn reading_speed_is(world: &mut CrimeWorld, speed: f32) {
+fn reading_speed_is(world: &mut VardeWorld, speed: f32) {
     world.state.speech.speed = speed;
 }
 
 #[given(expr = "a reading of {string} is in flight at speed {float}")]
-fn a_reading_in_flight_at_speed(world: &mut CrimeWorld, text: String, speed: f32) {
+fn a_reading_in_flight_at_speed(world: &mut VardeWorld, text: String, speed: f32) {
     reading_speed_is(world, speed);
     a_reading_is_in_flight(world, text);
 }
@@ -13089,7 +13089,7 @@ fn a_reading_in_flight_at_speed(world: &mut CrimeWorld, text: String, speed: f32
 /// is written the way a person reads it — `0.90` inverts to 1.111…, and pinning
 /// every digit of a float would be pinning the format rather than the number.
 #[then(expr = "the voice is asked for a duration scale of {float}")]
-fn voice_asked_for_scale(world: &mut CrimeWorld, scale: f32) {
+fn voice_asked_for_scale(world: &mut VardeWorld, scale: f32) {
     let asked = 1.0 / world.spoken_at.expect("the voice to have been asked");
     assert!(
         (asked - scale).abs() < 0.005,
@@ -13098,7 +13098,7 @@ fn voice_asked_for_scale(world: &mut CrimeWorld, scale: f32) {
 }
 
 #[when(expr = "the reading speed is changed to {float}")]
-fn reading_speed_changed(world: &mut CrimeWorld, speed: f32) {
+fn reading_speed_changed(world: &mut VardeWorld, speed: f32) {
     world.send(Event::SetSpeed(speed));
 }
 
@@ -13107,14 +13107,14 @@ fn reading_speed_changed(world: &mut CrimeWorld, speed: f32) {
 /// one rather than the old.
 #[then(expr = "the reading in flight is still at speed {float}")]
 #[then(expr = "the reading is at speed {float}")]
-fn reading_is_at_speed(world: &mut CrimeWorld, speed: f32) {
+fn reading_is_at_speed(world: &mut VardeWorld, speed: f32) {
     assert_eq!(world.spoken_at, Some(speed));
 }
 
 /// R35.8. Drawn or absent, never greyed — and `ui` draws the same list
 /// `mouse` hit-tests, so what the bar offers is one value to assert.
 #[then("the transport is on screen")]
-fn transport_on_screen(world: &mut CrimeWorld) {
+fn transport_on_screen(world: &mut VardeWorld) {
     assert!(
         !reading::transport(&world.state).is_empty(),
         "no transport for {:?}",
@@ -13123,7 +13123,7 @@ fn transport_on_screen(world: &mut CrimeWorld) {
 }
 
 #[then("the transport is not on screen")]
-fn transport_not_on_screen(world: &mut CrimeWorld) {
+fn transport_not_on_screen(world: &mut VardeWorld) {
     assert_eq!(
         reading::transport(&world.state),
         vec![],
@@ -13141,7 +13141,7 @@ fn transport_not_on_screen(world: &mut CrimeWorld) {
 /// table is checked against what the bar actually offers, so a sixth control
 /// fails here rather than shipping without a key.
 #[then("every transport action is reachable from the keyboard")]
-fn every_transport_action_has_a_key(world: &mut CrimeWorld) {
+fn every_transport_action_has_a_key(world: &mut VardeWorld) {
     open_buffer_plain(world, "guide.md".to_string());
     let commands = [
         (reading::PREVIOUS, ":prev"),
@@ -13160,7 +13160,7 @@ fn every_transport_action_has_a_key(world: &mut CrimeWorld) {
     assert_eq!(offered, listed, "a control with no key beside it");
     for (action, line) in commands {
         let clicked = update(&world.state, Event::PaneAction(action));
-        let mut drafts = crime::keys::Drafts::default();
+        let mut drafts = varde::keys::Drafts::default();
         let mut typed = world.state.clone();
         let mut effects = Vec::new();
         for key in line
@@ -13190,7 +13190,7 @@ fn every_transport_action_has_a_key(world: &mut CrimeWorld) {
 
 // ---- Indent guides ----
 
-fn guides_on(world: &CrimeWorld, line: usize) -> Vec<crime::editor::Guide> {
+fn guides_on(world: &VardeWorld, line: usize) -> Vec<varde::editor::Guide> {
     current_buffer(world)
         .guides()
         .get(line - 1)
@@ -13199,7 +13199,7 @@ fn guides_on(world: &CrimeWorld, line: usize) -> Vec<crime::editor::Guide> {
 }
 
 #[then(expr = "the indent guides on line {int} are at columns {string}")]
-fn guides_at(world: &mut CrimeWorld, line: usize, columns: String) {
+fn guides_at(world: &mut VardeWorld, line: usize, columns: String) {
     let expected: Vec<usize> = columns
         .split(", ")
         .map(|column| column.parse().expect("a column"))
@@ -13212,12 +13212,12 @@ fn guides_at(world: &mut CrimeWorld, line: usize, columns: String) {
 }
 
 #[then(expr = "line {int} has no indent guides")]
-fn no_guides(world: &mut CrimeWorld, line: usize) {
+fn no_guides(world: &mut VardeWorld, line: usize) {
     assert!(guides_on(world, line).is_empty());
 }
 
 #[then(expr = "the indent guide on line {int} at column {int} is {word}")]
-fn guide_is(world: &mut CrimeWorld, line: usize, column: usize, drawn: String) {
+fn guide_is(world: &mut VardeWorld, line: usize, column: usize, drawn: String) {
     let guide = guides_on(world, line)
         .into_iter()
         .find(|guide| guide.column == column)
@@ -13233,12 +13233,12 @@ fn guide_is(world: &mut CrimeWorld, line: usize, column: usize, drawn: String) {
 }
 
 #[then(expr = "no indent guide on line {int} is heavy")]
-fn no_heavy_guide(world: &mut CrimeWorld, line: usize) {
+fn no_heavy_guide(world: &mut VardeWorld, line: usize) {
     assert!(guides_on(world, line).iter().all(|guide| !guide.active));
 }
 
 #[then(expr = "the marked brackets are at:")]
-fn marked_brackets(world: &mut CrimeWorld, step: &Step) {
+fn marked_brackets(world: &mut VardeWorld, step: &Step) {
     let rows = &step.table.as_ref().expect("a table").rows;
     let expected: Vec<(usize, usize)> = rows[1..]
         .iter()
@@ -13257,6 +13257,6 @@ fn marked_brackets(world: &mut CrimeWorld, step: &Step) {
 }
 
 #[then(expr = "no brackets are marked")]
-fn no_marked_brackets(world: &mut CrimeWorld) {
+fn no_marked_brackets(world: &mut VardeWorld) {
     assert_eq!(current_buffer(world).bracket_pair(), None);
 }

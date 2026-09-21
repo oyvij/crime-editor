@@ -19,7 +19,7 @@ Feature: Predictions make the reviewer commit to a reason
   a colleague's change, not a learner being assessed.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project is a git repository
     And "src/keys.rs" holds:
       """

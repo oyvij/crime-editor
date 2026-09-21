@@ -45,13 +45,13 @@ pub fn run(state: &State) -> Vec<Effect> {
     let Some(formatter) = state.formatters.get(&language) else {
         return vec![Effect::notify_about(
             "no-formatter-configured",
-            format!("[formatter.{language}] in .crime/config.toml"),
+            format!("[formatter.{language}] in .varde/config.toml"),
         )];
     };
     // `${file}` beside every `[facts.*]` name, filled and dropped by the rule a
     // server's arguments already go through: an argument naming something
     // nobody could resolve is worse than an absent one, because a command that
-    // fails on a configured-looking value reads as CRIME's bug.
+    // fails on a configured-looking value reads as Varde's bug.
     let mut names = lsp::facts(state);
     names.insert(
         "file".to_string(),
@@ -74,7 +74,7 @@ pub fn run(state: &State) -> Vec<Effect> {
 /// Which language this file is, for the purpose of finding a command to lay it
 /// out: the `[formatter.*]` row claiming its extension, else the name the file
 /// gives itself — which is what makes a `[formatter.<anything>]` a reader
-/// invents reachable without CRIME having heard of it. The `[lsp.*]` rows are
+/// invents reachable without Varde having heard of it. The `[lsp.*]` rows are
 /// not asked: a file's server and its formatter are separate choices
 /// (ADR 0018).
 fn language(state: &State, path: &Path) -> String {
@@ -110,7 +110,7 @@ pub fn answered(
     answer: Answer,
 ) -> Vec<Effect> {
     match answer {
-        // Typed into the terminal and never run, and CRIME composed none of it
+        // Typed into the terminal and never run, and Varde composed none of it
         // — it is the string configuration carried, so a default that is wrong
         // for this machine is one word away from being right (ADR 0012). A row
         // with nothing for this OS offers nothing rather than an invented
@@ -152,7 +152,7 @@ pub fn answered(
             // Nothing on stdout from a command that exited fine is not an
             // answer, and read as one it is the whole file deleted with no
             // notice at all — which is exactly what a formatter that rewrites
-            // the file in place prints, the one shape CRIME does not support
+            // the file in place prints, the one shape Varde does not support
             // (R32.4) and the misconfiguration a hand-written row reaches
             // first. It fails like a command that failed, because it did.
             // `trim` on the text that is there rather than `is_empty`: nothing

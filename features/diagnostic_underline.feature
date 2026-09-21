@@ -15,7 +15,7 @@ Feature: Diagnostics under the code they name
   are placed by, so a box beside a line is never a rectangle the renderer worked out for itself.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project is a git repository
     And a language server for "rust" is ready
     And "src/lib.rs" is open in the editor holding:

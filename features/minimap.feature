@@ -15,7 +15,7 @@ Feature: The minimap
   the text.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the screen is 30 rows by 120 columns
 
   Scenario: A file short enough to fit is mirrored whole
@@ -111,5 +111,5 @@ Feature: The minimap
       [editor]
       minimap = false
       """
-    When CRIME starts in the project
+    When Varde starts in the project
     Then the minimap is hidden

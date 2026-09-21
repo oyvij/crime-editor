@@ -1,22 +1,22 @@
 //! Drawing. Reads state, writes pixels — no decisions.
 
 use crate::pty::Pane as PtyPane;
-use crime::editor::Mode;
-use crime::highlight::{self, Kind};
-use crime::layout::{self, Area};
-use crime::lsp;
-use crime::minimap;
-use crime::tree::Row;
-use crime::{
-    filter, keys, mark, palette_rows, reading, review, story, tools, tree, Mark, Modal, Pane,
-    Place, Selection, State, View,
-};
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use varde::editor::Mode;
+use varde::highlight::{self, Kind};
+use varde::layout::{self, Area};
+use varde::lsp;
+use varde::minimap;
+use varde::tree::Row;
+use varde::{
+    filter, keys, mark, palette_rows, reading, review, story, tools, tree, Mark, Modal, Pane,
+    Place, Selection, State, View,
+};
 
 /// The bits of on-screen furniture the edge owns: what it is saying, and any
 /// half-typed input it is collecting.
@@ -73,7 +73,7 @@ pub struct Chrome<'a> {
     /// `(Buffer::revision, pane width)`. Handed in rather than derived here for
     /// the reason the tokens are: a mermaid routing pass per frame is visible,
     /// not merely wasteful.
-    pub preview: &'a [crime::preview::Row],
+    pub preview: &'a [varde::preview::Row],
 }
 
 pub struct Areas {
@@ -173,7 +173,7 @@ pub fn draw(
             areas.step_menu,
         );
     }
-    // Over the text, not beside it: `crime::fits` has already taken the
+    // Over the text, not beside it: `varde::fits` has already taken the
     // strip's columns out of the count the text is clamped against, so nothing
     // the text was allowed to reach is covered.
     minimap(frame, state, &areas, chrome.tokens);
@@ -400,8 +400,8 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
             branch_lines(&story::branches(refs, filter), filter, *row),
         ),
         // The one thing a restart answers, said out loud: a shell profile is
-        // not this process's environment, and CRIME cannot reach one from
-        // inside itself. So the box says what will happen — CRIME leaves, and
+        // not this process's environment, and Varde cannot reach one from
+        // inside itself. So the box says what will happen — Varde leaves, and
         // starting it again is the reader's — rather than promising to come
         // back (R31.24, Q59).
         Modal::Restart => overlay(
@@ -410,9 +410,9 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
             vec![
                 Line::from("  The command is still not on this process's PATH."),
                 Line::from("  An installer that edited a shell profile cannot be"),
-                Line::from("  seen from here — CRIME inherited its PATH at launch."),
+                Line::from("  seen from here — Varde inherited its PATH at launch."),
                 Line::from(""),
-                Line::from("  (y) quit, so you can start CRIME again    (n) stay"),
+                Line::from("  (y) quit, so you can start Varde again    (n) stay"),
             ],
         ),
         Modal::Diverged => overlay(frame, "DIVERGED", diverged_lines(state)),
@@ -565,7 +565,7 @@ fn border_colour(state: &State, pane: Pane) -> Color {
 /// screen always answers the same question, so the figure lives on the border
 /// rather than in a pane of its own.
 fn tree_title(state: &State) -> String {
-    match crime::risk::border(state) {
+    match varde::risk::border(state) {
         Some(figure) => format!("tree  {figure}"),
         None => "tree".to_string(),
     }
@@ -577,19 +577,19 @@ fn tree_title(state: &State) -> String {
 /// the border for the reason the tree's figure is — the pane is narrow, and
 /// rows inside the borders are for rows.
 fn risk_title(state: &State, width: u16) -> String {
-    use crime::risk::Standing;
+    use varde::risk::Standing;
     // What is left of the border after its two corners and the action icons at
     // the far end. Truncated to it rather than left to overrun: ratatui draws a
     // left-aligned title over a right-aligned one, and a title long enough to
     // reach the icons would leave a stop that can be clicked and not seen.
-    let room = (width as usize).saturating_sub(2 + 2 * crime::risk::pane_actions(state).len());
+    let room = (width as usize).saturating_sub(2 + 2 * varde::risk::pane_actions(state).len());
     let mut title = "risk".to_string();
     // While a loop is running the border is the loop's. The pane is thirty
     // columns wide, so it cannot say both; the figure is in the rows below it
     // and on the tree's border either way, and an unlabelled wait is
     // indistinguishable from a hang.
     if state.refactor.running.is_some() {
-        if let Some(status) = crime::risk::status(state) {
+        if let Some(status) = varde::risk::status(state) {
             title.push_str("  ");
             title.push_str(&status);
         }
@@ -598,13 +598,13 @@ fn risk_title(state: &State, width: u16) -> String {
     // The selected row's file. It is on the border and not in the row because
     // the pane is narrower than a path — which is what buys one ordering rule,
     // worst first across the whole Scope, instead of rows under file headings.
-    if let Some(function) = crime::risk::selected(state) {
+    if let Some(function) = varde::risk::selected(state) {
         title.push_str("  ");
         title.push_str(&function.file);
     }
     // Exhaustive, so a fifth thing the figure can be is a compiler error here
     // rather than a border that quietly says nothing about it.
-    let said = match crime::risk::standing(state) {
+    let said = match varde::risk::standing(state) {
         Standing::Computing => Some("measuring"),
         Standing::Stale => Some("stale"),
         Standing::NothingAnalysed => Some("nothing measured"),
@@ -614,7 +614,7 @@ fn risk_title(state: &State, width: u16) -> String {
         title.push_str("  ");
         title.push_str(said);
     }
-    let unparsed = crime::risk::unparsed(state);
+    let unparsed = varde::risk::unparsed(state);
     if unparsed > 0 {
         title.push_str(&format!("  ·  {unparsed} unparsed"));
     }
@@ -622,7 +622,7 @@ fn risk_title(state: &State, width: u16) -> String {
     // normally says rather than replacing it: `Refactor::stopped` is only
     // cleared by the next start, and a border that hijacked itself for the rest
     // of the session would never name the selected row's file again.
-    if let Some(status) = crime::risk::status(state) {
+    if let Some(status) = varde::risk::status(state) {
         title.push_str("  ·  ");
         title.push_str(&status);
     }
@@ -650,9 +650,9 @@ fn pane_actions_title(state: &State) -> Line<'static> {
     // Lit here too, and not only in the rows: the arrows step past the last row
     // onto these icons (`risk::on_actions`), and an armed action drawn the same
     // grey as the two beside it is a keyboard position nothing on screen shows.
-    let on_them = crime::risk::on_actions(state);
+    let on_them = varde::risk::on_actions(state);
     Line::from(
-        crime::risk::pane_actions(state)
+        varde::risk::pane_actions(state)
             .into_iter()
             .enumerate()
             .flat_map(|(at, action)| {
@@ -692,9 +692,9 @@ fn action_style(state: &State, action: &str, armed: bool) -> Style {
 /// rows name a buffer to switch to, and switching is the whole of what they do.
 fn buffers_widget(state: &State, width: u16) -> Paragraph<'static> {
     let mut title = "buffers".to_string();
-    if let Some(path) = crime::buffer_selected(state) {
+    if let Some(path) = varde::buffer_selected(state) {
         title.push_str("  ");
-        title.push_str(&crime::relative(state, path));
+        title.push_str(&varde::relative(state, path));
     }
     Paragraph::new(buffers_lines(state, width))
         .scroll((state.buffers_scroll as u16, 0))
@@ -710,7 +710,7 @@ fn buffers_widget(state: &State, width: u16) -> Paragraph<'static> {
 /// see what was drawn.
 fn buffers_lines(state: &State, width: u16) -> Vec<Line<'static>> {
     let inner = width.saturating_sub(2) as usize;
-    crime::buffer_list(state)
+    varde::buffer_list(state)
         .into_iter()
         .enumerate()
         .map(|(index, path)| {
@@ -722,11 +722,11 @@ fn buffers_lines(state: &State, width: u16) -> Vec<Line<'static>> {
             let name = path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| crime::relative(state, path));
+                .unwrap_or_else(|| varde::relative(state, path));
             // The same `Mark` and the same `glyph` the dot strip draws: two
             // views of one fact, so a buffer cannot read as unsaved on the
             // editor's bottom edge and merely open here.
-            let (mark, colour) = glyph(crime::mark(state, path));
+            let (mark, colour) = glyph(varde::mark(state, path));
             let room = inner.saturating_sub(2);
             Line::from(vec![
                 Span::styled(mark, selected.fg(colour)),
@@ -758,7 +758,7 @@ fn history_widget(state: &State, width: u16) -> Paragraph<'static> {
 /// `risk_title` is and for the same reason.
 fn history_title(state: &State, width: u16) -> String {
     let mut title = "history".to_string();
-    if let Some(visit) = crime::history::selected(state) {
+    if let Some(visit) = varde::history::selected(state) {
         title.push_str("  ");
         title.push_str(&visit.file);
     }
@@ -777,7 +777,7 @@ fn history_title(state: &State, width: u16) -> String {
 fn history_lines(state: &State, width: u16) -> Vec<Line<'static>> {
     let inner = width.saturating_sub(2) as usize;
     let dark = state.editor_theme != "light";
-    crime::history::list(state)
+    varde::history::list(state)
         .iter()
         .enumerate()
         .map(|(index, visit)| {
@@ -787,7 +787,7 @@ fn history_lines(state: &State, width: u16) -> Vec<Line<'static>> {
                 false => Style::default(),
             };
             let actions = match on_this_row {
-                true => crime::history::row_actions(state),
+                true => varde::history::row_actions(state),
                 false => Vec::new(),
             };
             // The file's name, not its path: the pane is thirty columns wide.
@@ -811,7 +811,7 @@ fn history_lines(state: &State, width: u16) -> Vec<Line<'static>> {
             let excerpt = match left {
                 0 => String::new(),
                 left => truncate(
-                    &crime::history::excerpt(&visit.text, visit.column, crime::history::WORDS),
+                    &varde::history::excerpt(&visit.text, visit.column, varde::history::WORDS),
                     left,
                 ),
             };
@@ -825,7 +825,7 @@ fn history_lines(state: &State, width: u16) -> Vec<Line<'static>> {
                 // syntax-coloured, which is what `CONTEXT.md`'s Stale does to a
                 // Risk figure. Only a file still open can be asked — nothing
                 // here may read the disk.
-                match crime::history::stale(state, visit) {
+                match varde::history::stale(state, visit) {
                     true => spans.push(Span::styled(excerpt.clone(), selected.fg(Color::DarkGray))),
                     false => spans.extend(coloured(&visit.file, &excerpt, dark, on_this_row)),
                 }
@@ -854,14 +854,14 @@ fn history_lines(state: &State, width: u16) -> Vec<Line<'static>> {
 /// its text back.
 fn risk_lines(state: &State, width: u16) -> Vec<Line<'static>> {
     let inner = width.saturating_sub(2) as usize;
-    crime::risk::list(state)
+    varde::risk::list(state)
         .iter()
         .enumerate()
         .map(|(index, function)| {
             // The delta beside the figure in Review view, signed: which part of
             // the change added the risk is the question the rows are there to
             // answer, and the figure alone does not say.
-            let figure = match crime::risk::row_delta(state, function) {
+            let figure = match varde::risk::row_delta(state, function) {
                 Some(delta) => format!("{} {delta:+}", function.metrics.cyclomatic),
                 None => function.metrics.cyclomatic.to_string(),
             };
@@ -878,7 +878,7 @@ fn risk_lines(state: &State, width: u16) -> Vec<Line<'static>> {
             // `mouse::risk_action_at` hit-tests: two per icon, hard against the
             // right-hand border, with the figure shifted left to make room.
             let actions = if on_this_row {
-                crime::risk::row_actions(state)
+                varde::risk::row_actions(state)
             } else {
                 Vec::new()
             };
@@ -952,7 +952,7 @@ fn tree_lines(state: &State, rows: &[Row], width: u16) -> Vec<Line<'static>> {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let (icon, kind) = crime::tree::icon(&name, row.is_dir, row.expanded);
+            let (icon, kind) = varde::tree::icon(&name, row.is_dir, row.expanded);
             // What is open, shown in the list of files you already have.
             let (glyph, mark_colour) = glyph(mark(state, &row.path));
             let mut style = if row.dimmed {
@@ -1107,7 +1107,7 @@ fn review_lines(state: &State, rows: &[tree::Row], width: u16) -> Vec<Line<'stat
     };
     rows.iter()
         .map(|row| {
-            let name = crime::relative(state, &row.path);
+            let name = varde::relative(state, &row.path);
             // Without this you cannot see which file you are on, which reads as
             // selection not working at all.
             let style = match state.tree_selection.as_deref() == Some(row.path.as_path()) {
@@ -1177,7 +1177,7 @@ fn review_title(state: &State) -> String {
 /// Where the branch picker left the reviewer, said on the pane's border rather
 /// than as a row of the spine: the spine's rows are hit-tested by index
 /// (`story::title_rows`), so a line added there is a click landing on the wrong
-/// Story. Both branches, because CRIME does not check the original one back out
+/// Story. Both branches, because Varde does not check the original one back out
 /// — see [`State::left_branch`].
 fn story_title(state: &State) -> String {
     let Some(left) = &state.left_branch else {
@@ -1233,7 +1233,7 @@ fn spine_widget(state: &State) -> Paragraph<'static> {
             "This story set's range no longer resolves.\nRe-author it to walk it.".to_string()
         }
         story::Set::NoDefaultBranch => {
-            "Nothing to resolve `:story` against.\nCRIME could not find a default branch offline."
+            "Nothing to resolve `:story` against.\nVarde could not find a default branch offline."
                 .to_string()
         }
         story::Set::BadRange => "That range does not resolve.\nCheck the spelling.".to_string(),
@@ -1248,12 +1248,12 @@ fn spine_widget(state: &State) -> Paragraph<'static> {
                 .to_string()
         }
         story::Set::GuestNeedsBareWorkspace => {
-            "This workspace is a project.\nRun `crime` with no folder to review a repository \
+            "This workspace is a project.\nRun `varde` with no folder to review a repository \
              that is not on this machine."
                 .to_string()
         }
         story::Set::NoGit => {
-            "Cloning needs `git` on this machine.\nCRIME clones with your own git so your SSH \
+            "Cloning needs `git` on this machine.\nVarde clones with your own git so your SSH \
              config works."
                 .to_string()
         }
@@ -1466,7 +1466,7 @@ fn editor_widget(
     command: Option<&str>,
     tokens: &[Vec<highlight::Token>],
     diff_sides: (&[Vec<highlight::Token>], &[Vec<highlight::Token>]),
-    preview: &[crime::preview::Row],
+    preview: &[varde::preview::Row],
     width: u16,
 ) -> Paragraph<'static> {
     // Both of these substitute the whole drawing of the editor's rectangle
@@ -1502,7 +1502,7 @@ fn editor_widget(
     let title = buffer_title(
         &name,
         buffer,
-        crime::mode_label(state, buffer),
+        varde::mode_label(state, buffer),
         title_room(state, width),
     );
     // Half-typed commands and the cursor position sit along the bottom edge,
@@ -1515,13 +1515,13 @@ fn editor_widget(
     // The Preview's own pair while it is showing: a source line and column
     // reported over rendered text names a place that is not on screen, which
     // [`preview_widget`] has always said it does not do.
-    let (line, column) = if crime::previewing(state) {
+    let (line, column) = if varde::previewing(state) {
         (buffer.row, buffer.row_column)
     } else {
         (buffer.line, buffer.column)
     };
     footer.push(Span::styled(
-        crime::mouse::position_label(line, column),
+        varde::mouse::position_label(line, column),
         Style::default().fg(Color::Cyan),
     ));
     footer.extend(refusal_spans(state));
@@ -1535,7 +1535,7 @@ fn editor_widget(
         ));
     }
 
-    if crime::previewing(state) {
+    if varde::previewing(state) {
         return preview_widget(state, command, title, footer, preview, width);
     }
 
@@ -1565,7 +1565,7 @@ fn editor_widget(
     // fall on this row are all this needs.
     let pair = buffer.bracket_pair();
     for (index, line) in lines.iter_mut().enumerate() {
-        let row: &[crime::editor::Guide] = guides.get(index).map_or(&[], Vec::as_slice);
+        let row: &[varde::editor::Guide] = guides.get(index).map_or(&[], Vec::as_slice);
         let marks: Vec<usize> = pair
             .iter()
             .flat_map(|(from, to)| [from, to])
@@ -1581,7 +1581,7 @@ fn editor_widget(
     let word = buffer
         .word_at_cursor()
         .map_or(0, |word| word.chars().count());
-    for at in crime::word_occurrences(state) {
+    for at in varde::word_occurrences(state) {
         let Some(line) = lines.get_mut(at.line - 1) else {
             continue;
         };
@@ -1603,7 +1603,7 @@ fn editor_widget(
     // Every other place the picked word is used, quieter than the pick and under
     // both it and the search marks: an echo is a hint about the file, not a
     // second selection.
-    let echoed = crime::echoes(state);
+    let echoed = varde::echoes(state);
     if let Some(word) = state.selected_text().filter(|_| !echoed.is_empty()) {
         let width = word.chars().count();
         for at in echoed {
@@ -1623,7 +1623,7 @@ fn editor_widget(
     // the count is visible without walking them. Under the selection, so the
     // match being stepped to still reads as picked.
     let matched = state.find_query.chars().count();
-    for at in crime::matches(state) {
+    for at in varde::matches(state) {
         let Some(line) = lines.get_mut(at.line - 1) else {
             continue;
         };
@@ -1662,7 +1662,7 @@ fn editor_widget(
     );
     // The whole affordance a link has: a terminal has no hand pointer to turn
     // the mouse into, so the underline is what says a click here jumps.
-    if let Some((line, from, to)) = crime::link(state) {
+    if let Some((line, from, to)) = varde::link(state) {
         if let Some(row) = lines.get_mut(line - 1) {
             *row = picked(
                 row,
@@ -1684,7 +1684,7 @@ fn editor_widget(
     // change bar is the quietest of the three, since the change is already on
     // the line. The wash goes on either way, so the passage is still whole.
     let spoken = reading::mark(state);
-    let changed = crime::changed_lines(state);
+    let changed = varde::changed_lines(state);
     for (index, line) in lines.iter_mut().enumerate() {
         let number = index + 1;
         let reading = spoken.is_some_and(|(from, to)| number >= from && number <= to);
@@ -1711,7 +1711,7 @@ fn editor_widget(
 /// Four source columns and two source lines to a cell, drawn as a dot: a
 /// bullet where both lines hold ink, a middle dot where one does. Why a dot
 /// rather than a block, and why these two glyphs rather than braille, is
-/// argued in `crime::minimap` — it is the difference between a miniature and a
+/// argued in `varde::minimap` — it is the difference between a miniature and a
 /// wall of slabs.
 ///
 /// One colour per cell, the upper line's where it has ink: a cell has one
@@ -1728,7 +1728,7 @@ fn editor_widget(
 /// there is to spend, and the mirror keeps the editor's own background
 /// everywhere else.
 fn minimap(frame: &mut Frame, state: &State, areas: &Areas, tokens: &[Vec<highlight::Token>]) {
-    let fits = crime::fits(state).1;
+    let fits = varde::fits(state).1;
     let dark = state.editor_theme != "light";
     let area = areas.minimap;
     if let Some((first, _)) = minimap::mirrored(state) {
@@ -1839,8 +1839,8 @@ fn minimap(frame: &mut Frame, state: &State, areas: &Areas, tokens: &[Vec<highli
 /// mark too — the bar is in the column before, which is what the seventh gutter
 /// column was for.
 fn folded(lines: Vec<Line<'static>>, state: &State) -> Vec<Line<'static>> {
-    let hidden = crime::fold::hidden(state);
-    let toggles = crime::fold::toggles(state);
+    let hidden = varde::fold::hidden(state);
+    let toggles = varde::fold::toggles(state);
     if hidden.is_empty() && toggles.is_empty() {
         return lines;
     }
@@ -1871,13 +1871,13 @@ pub const DOTS: &str = "⋯";
 fn with_toggle(
     line: &Line<'static>,
     number: usize,
-    toggle: crime::fold::Toggle,
+    toggle: varde::fold::Toggle,
     dark: bool,
 ) -> Line<'static> {
     let glyph = Span::styled(
         match toggle {
-            crime::fold::Toggle::Folded => "►",
-            crime::fold::Toggle::Open => "▼",
+            varde::fold::Toggle::Folded => "►",
+            varde::fold::Toggle::Open => "▼",
         },
         Style::default().fg(Color::Cyan),
     );
@@ -1903,7 +1903,7 @@ fn with_toggle(
     } else {
         return line.clone();
     };
-    if toggle == crime::fold::Toggle::Folded {
+    if toggle == varde::fold::Toggle::Folded {
         spans.push(Span::styled(DOTS, dots_style(dark)));
     }
     Line::from(spans)
@@ -1985,7 +1985,7 @@ fn washed(line: &Line<'static>, colour: Color) -> Line<'static> {
     )
 }
 
-/// A Preview: the rows [`crime::preview_rows`] laid out, with no line-number
+/// A Preview: the rows [`varde::preview_rows`] laid out, with no line-number
 /// gutter — a Preview's rows are not lines, so five columns naming numbers the
 /// reader cannot act on would be five columns not spent on the document.
 ///
@@ -1998,20 +1998,20 @@ fn preview_widget(
     command: Option<&str>,
     title: Line<'static>,
     footer: Vec<Span<'static>>,
-    rows: &[crime::preview::Row],
+    rows: &[varde::preview::Row],
     width: u16,
 ) -> Paragraph<'static> {
     let dark = state.editor_theme != "light";
-    let columns = crime::preview_columns(state);
+    let columns = varde::preview_columns(state);
     let mut lines: Vec<Line> = rows
         .iter()
         .map(|row| preview_line(row, dark, columns))
         .collect();
     // Every match of what `/` looked for, painted on the row it is in — the
     // same highlight Source draws, over rows rather than lines, since
-    // `crime::matches` already answers in row coordinates while previewing.
+    // `varde::matches` already answers in row coordinates while previewing.
     let matched = state.find_query.chars().count();
-    for at in crime::matches(state) {
+    for at in varde::matches(state) {
         let Some(line) = lines.get_mut(at.line - 1) else {
             continue;
         };
@@ -2065,12 +2065,12 @@ fn preview_widget(
 /// row is blank" is how a server saying nothing is told from a server saying
 /// something, and find-in-file, the word motions and drag-copy all read it. A
 /// bar of `─` in all of those is a rule that has become text.
-fn preview_line(row: &crime::preview::Row, dark: bool, columns: usize) -> Line<'static> {
-    if row.kind == crime::preview::RowKind::Rule {
+fn preview_line(row: &varde::preview::Row, dark: bool, columns: usize) -> Line<'static> {
+    if row.kind == varde::preview::RowKind::Rule {
         return Line::from(Span::styled("─".repeat(columns), row_style(row.kind, dark)));
     }
     let mut spans = Vec::new();
-    if let crime::preview::RowKind::List(item) = row.kind {
+    if let varde::preview::RowKind::List(item) = row.kind {
         spans.push(Span::styled(list_prefix(item), row_style(row.kind, dark)));
     }
     spans.extend(
@@ -2087,8 +2087,8 @@ fn preview_line(row: &crime::preview::Row, dark: bool, columns: usize) -> Line<'
 /// numbers gone. A row past the item's first carries no marker (the wrapped
 /// remainder, a loose paragraph), and indents to where its text started rather
 /// than repeating the bullet.
-fn list_prefix(item: crime::preview::ListItem) -> String {
-    use crime::preview::Marker;
+fn list_prefix(item: varde::preview::ListItem) -> String {
+    use varde::preview::Marker;
     let marker = match item.marker {
         Some(Marker::Bullet) => "\u{2022} ".to_string(),
         Some(Marker::Ordinal(ordinal)) => format!("{ordinal}. "),
@@ -2104,8 +2104,8 @@ fn list_prefix(item: crime::preview::ListItem) -> String {
 /// weight, the colour and the glyph here. Every arm is named rather than caught
 /// by a `_`, so the ticket that starts producing one of the kinds below has to
 /// decide what it looks like instead of inheriting prose.
-fn row_style(kind: crime::preview::RowKind, dark: bool) -> Style {
-    use crime::preview::RowKind;
+fn row_style(kind: varde::preview::RowKind, dark: bool) -> Style {
+    use varde::preview::RowKind;
     // Prose is not an identifier, so it does not borrow `Kind::Plain`'s blue —
     // it is the editor foreground the code around it is punctuated with.
     let plain = Style::default().fg(match dark {
@@ -2148,7 +2148,7 @@ fn heading_style(level: pulldown_cmark::HeadingLevel, plain: Style) -> Style {
 /// colour for the same kind of file, and italic, strong and struck are
 /// `ratatui`'s modifiers directly rather than a colour, since none of the
 /// three is a colour decision.
-fn piece_style(kind: crime::preview::RowKind, dark: bool, piece: &crime::preview::Piece) -> Style {
+fn piece_style(kind: varde::preview::RowKind, dark: bool, piece: &varde::preview::Piece) -> Style {
     let emphasis = piece.emphasis;
     let mut style = row_style(kind, dark);
     if emphasis.italic {
@@ -2184,13 +2184,13 @@ fn refusal_spans(state: &State) -> Vec<Span<'static>> {
         return Vec::new();
     };
     let wording = match refusal {
-        crime::preview::Refusal::NotMarkdown => " not markdown — :preview reads .md ".to_string(),
-        crime::preview::Refusal::NoFileOpen => " no file open ".to_string(),
-        crime::preview::Refusal::ReadOnlyPreview => " preview — :preview to edit ".to_string(),
-        crime::preview::Refusal::GuestReadOnly => " read-only — not your repository ".to_string(),
-        crime::preview::Refusal::ToolAlreadyInstalled => " already installed ".to_string(),
-        crime::preview::Refusal::BrokenConfig(error) => format!(" {error} "),
-        crime::preview::Refusal::NeedsInstaller(installer) => {
+        varde::preview::Refusal::NotMarkdown => " not markdown — :preview reads .md ".to_string(),
+        varde::preview::Refusal::NoFileOpen => " no file open ".to_string(),
+        varde::preview::Refusal::ReadOnlyPreview => " preview — :preview to edit ".to_string(),
+        varde::preview::Refusal::GuestReadOnly => " read-only — not your repository ".to_string(),
+        varde::preview::Refusal::ToolAlreadyInstalled => " already installed ".to_string(),
+        varde::preview::Refusal::BrokenConfig(error) => format!(" {error} "),
+        varde::preview::Refusal::NeedsInstaller(installer) => {
             format!(" {installer} is not installed — install.sh installs package managers ")
         }
     };
@@ -2207,7 +2207,7 @@ fn refusal_spans(state: &State) -> Vec<Span<'static>> {
 /// binding they need at exactly the moment they are about to lose work.
 fn buffer_title(
     name: &str,
-    buffer: &crime::editor::Buffer,
+    buffer: &varde::editor::Buffer,
     mode: &str,
     room: usize,
 ) -> Line<'static> {
@@ -2257,7 +2257,7 @@ fn right_title(state: &State, room: usize) -> Line<'static> {
         clause => vec![Span::styled(clause, Style::default().fg(Color::DarkGray))],
     };
     spans.extend(
-        crime::reading::transport(state)
+        varde::reading::transport(state)
             .into_iter()
             .flat_map(|(control, glyph)| {
                 // Lit under the pointer, exactly as a row's action icons are:
@@ -2277,20 +2277,20 @@ fn right_title(state: &State, room: usize) -> Line<'static> {
 /// F40. Who last committed the line the cursor is on, and the day they wrote
 /// it, drawn dimmed on the top border to the left of the Transport — or that
 /// nobody has committed it yet. Empty whenever
-/// [`crime::authorship::at_cursor`] has nothing to say.
+/// [`varde::authorship::at_cursor`] has nothing to say.
 ///
 /// The name is what gives when the border runs out of room: the date is ten
 /// columns whatever the commit, and a name cut short still says which hand,
 /// while a date cut short says the wrong day.
 fn authorship_clause(state: &State, room: usize) -> String {
-    let Some(authorship) = crime::authorship::at_cursor(state) else {
+    let Some(authorship) = varde::authorship::at_cursor(state) else {
         return String::new();
     };
     let (who, when) = match &authorship {
-        crime::authorship::Authorship::Committed(authored) => {
+        varde::authorship::Authorship::Committed(authored) => {
             (authored.author.as_str(), format!("  {}", authored.date))
         }
-        crime::authorship::Authorship::NotCommittedYet => ("Not committed yet", String::new()),
+        varde::authorship::Authorship::NotCommittedYet => ("Not committed yet", String::new()),
     };
     // One space each side, so the clause is not against a corner or against the
     // first control — the reason the Transport keeps a column of air too.
@@ -2307,7 +2307,7 @@ fn authorship_clause(state: &State, room: usize) -> String {
 /// border to give, and a pane too narrow for both says nothing about who wrote
 /// the line rather than nothing about which file it is in.
 fn title_room(state: &State, width: u16) -> usize {
-    let labels: Vec<String> = crime::reading::transport(state)
+    let labels: Vec<String> = varde::reading::transport(state)
         .into_iter()
         .map(|(_, glyph)| glyph)
         .collect();
@@ -2333,7 +2333,7 @@ fn title_room(state: &State, width: u16) -> usize {
 /// `layout::gutter` answers for the caret and the hit-test.
 fn paint_drag(
     lines: &mut [Line<'static>],
-    span: Option<(crime::Place, crime::Place)>,
+    span: Option<(varde::Place, varde::Place)>,
     occurrences: &[Place],
     has_gutter: bool,
 ) {
@@ -2459,9 +2459,9 @@ fn spans(tokens: &[highlight::Token], dark: bool) -> Vec<Span<'static>> {
 /// rows rather than lines, and a bright number on one of those would point at
 /// a line nobody is on.
 fn cursor_line(state: &State) -> Option<usize> {
-    match state.diff.is_some() || crime::previewing(state) {
+    match state.diff.is_some() || varde::previewing(state) {
         true => None,
-        false => crime::current_buffer(state).map(|buffer| buffer.line),
+        false => varde::current_buffer(state).map(|buffer| buffer.line),
     }
 }
 
@@ -2604,7 +2604,7 @@ fn story_widget(
         .filter(|_| !refused)
     {
         footer.push(Span::styled(
-            crime::mouse::position_label(buffer.line, buffer.column),
+            varde::mouse::position_label(buffer.line, buffer.column),
             Style::default().fg(Color::Cyan),
         ));
     }
@@ -2616,7 +2616,7 @@ fn story_widget(
         Some(buffer) => buffer_title(
             &name,
             buffer,
-            crime::mode_label(state, buffer),
+            varde::mode_label(state, buffer),
             title_room(state, width),
         ),
         None => name.into(),
@@ -2864,10 +2864,10 @@ fn over_buffer_line(
     frame: &mut Frame,
     state: &State,
     area: Rect,
-    placement: crime::lsp::Placement,
+    placement: varde::lsp::Placement,
     lines: Vec<Line>,
 ) {
-    let crime::lsp::Placement {
+    let varde::lsp::Placement {
         from,
         column,
         width: widest,
@@ -2889,7 +2889,7 @@ fn over_buffer_line(
     // screen; it no longer decides where the box goes.
     let across = column.saturating_sub(1 + state.editor_hscroll) as u16;
     let spot = Rect {
-        x: (area.x + crime::gutter(state) + across).min(screen.width.saturating_sub(width)),
+        x: (area.x + varde::gutter(state) + across).min(screen.width.saturating_sub(width)),
         y: (area.y + 1 + row).min(area.bottom().saturating_sub(height)),
         width,
         height,
@@ -2955,7 +2955,7 @@ fn editor_block(
 /// side that *can* be read.
 fn diff_rows(
     state: &State,
-    diff: &[crime::DiffLine],
+    diff: &[varde::DiffLine],
     file: &str,
     new_side: &[Vec<highlight::Token>],
     old_side: &[Vec<highlight::Token>],
@@ -2970,7 +2970,7 @@ fn diff_rows(
         // is an addition. Both are `removed: false`, which is why the old
         // side's number is what separates them.
         //
-        // The dark tints are the one place CRIME picks a colour outside the
+        // The dark tints are the one place Varde picks a colour outside the
         // 256-cube: the cube's own dark red and green (52 and 22) are its
         // saturated primaries, and a whole row of code sitting on one is what
         // made a reviewed file unreadable. There is no cube entry between them
@@ -3077,7 +3077,7 @@ fn changed_row(
 /// A read-only unified diff.
 fn diff_widget(
     state: &State,
-    diff: &[crime::DiffLine],
+    diff: &[varde::DiffLine],
     file: &str,
     new_side: &[Vec<highlight::Token>],
     old_side: &[Vec<highlight::Token>],
@@ -3125,7 +3125,7 @@ fn caret_at(state: &State) -> Option<(usize, usize)> {
         // A Preview's cursor is a row and a **rendered** column — a column of
         // exactly what is drawn, so the caret sits on the character the reader
         // is pointing at rather than at the start of the row.
-        (None, Some(path)) if crime::previewing(state) => state
+        (None, Some(path)) if varde::previewing(state) => state
             .buffers
             .get(path)
             .map(|buffer| (buffer.row, buffer.row_column)),
@@ -3174,7 +3174,7 @@ fn place_cursor(frame: &mut Frame, state: &State, areas: &Areas, command: Option
     let Some(column) = column.checked_sub(1 + state.editor_hscroll) else {
         return;
     };
-    let x = areas.editor.x + 1 + crime::gutter(state) + column as u16;
+    let x = areas.editor.x + 1 + varde::gutter(state) + column as u16;
     let y = areas.editor.y + 1 + row as u16;
     if x < areas.editor.right().saturating_sub(1) && y < areas.editor.bottom().saturating_sub(1) {
         frame.set_cursor_position((x, y));
@@ -3234,7 +3234,7 @@ fn glyph(mark: Mark) -> (&'static str, Color) {
 /// lines of a file the only ones without dots.
 fn guided(
     line: &Line<'static>,
-    guides: &[crime::editor::Guide],
+    guides: &[varde::editor::Guide],
     brackets: &[usize],
     dim: Color,
     lit: Color,
@@ -3245,7 +3245,7 @@ fn guided(
     // line drawn with more weight, not a different kind of line. Heavy box
     // rather than the BOLD attribute, which a terminal is free to ignore on a
     // glyph like this one.
-    let glyph = |guide: &crime::editor::Guide| {
+    let glyph = |guide: &varde::editor::Guide| {
         let (character, ink) = match guide.active {
             true => ("\u{2503}", lit),
             false => ("\u{2502}", dim),
@@ -3374,7 +3374,7 @@ fn colour(kind: Kind, dark: bool) -> Color {
         // scopes a local, a parameter or an object key as `variable`, so every
         // name in a file lands here. White is what made a whole buffer read as
         // brighter than its keywords; this is Dark+'s variable colour, which is
-        // what the name in an editor beside CRIME is drawn in.
+        // what the name in an editor beside Varde is drawn in.
         (Kind::Plain, true) => Color::Rgb(0x9c, 0xdc, 0xfe),
         (Kind::Plain, false) => Color::Rgb(0x00, 0x10, 0x80),
     }
@@ -3491,8 +3491,8 @@ fn start_ai_widget(state: &State, draft: &str) -> Paragraph<'static> {
 /// the other half, which meant every kind added had to be named twice — once for
 /// its colour and once in an `unreachable!` arm — and put a runtime panic where
 /// the compiler's exhaustiveness check belongs.
-fn icon_colour(kind: crime::tree::IconKind) -> Color {
-    use crime::tree::IconKind as Kind;
+fn icon_colour(kind: varde::tree::IconKind) -> Color {
+    use varde::tree::IconKind as Kind;
     match kind {
         Kind::Directory => Color::Rgb(0x90, 0xa4, 0xae),
         Kind::Source => Color::Rgb(0x4c, 0xaf, 0x50),
@@ -3537,11 +3537,11 @@ fn action_icon(action: &str) -> &'static str {
         "go-here" => "\u{f0a9}",
         "copy-path" => "\u{f0c5}",
         "search-here" => "\u{f002}",
-        crime::history::GO_TO => "\u{f0a9}",
-        crime::risk::REFACTOR => "\u{f0ad}",
-        crime::risk::RECOMPUTE => "\u{f021}",
-        crime::risk::START_LOOP => "\u{f04b}",
-        crime::risk::STOP_LOOP => "\u{f04d}",
+        varde::history::GO_TO => "\u{f0a9}",
+        varde::risk::REFACTOR => "\u{f0ad}",
+        varde::risk::RECOMPUTE => "\u{f021}",
+        varde::risk::START_LOOP => "\u{f04b}",
+        varde::risk::STOP_LOOP => "\u{f04d}",
         _ => "\u{f1f8}",
     }
 }
@@ -3621,7 +3621,7 @@ fn comment_lines(state: &State, chrome: &Chrome) -> Vec<Line<'static>> {
 /// A line drawn with a caret on the character at a 1-based column: the
 /// character stays and is *reversed*, rather than being replaced by a block.
 ///
-/// Every other caret in CRIME sits past the end of what was typed — the name
+/// Every other caret in Varde sits past the end of what was typed — the name
 /// box's, the search box's — so a block glued on hides nothing. This is the
 /// first that can sit mid-text, and a block drawn over a character is a
 /// character the writer can no longer read: moving back four words to fix a
@@ -3660,7 +3660,7 @@ fn search_screen(frame: &mut Frame, state: &State) {
     let results = &search.results;
     let dark = state.editor_theme != "light";
     let hits = results.hits.len();
-    let files = crime::search::files(results).len();
+    let files = varde::search::files(results).len();
     // A scoped search that finds nothing has to say why it looked nowhere else,
     // or "0 hits" reads as "not in this project".
     let scope = match search.scope.as_deref() {
@@ -3676,7 +3676,7 @@ fn search_screen(frame: &mut Frame, state: &State) {
             if files == 1 { "" } else { "s" }
         )
     };
-    let completion = crime::search::completion(&search.query, results)
+    let completion = varde::search::completion(&search.query, results)
         .map(|word| word[search.query.len().min(word.len())..].to_string())
         .unwrap_or_default();
 
@@ -3716,16 +3716,16 @@ fn search_screen(frame: &mut Frame, state: &State) {
 
     // The rows the scroll was clamped against, so the box draws exactly what
     // the clamp measured.
-    let list: Vec<Line> = crime::search::rows(results)
+    let list: Vec<Line> = varde::search::rows(results)
         .into_iter()
         .map(|row| match row {
-            crime::search::Row::File(file) => Line::from(Span::styled(
+            varde::search::Row::File(file) => Line::from(Span::styled(
                 format!(" {file}"),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )),
-            crime::search::Row::Hit(index) => {
+            varde::search::Row::Hit(index) => {
                 let hit = &results.hits[index];
                 let mut spans = vec![Span::styled(
                     format!("{:>6} ", hit.line),
@@ -3823,7 +3823,7 @@ fn tool_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>>
             tools::Origin::Template | tools::Origin::Own => "",
         };
         let gap = format!("{says}{differs}");
-        // The row the install key acts on, marked where every list in CRIME
+        // The row the install key acts on, marked where every list in Varde
         // marks it. Nothing else distinguishes it: a box this narrow spends its
         // columns on the command.
         let cursor = match index == selected {
@@ -3859,7 +3859,7 @@ fn tool_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>>
 }
 
 /// The branch picker: one row per branch, newest first, with the row Enter acts
-/// on marked where every list in CRIME marks it, over the footer naming the two
+/// on marked where every list in Varde marks it, over the footer naming the two
 /// keys the list answers.
 fn branch_lines(names: &[String], filter: &str, selected: usize) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = names
@@ -3901,7 +3901,7 @@ fn branch_lines(names: &[String], filter: &str, selected: usize) -> Vec<Line<'st
     lines
 }
 
-/// The rows `crime::palette_rows` built, with the headings dimmed: a heading
+/// The rows `varde::palette_rows` built, with the headings dimmed: a heading
 /// offers no key, so it must not read as one. The screen's height goes in
 /// because the row count depends on it — the same number the mouse hit-test
 /// passes, since the two must be handed the same vector.
@@ -4004,7 +4004,7 @@ mod tests {
         Color, Kind, Line, Modifier, Place, Selection, Span, State, Style, Tone, UnicodeWidthStr,
         DIRTY, DOTS, WARNING,
     };
-    use crime::risk::{Figure, Figures, Function, Metrics};
+    use varde::risk::{Figure, Figures, Function, Metrics};
 
     /// F40's exact wording, which no scenario asserts: the hand that wrote the
     /// line and the day it did, two columns apart and one clear of the border
@@ -4020,14 +4020,14 @@ mod tests {
         state.current_buffer = Some(path.clone());
         state.buffers.insert(
             path.clone(),
-            crime::editor::Buffer::open("fn main() {}\n", false, 4),
+            varde::editor::Buffer::open("fn main() {}\n", false, 4),
         );
         state
             .committed
             .insert(path.clone(), Some("fn main() {}\n".to_string()));
         state.authorship.insert(
             path.clone(),
-            vec![crime::authorship::Authored {
+            vec![varde::authorship::Authored {
                 author: "Ada Lovelace".to_string(),
                 date: "2026-01-05".to_string(),
             }],
@@ -4074,13 +4074,13 @@ mod tests {
         assert!(text(branch_lines(&["main".to_string()], "", 0))
             .contains(&"   type to filter".to_string()));
     }
-    use crime::tree::{IconKind, Row};
-    use crime::{DiffLine, Event};
+    use varde::tree::{IconKind, Row};
+    use varde::{DiffLine, Event};
 
     /// The one promise the border carries: after a pick it says where the
     /// reviewer is *and* where they were, and where they are comes off the poll
     /// — so a branch changed in the terminal pane changes the title rather than
-    /// leaving it claiming the branch CRIME chose.
+    /// leaving it claiming the branch Varde chose.
     #[test]
     fn the_story_border_names_the_branch_the_poll_last_read() {
         assert_eq!(story_title(&State::default()), "story");
@@ -4089,7 +4089,7 @@ mod tests {
         state.branch = Some("feature".to_string());
         assert_eq!(story_title(&state), "story  on feature (was main)");
         // The poll, not the pick: a `git switch` in the terminal pane is a
-        // branch change CRIME did not make and must not go on denying.
+        // branch change Varde did not make and must not go on denying.
         state.branch = Some("something-else".to_string());
         assert_eq!(story_title(&state), "story  on something-else (was main)");
     }
@@ -4208,13 +4208,13 @@ mod tests {
         let state = measured();
         let area = ratatui::layout::Rect::new(0, 0, 30, 4);
         let mut buffer = ratatui::buffer::Buffer::empty(area);
-        super::pane_block("risk", &state, crime::Pane::Risk)
+        super::pane_block("risk", &state, varde::Pane::Risk)
             .title(pane_actions_title(&state))
             .render(area, &mut buffer);
         let top: Vec<String> = (0..30)
             .map(|column| buffer[(column, 0)].symbol().to_string())
             .collect();
-        let icons: Vec<String> = crime::risk::pane_actions(&state)
+        let icons: Vec<String> = varde::risk::pane_actions(&state)
             .into_iter()
             .flat_map(|action| [super::action_icon(action).to_string(), " ".to_string()])
             .collect();
@@ -4228,13 +4228,13 @@ mod tests {
         // keyboard is as well.
         assert_eq!(buffer[(25, 0)].style().fg, Some(Color::DarkGray));
         let mut armed = state;
-        armed.focus = crime::Pane::Risk;
+        armed.focus = varde::Pane::Risk;
         // Past both rows: the pane's actions.
         armed.risk_selection = 2;
         armed.selected_action = Some(1);
-        assert!(crime::risk::on_actions(&armed));
+        assert!(varde::risk::on_actions(&armed));
         let mut buffer = ratatui::buffer::Buffer::empty(area);
-        super::pane_block("risk", &armed, crime::Pane::Risk)
+        super::pane_block("risk", &armed, varde::Pane::Risk)
             .title(pane_actions_title(&armed))
             .render(area, &mut buffer);
         assert_eq!(buffer[(25, 0)].style().fg, Some(Color::DarkGray));
@@ -4246,9 +4246,9 @@ mod tests {
         let mut on_a_row = armed;
         on_a_row.risk_selection = 0;
         on_a_row.selected_action = Some(0);
-        assert!(!crime::risk::on_actions(&on_a_row));
+        assert!(!varde::risk::on_actions(&on_a_row));
         let mut buffer = ratatui::buffer::Buffer::empty(area);
-        super::pane_block("risk", &on_a_row, crime::Pane::Risk)
+        super::pane_block("risk", &on_a_row, varde::Pane::Risk)
             .title(pane_actions_title(&on_a_row))
             .render(area, &mut buffer);
         assert_eq!(buffer[(25, 0)].style().fg, Some(Color::DarkGray));
@@ -4276,7 +4276,7 @@ mod tests {
         let top: Vec<String> = (0..40)
             .map(|column| buffer[(column, 0)].symbol().to_string())
             .collect();
-        let controls = crime::reading::transport(&state);
+        let controls = varde::reading::transport(&state);
         let labels: Vec<String> = controls.iter().map(|(_, glyph)| glyph.clone()).collect();
         let drawn: Vec<String> = labels
             .join(" ")
@@ -4319,14 +4319,14 @@ mod tests {
         state.current_buffer = Some(path.clone());
         state.buffers.insert(
             path.clone(),
-            crime::editor::Buffer::open("# Guide\n", false, 4),
+            varde::editor::Buffer::open("# Guide\n", false, 4),
         );
         state
             .committed
             .insert(path.clone(), Some("# Guide\n".to_string()));
         state.authorship.insert(
             path,
-            vec![crime::authorship::Authored {
+            vec![varde::authorship::Authored {
                 author: "Ada Lovelace".to_string(),
                 date: "2026-01-05".to_string(),
             }],
@@ -4340,7 +4340,7 @@ mod tests {
             let mut buffer = ratatui::buffer::Buffer::empty(area);
             let title = buffer_title(
                 name,
-                &crime::editor::Buffer::open("x", false, 4),
+                &varde::editor::Buffer::open("x", false, 4),
                 "normal",
                 title_room(state, 80),
             );
@@ -4388,7 +4388,7 @@ mod tests {
             .borders(Borders::ALL)
             .title(buffer_title(
                 name,
-                &crime::editor::Buffer::open("x", false, 4),
+                &varde::editor::Buffer::open("x", false, 4),
                 "normal",
                 title_room(&state, 40),
             ))
@@ -4415,11 +4415,11 @@ mod tests {
         use ratatui::widgets::Widget;
         let mut state = measured();
         state.max_iterations = 3;
-        state.refactor.running = Some(crime::risk::Iteration {
-            scope: crime::risk::Scope::Workspace,
+        state.refactor.running = Some(varde::risk::Iteration {
+            scope: varde::risk::Scope::Workspace,
             number: 1,
             test_command: "cargo test".to_string(),
-            wait: crime::risk::Wait::Session,
+            wait: varde::risk::Wait::Session,
             before: Some(Figures::default()),
         });
         let area = ratatui::layout::Rect::new(0, 0, 30, 4);
@@ -4433,8 +4433,8 @@ mod tests {
             top[25..29].concat(),
             format!(
                 "{} {} ",
-                super::action_icon(crime::risk::RECOMPUTE),
-                super::action_icon(crime::risk::STOP_LOOP)
+                super::action_icon(varde::risk::RECOMPUTE),
+                super::action_icon(varde::risk::STOP_LOOP)
             ),
             "{top:?}"
         );
@@ -4451,7 +4451,7 @@ mod tests {
         let mut state = State::default();
         state.root = std::path::PathBuf::from("/w");
         for name in ["src/one.rs", "src/two.rs"] {
-            state = crime::update(
+            state = varde::update(
                 &state,
                 Event::BufferOpened {
                     path: state.root.join(name),
@@ -4470,7 +4470,7 @@ mod tests {
         let dots = super::dot_spans(&state);
         let rows = super::buffers_lines(&state, 30);
         assert_eq!(rows.len(), 2);
-        for (index, path) in crime::buffer_list(&state).into_iter().enumerate() {
+        for (index, path) in varde::buffer_list(&state).into_iter().enumerate() {
             let dot = &dots[index * 2];
             let mark = &rows[index].spans[0];
             assert_eq!((&mark.content, mark.style.fg), (&dot.content, dot.style.fg));
@@ -4501,7 +4501,7 @@ mod tests {
         let state = measured();
         let line = risk_lines(&state, 30).remove(state.risk_selection);
         assert_eq!(
-            crime::risk::row_actions(&state).len(),
+            varde::risk::row_actions(&state).len(),
             1,
             "one action, so one two-column cell"
         );
@@ -4521,7 +4521,7 @@ mod tests {
     fn the_history_row_fills_the_columns_its_action_is_hit_tested_from() {
         let mut state = State::default();
         state.root = std::path::PathBuf::from("/w");
-        state.visits = vec![crime::history::Visit {
+        state.visits = vec![varde::history::Visit {
             file: "src/editor.rs".to_string(),
             line: 29,
             column: 1,
@@ -4530,7 +4530,7 @@ mod tests {
         state.history_selection = 0;
         let line = super::history_lines(&state, 30).remove(0);
         assert_eq!(
-            crime::history::row_actions(&state).len(),
+            varde::history::row_actions(&state).len(),
             1,
             "one action, so one two-column cell"
         );
@@ -4558,7 +4558,7 @@ mod tests {
         );
         assert!(drawn
             .trim_end()
-            .ends_with(action_icon(crime::history::GO_TO)));
+            .ends_with(action_icon(varde::history::GO_TO)));
         assert!(drawn.contains(" 29"), "{drawn:?}");
         // Every width from the narrowest that holds the line and the icon
         // upwards fills the row exactly: a pane too narrow for the name spends
@@ -4590,7 +4590,7 @@ mod tests {
     fn the_history_border_names_the_file_of_the_row_the_marker_is_on() {
         let mut state = State::default();
         state.root = std::path::PathBuf::from("/w");
-        let visit = |file: &str| crime::history::Visit {
+        let visit = |file: &str| varde::history::Visit {
             file: file.to_string(),
             line: 29,
             column: 1,
@@ -4625,7 +4625,7 @@ mod tests {
     fn a_stale_history_row_is_dimmed_rather_than_coloured() {
         let mut state = State::default();
         state.root = std::path::PathBuf::from("/w");
-        state = crime::update(
+        state = varde::update(
             &state,
             Event::BufferOpened {
                 path: state.root.join("src/editor.rs"),
@@ -4635,7 +4635,7 @@ mod tests {
             },
         )
         .0;
-        let visit = |text: &str| crime::history::Visit {
+        let visit = |text: &str| varde::history::Visit {
             file: "src/editor.rs".to_string(),
             line: 1,
             column: 1,
@@ -4663,7 +4663,7 @@ mod tests {
     fn the_risk_border_says_what_the_figure_is() {
         let mut state = measured();
         assert_eq!(risk_title(&state, 40), "risk  src/keys.rs");
-        crime::risk::went_stale(&mut state.risk);
+        varde::risk::went_stale(&mut state.risk);
         assert_eq!(risk_title(&state, 40), "risk  src/keys.rs  stale");
         if let Figure::Stale(figures) = &mut state.risk.figure {
             figures.unparsed = 3;
@@ -4680,7 +4680,7 @@ mod tests {
         // says measuring.
         assert_eq!(risk_title(&state, 30), "risk  nothing measured");
         assert!(risk_lines(&state, 30).is_empty(), "a list with no figure");
-        let _ = crime::risk::analyse(&mut state, crime::risk::Scope::Workspace);
+        let _ = varde::risk::analyse(&mut state, varde::risk::Scope::Workspace);
         assert_eq!(risk_title(&state, 30), "risk  measuring");
     }
 
@@ -4725,7 +4725,7 @@ mod tests {
             row(None, Some(2), true, "const gone = \"old\";"),
             row(Some(2), None, false, "const gone = 2;"),
         ];
-        let state = crime::update(
+        let state = varde::update(
             &State::default(),
             Event::ShowDiff {
                 file: "a.ts".to_string(),
@@ -4811,7 +4811,7 @@ mod tests {
     #[test]
     fn a_comment_keeps_its_own_row_and_its_own_colour() {
         let (mut state, diff) = diffed();
-        state.comments = vec![crime::review::Comment {
+        state.comments = vec![varde::review::Comment {
             file: "a.ts".to_string(),
             from_line: 2,
             to_line: 2,
@@ -4842,7 +4842,7 @@ mod tests {
     #[test]
     fn a_slid_preview_draws_the_tail_of_a_wide_row() {
         use ratatui::widgets::Widget;
-        let rows = crime::preview::rows("```rust\nabcdefghijklmnop\n```\n", 8);
+        let rows = varde::preview::rows("```rust\nabcdefghijklmnop\n```\n", 8);
         let mut state = State::default();
         state.editor_hscroll = 6;
         let area = ratatui::layout::Rect::new(0, 0, 12, 4);
@@ -4867,12 +4867,12 @@ mod tests {
     #[test]
     fn a_picked_span_of_a_preview_is_drawn_reversed() {
         use ratatui::widgets::Widget;
-        let rows = crime::preview::rows("one two\n", 20);
+        let rows = varde::preview::rows("one two\n", 20);
         let mut state = State::default();
-        state.selection = Some(crime::Selection::Screen {
-            pane: crime::Pane::Editor,
-            from: crime::Place { line: 1, column: 1 },
-            to: crime::Place { line: 1, column: 3 },
+        state.selection = Some(varde::Selection::Screen {
+            pane: varde::Pane::Editor,
+            from: varde::Place { line: 1, column: 1 },
+            to: varde::Place { line: 1, column: 3 },
             text: "one".to_string(),
         });
         let area = ratatui::layout::Rect::new(0, 0, 12, 3);
@@ -4897,7 +4897,7 @@ mod tests {
     #[test]
     fn sliding_a_diff_leaves_its_numbers_markers_and_comments_alone() {
         let (mut state, diff) = diffed();
-        state.comments = vec![crime::review::Comment {
+        state.comments = vec![varde::review::Comment {
             file: "a.ts".to_string(),
             from_line: 2,
             to_line: 2,
@@ -4927,7 +4927,7 @@ mod tests {
     #[test]
     fn a_selected_diff_row_is_still_marked_once_its_code_is_coloured() {
         let (state, diff) = diffed();
-        let selected = crime::update(&state, Event::EditorKey('V')).0;
+        let selected = varde::update(&state, Event::EditorKey('V')).0;
         let rows = drawn(&selected, &diff);
         let marked = |row: &Line<'static>| {
             row.spans[1..]
@@ -4943,12 +4943,12 @@ mod tests {
         state.root = std::path::PathBuf::from("/w");
         state.contents.insert(
             state.root.clone(),
-            vec![crime::tree::Entry {
+            vec![varde::tree::Entry {
                 name: "main.rs".to_string(),
                 is_dir: false,
             }],
         );
-        let rows = crime::tree::rows(&state);
+        let rows = varde::tree::rows(&state);
         (state, rows)
     }
 
@@ -4989,7 +4989,7 @@ mod tests {
         let width = 40;
         let line = tree_lines(&state, &rows, width).remove(0);
         assert_eq!(
-            crime::tree::row_actions(&state, &rows[0].path).len(),
+            varde::tree::row_actions(&state, &rows[0].path).len(),
             2,
             "a file offers delete and copy-path, so this is the padded branch"
         );
@@ -5023,13 +5023,13 @@ mod tests {
         }
     }
 
-    /// The suite asserts the title through `crime::mode_label`, which is the
+    /// The suite asserts the title through `varde::mode_label`, which is the
     /// part of it the core owns. This is what holds the drawn title to carrying
     /// that clause — without it the scenario could go green over a title that
     /// says nothing about which of the two shapes is on screen.
     #[test]
     fn the_title_carries_the_mode_the_core_named() {
-        let buffer = crime::editor::Buffer::open("# Setup", true, 4);
+        let buffer = varde::editor::Buffer::open("# Setup", true, 4);
         let title = buffer_title("README.md", &buffer, "preview", 80);
         let drawn: String = title
             .spans
@@ -5046,7 +5046,7 @@ mod tests {
     /// name are what made both easy to miss on a screen an AI is writing to.
     #[test]
     fn the_title_colours_the_marks_and_leaves_the_name_alone() {
-        let mut buffer = crime::editor::Buffer::open("on disk", false, 4);
+        let mut buffer = varde::editor::Buffer::open("on disk", false, 4);
         buffer.key('x');
         buffer.follow("changed underneath".to_string());
         let title = buffer_title("test.md", &buffer, "normal", 80);
@@ -5070,7 +5070,7 @@ mod tests {
     fn a_clean_buffer_has_an_unmarked_title() {
         let title = buffer_title(
             "test.md",
-            &crime::editor::Buffer::open("x", false, 4),
+            &varde::editor::Buffer::open("x", false, 4),
             "normal",
             80,
         );
@@ -5087,11 +5087,11 @@ mod tests {
     fn a_blank_line_is_given_the_spaces_its_guides_need() {
         let line = Line::from(vec![Span::raw("   3 "), Span::raw("")]);
         let guides = [
-            crime::editor::Guide {
+            varde::editor::Guide {
                 column: 0,
                 active: false,
             },
-            crime::editor::Guide {
+            varde::editor::Guide {
                 column: 4,
                 active: true,
             },
@@ -5116,7 +5116,7 @@ mod tests {
     #[test]
     fn a_guide_replaces_the_space_it_stands_in() {
         let line = Line::from(vec![Span::raw("   3 "), Span::raw("        foo()")]);
-        let guides = [crime::editor::Guide {
+        let guides = [varde::editor::Guide {
             column: 4,
             active: false,
         }];
@@ -5250,7 +5250,7 @@ mod tests {
         let mut state = State::default();
         state
             .buffers
-            .insert(path.clone(), crime::editor::Buffer::open(source, false, 4));
+            .insert(path.clone(), varde::editor::Buffer::open(source, false, 4));
         state.current_buffer = Some(path.clone());
         let drawn = |state: &State| {
             folded(
@@ -5287,7 +5287,7 @@ mod tests {
             "and the gutter is `layout::GUTTER` columns wide on every line"
         );
 
-        crime::fold::toggle(state.buffers.get_mut(&path).expect("the buffer"), false);
+        varde::fold::toggle(state.buffers.get_mut(&path).expect("the buffer"), false);
         assert_eq!(
             drawn(&state),
             [
@@ -5372,7 +5372,7 @@ mod tests {
     ///
     /// Not pinned at every row the table claims: at this size that assertion
     /// cannot pass, and rows are excused off the bottom on purpose. What is
-    /// held is the two rows nothing else in CRIME teaches. `C-f`, `D` and
+    /// held is the two rows nothing else in Varde teaches. `C-f`, `D` and
     /// `:w :q` are what they displaced, each of which is said again somewhere
     /// the reader is already looking: the palette lists `(f) Find`, and the
     /// `buffer-diverged` and `unsaved-changes` notices name `D`, `:w` and `:q!`
@@ -5386,7 +5386,7 @@ mod tests {
         let mut state = State::default();
         state.cheatsheet = true;
         let editor =
-            crime::layout::panes(120, 26, 30, None, 0, 0, crime::layout::Shapes::default()).editor;
+            varde::layout::panes(120, 26, 30, None, 0, 0, varde::layout::Shapes::default()).editor;
         assert_eq!(editor.height, 18, "the pane the box is drawn in");
 
         let drawn: Vec<String> = cheatsheet_rows(&state, editor.height)
@@ -5472,10 +5472,10 @@ mod tests {
     /// which find-in-file, the word motions and drag-copy all read.
     #[test]
     fn a_thematic_break_draws_as_a_rule_and_not_as_a_blank() {
-        let rows = crime::preview::rows("one\n\n---\n\ntwo\n", 40);
+        let rows = varde::preview::rows("one\n\n---\n\ntwo\n", 40);
         let rule = rows
             .iter()
-            .find(|row| row.kind == crime::preview::RowKind::Rule)
+            .find(|row| row.kind == varde::preview::RowKind::Rule)
             .expect("a Rule row");
         assert_eq!(rule.text(), "", "the glyph must stay out of the text");
 
@@ -5514,13 +5514,13 @@ mod tests {
                 .map(|span| span.content.as_ref().to_string())
                 .collect::<String>()
         };
-        let rows = crime::preview::rows(
+        let rows = varde::preview::rows(
             "1. first\n2. second\n   - nested\n\n- [ ] todo\n- [x] done\n",
             40,
         );
         let listed: Vec<String> = rows
             .iter()
-            .filter(|row| matches!(row.kind, crime::preview::RowKind::List(_)))
+            .filter(|row| matches!(row.kind, varde::preview::RowKind::List(_)))
             .map(drawn)
             .collect();
         assert_eq!(

@@ -21,7 +21,7 @@ Feature: Filtering the file tree
   file the filter has to find.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project contains:
       | src/main.rs        |
       | src/file_tree.rs   |
@@ -103,7 +103,7 @@ Feature: Filtering the file tree
   Scenario: Enter marks the best match in the tree
     Given I filter by "treeac"
     When I accept the filter
-    Then the tree selection is "/home/me/projects/crime/src/tree_actions.rs"
+    Then the tree selection is "/home/me/projects/varde/src/tree_actions.rs"
     And no file was opened in the editor
 
   Scenario: Enter opens the folders the marked file lives in
