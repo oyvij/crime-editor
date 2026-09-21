@@ -8032,6 +8032,9 @@ fn move_to_view(state: &mut State, view: View) {
         state.diff_file = None;
         state.diff_anchor = None;
     }
+    if state.view != View::Story {
+        state.walking = None;
+    }
 }
 
 fn current(state: &mut State) -> Option<&mut Buffer> {
@@ -8900,7 +8903,6 @@ fn walk_to_step_file(state: &State, mut next: State) -> (State, Vec<Effect>) {
         return (next, vec![]);
     };
     let file = step.site.file.clone();
-    next.walking = None;
     move_to_view(&mut next, View::Edit);
     (
         next,

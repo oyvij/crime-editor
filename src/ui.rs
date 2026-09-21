@@ -1472,7 +1472,7 @@ fn editor_widget(
     // Both of these substitute the whole drawing of the editor's rectangle
     // rather than being a `Pane` of their own. They never coexist:
     // `move_to_view` empties `state.diff` on every way out of
-    // Review, and walking only ever happens in Story view.
+    // Review and ends the walk on every way out of Story.
     if state.walking.is_some() {
         return story_widget(state, command, tokens, width);
     }
