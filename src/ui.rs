@@ -34,6 +34,12 @@ const WARNING: Color = Color::Indexed(208);
 /// The gutter bar on the Utterance being spoken. Cyan is already what the
 /// editor's own footer says where you are in — this says where the voice is.
 const READING: Color = Color::Cyan;
+/// The editor's faint layer — the space dots, the indentation guides, the
+/// minimap's slider. The terminal's own foreground dimmed, for the reason the
+/// minimap's mirror is dimmed: the terminal owns both its palette and its
+/// background, so a fixed slot has no idea which side of the background it
+/// lands on. Under Gruvbox the dot's slot was darker than the page.
+const FAINT: Style = Style::new().fg(Color::Reset).add_modifier(Modifier::DIM);
 
 /// How loudly the status line says what it is saying. Replaces asking the words
 /// themselves — the line used to draw the hint grey by testing it for a leading
@@ -1547,13 +1553,6 @@ fn editor_widget(
     // Quiet enough to read as paper rather than as content: a guide competing
     // with the syntax under it is worse than no guide. The cursor's block is
     // the only one drawn to be noticed.
-    // The heavy glyph is the signal; the colour barely moves with it. A bright
-    // guide reads as a bar down the page rather than as a thicker line, which
-    // is louder than anything a guide is worth.
-    let (ink, lit) = match dark {
-        true => (Color::Indexed(235), Color::Indexed(238)),
-        false => (Color::Indexed(254), Color::Indexed(251)),
-    };
     let bracket = Style::default().bg(if dark {
         Color::Indexed(236)
     } else {
@@ -1572,7 +1571,7 @@ fn editor_widget(
             .filter(|at| at.line == index + 1)
             .map(|at| at.column - 1)
             .collect();
-        *line = guided(line, row, &marks, ink, lit, bracket);
+        *line = guided(line, row, &marks, bracket);
     }
     // Where the word under the cursor is used, washed rather than picked: it is
     // not a selection, and a mark as bright as one would read as text having
@@ -1741,12 +1740,12 @@ fn minimap(frame: &mut Frame, state: &State, areas: &Areas, tokens: &[Vec<highli
         };
         // Lit under the pointer, which is also the whole of the gesture: you
         // travel by holding the strip, so the line the hand is on is the line
-        // that brightens and stays bright until the hand leaves.
-        let tint = match (dark, minimap::lit(state)) {
-            (true, false) => Color::Indexed(240),
-            (true, true) => Color::Indexed(248),
-            (false, false) => Color::Indexed(250),
-            (false, true) => Color::Indexed(244),
+        // that brightens and stays bright until the hand leaves. Brightened to
+        // the foreground itself rather than to a second slot, which would be
+        // the palette this layer stopped guessing at.
+        let slider = match minimap::lit(state) {
+            true => Style::new().fg(Color::Reset),
+            false => FAINT,
         };
         frame
             .buffer_mut()
@@ -1765,7 +1764,7 @@ fn minimap(frame: &mut Frame, state: &State, areas: &Areas, tokens: &[Vec<highli
                             true => "\u{2502}",
                             false => " ",
                         },
-                        Style::default().fg(tint).bg(field),
+                        slider.bg(field),
                     )];
                     spans.extend(cells.into_iter().map(|cell| {
                         // Exhaustive on the pair rather than asking
@@ -1811,12 +1810,7 @@ fn minimap(frame: &mut Frame, state: &State, areas: &Areas, tokens: &[Vec<highli
     };
     // The same line the slider draws, not a painted block: a solid bar is the
     // loudest thing on the pane, which is what the wash behind the mirror was.
-    let bar = Paragraph::new(vec![Line::from("\u{2502}"); height]).style(Style::default().fg(
-        match dark {
-            true => Color::Indexed(240),
-            false => Color::Indexed(250),
-        },
-    ));
+    let bar = Paragraph::new(vec![Line::from("\u{2502}"); height]).style(FAINT);
     frame.render_widget(
         bar,
         Rect::new(
@@ -3236,21 +3230,21 @@ fn guided(
     line: &Line<'static>,
     guides: &[varde::editor::Guide],
     brackets: &[usize],
-    dim: Color,
-    lit: Color,
     mark: Style,
 ) -> Line<'static> {
     // Straight either way, and the cursor's block heavier rather than solid: a
     // guide is a fact about the text, so the one the cursor is in is the same
     // line drawn with more weight, not a different kind of line. Heavy box
     // rather than the BOLD attribute, which a terminal is free to ignore on a
-    // glyph like this one.
+    // glyph like this one. The weight is the whole signal and the colour does
+    // not move with it: a bright guide reads as a bar down the page rather than
+    // as a thicker line, which is louder than anything a guide is worth.
     let glyph = |guide: &varde::editor::Guide| {
-        let (character, ink) = match guide.active {
-            true => ("\u{2503}", lit),
-            false => ("\u{2502}", dim),
+        let character = match guide.active {
+            true => "\u{2503}",
+            false => "\u{2502}",
         };
-        Span::styled(character.to_string(), Style::default().fg(ink))
+        Span::styled(character.to_string(), FAINT)
     };
     let mut spans = Vec::new();
     let mut column = 0;
@@ -3283,7 +3277,7 @@ fn guided(
                     // the line somewhere it is not — the same reason a
                     // tab-indented file is given no guides.
                     match character {
-                        ' ' => spans.push(Span::styled("\u{00b7}", style.fg(dim))),
+                        ' ' => spans.push(Span::styled("\u{00b7}", style.patch(FAINT))),
                         _ => spans.push(Span::styled(character.to_string(), style)),
                     }
                 }
@@ -5096,14 +5090,7 @@ mod tests {
                 active: true,
             },
         ];
-        let drawn = guided(
-            &line,
-            &guides,
-            &[],
-            Color::DarkGray,
-            Color::White,
-            Style::default(),
-        );
+        let drawn = guided(&line, &guides, &[], Style::default());
         let text: String = drawn.spans.iter().map(|span| &*span.content).collect();
         assert_eq!(
             text, "   3 \u{2502}   \u{2503}",
@@ -5124,8 +5111,6 @@ mod tests {
             &line,
             &guides,
             &[11, 12],
-            Color::DarkGray,
-            Color::White,
             Style::default().bg(Color::Indexed(236)),
         );
         let text: String = drawn.spans.iter().map(|span| &*span.content).collect();
@@ -5138,6 +5123,31 @@ mod tests {
             Some(Color::Indexed(236)),
             "the bracket is not marked"
         );
+    }
+
+    /// A dot and a guide are one tier, and it is the terminal's own foreground
+    /// dimmed. Two palette slots are how the dot went darker than a Gruvbox
+    /// background while the guide beside it did not.
+    #[test]
+    fn a_dot_and_a_guide_are_the_terminals_foreground_dimmed() {
+        let line = Line::from(vec![Span::raw("   3 "), Span::raw("   x")]);
+        let guides = [
+            varde::editor::Guide {
+                column: 0,
+                active: false,
+            },
+            varde::editor::Guide {
+                column: 2,
+                active: true,
+            },
+        ];
+        let drawn = guided(&line, &guides, &[], Style::default());
+        let faint = Style::default()
+            .fg(Color::Reset)
+            .add_modifier(Modifier::DIM);
+        assert_eq!(drawn.spans[1].style, faint, "the guide");
+        assert_eq!(drawn.spans[2].style, faint, "the dot");
+        assert_eq!(drawn.spans[3].style, faint, "the cursor's guide");
     }
 
     fn row() -> Line<'static> {
