@@ -7,7 +7,7 @@ Feature: Submitting a review puts the AI to work
   ISSUE is the only blocking type: a review containing one is changes-requested and the AI
   is expected to act on it. The others are context.
 
-  Submitting is the integration point. It writes a durable artifact under .crime/reviews/
+  Submitting is the integration point. It writes a durable artifact under .varde/reviews/
   and sends the review into the AI pane — sent, not merely typed — so the AI starts working
   the moment the reviewer confirms. The artifact keeps this independent of which AI CLI is
   configured.
@@ -18,7 +18,7 @@ Feature: Submitting a review puts the AI to work
   destroyed without being announced.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project is a git repository
     And "src/tree.js" is shown in the diff holding:
       """
@@ -87,7 +87,7 @@ Feature: Submitting a review puts the AI to work
     Given I add an ISSUE on "src/tree.js" lines 14 to 18 saying "unquoted path"
     And I submit the review
     When I confirm the submission
-    Then the file ".crime/reviews/0001.json" exists
+    Then the file ".varde/reviews/0001.json" exists
 
   Scenario: Submitting sends the review into the running AI session
     Given I add an ISSUE on "src/tree.js" lines 14 to 18 saying "unquoted path"
@@ -95,7 +95,7 @@ Feature: Submitting a review puts the AI to work
     When I confirm the submission
     Then the AI pane was sent a prompt containing "src/tree.js:14-18"
     And the AI pane was sent a prompt containing "unquoted path"
-    And the AI pane was sent a prompt containing ".crime/reviews/0001.json"
+    And the AI pane was sent a prompt containing ".varde/reviews/0001.json"
     And the prompt was submitted to the AI
     And no new AI session was started
 
@@ -107,7 +107,7 @@ Feature: Submitting a review puts the AI to work
     And I confirm the submission
     When the AI session is ready for input
     Then an AI session was started with "claude"
-    And the AI pane was sent a prompt containing ".crime/reviews/0001.json"
+    And the AI pane was sent a prompt containing ".varde/reviews/0001.json"
     And the prompt was submitted to the AI
 
   Scenario: A freshly started CLI is not typed at until it has printed something
@@ -172,13 +172,13 @@ Feature: Submitting a review puts the AI to work
 
   Scenario: Only the most recent reviews are kept
     Given the retention limit is 50 reviews
-    And ".crime/reviews" holds 50 reviews numbered 0001 to 0050
+    And ".varde/reviews" holds 50 reviews numbered 0001 to 0050
     And I add an ISSUE on "src/tree.js" lines 14 to 18 saying "unquoted path"
     And I submit the review
     When I confirm the submission
-    Then the file ".crime/reviews/0051.json" exists
-    And the file ".crime/reviews/0001.json" does not exist
-    And ".crime/reviews" holds 50 reviews
+    Then the file ".varde/reviews/0051.json" exists
+    And the file ".varde/reviews/0001.json" does not exist
+    And ".varde/reviews" holds 50 reviews
 
   Scenario: Submitting warns before it clears the AI prompt
     Given I add an ISSUE on "src/tree.js" lines 14 to 18 saying "unquoted path"

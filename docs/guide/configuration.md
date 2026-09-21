@@ -1,32 +1,32 @@
 # Configuration
 
-CRIME is configured in TOML, from two files, and keeps a little state beside the project one. This
-page is every key, what it defaults to, and what else you will find in a `.crime/` folder. For the
+Varde is configured in TOML, from two files, and keeps a little state beside the project one. This
+page is every key, what it defaults to, and what else you will find in a `.varde/` folder. For the
 features the keys belong to, see [language-intelligence.md](language-intelligence.md),
 [risk.md](risk.md), [reading-aloud.md](reading-aloud.md) and
-[getting-around.md](getting-around.md); for putting CRIME on the machine, [../install.md](../install.md).
+[getting-around.md](getting-around.md); for putting Varde on the machine, [../install.md](../install.md).
 
 ## The two files
 
 | File | Scope | Created by |
 |---|---|---|
-| `~/.crime/config.toml` | You, on this machine — every project | CRIME seeds it from the template when it is missing. Taking a row in Tools appends that row, and the speech install fills in a blank `speech.voice`; nothing already in the file is changed. |
-| `<project>/.crime/config.toml` | This project — everyone who opens it | CRIME, the first time it opens the folder and finds nothing there. |
+| `~/.varde/config.toml` | You, on this machine — every project | Varde seeds it from the template when it is missing. Taking a row in Tools appends that row, and the speech install fills in a blank `speech.voice`; nothing already in the file is changed. |
+| `<project>/.varde/config.toml` | This project — everyone who opens it | Varde, the first time it opens the folder and finds nothing there. |
 
 The effective configuration is a **deep merge** of three layers: the defaults built into the binary,
-then `~/.crime/config.toml`, then the project's own file. **Project beats global, global beats
+then `~/.varde/config.toml`, then the project's own file. **Project beats global, global beats
 built-in, key by key.** A project that sets `editor.tab_width = 2` inherits everything else; a global
 file that renames the Rust server's command touches only that command, and a project can still put
 its own `args` on the same row without repeating the command. A layer that is not there is an empty
 one and merges nothing.
 
 Because the shipped values are the bottom layer rather than something written to your disk, a new
-version of CRIME's defaults — a corrected install command, a new language — is live on first run
+version of Varde's defaults — a corrected install command, a new language — is live on first run
 without touching any file you maintain.
 
 ### The seeded file
 
-The first time CRIME opens a folder it creates `.crime/` and writes a `config.toml` there in which
+The first time Varde opens a folder it creates `.varde/` and writes a `config.toml` there in which
 **every key is commented out** — only the table headers are live. It is there so the keys can be
 found, not to pin this version's answers: a file full of live values would make "the project sets
 nothing" false on its first run, and would freeze one binary's numbers into a file that outlives it,
@@ -35,7 +35,7 @@ so a later correction to the defaults would arrive and change nothing.
 Uncomment a line to disagree with the default beside it; delete it again to go back to whatever the
 version you are running thinks is right. The header lines are live on purpose — uncommenting
 `tab_width` under a commented-out `[editor]` would set a top-level key nothing reads. A file that is
-already there is left alone on every later start, including one CRIME cannot read.
+already there is left alone on every later start, including one Varde cannot read.
 
 The seeded file names `view.double_tap_ms`, `editor.tab_width`, `editor.minimap`, `risk.threshold`,
 `risk.max_iterations` and the `[speech]` scalars. The `[lsp.*]`, `[formatter.*]` and `[facts.*]`
@@ -45,7 +45,7 @@ shipped text to hold them level with.
 
 ### A file that does not parse
 
-A config file CRIME cannot use **stops CRIME from starting**, naming the file and the line and which
+A config file Varde cannot use **stops Varde from starting**, naming the file and the line and which
 of three faults it was: the text is not TOML; a value is the wrong type (`install.macos = 12`, or an
 `unanswerable` naming a request and no response); or an entry that parsed, typed, and is still
 missing the one key it cannot be used without — a `[lsp.*]` or `[formatter.*]` row the merged
@@ -53,7 +53,7 @@ layers never gave a `command`, or a `[facts.*]` row with no `marker`. That last 
 merge, so a project that names only `args` for a shipped language is fine, and the fault is blamed on
 the last file that mentioned the row.
 
-The trade-off is deliberate: a broken `~/.crime/config.toml` locks you out until you fix it in
+The trade-off is deliberate: a broken `~/.varde/config.toml` locks you out until you fix it in
 another editor, which is why the error names file *and* line.
 
 ## Every key
@@ -93,7 +93,7 @@ and does not appear as TOML anywhere.
 
 A fact is a path on this machine that a server or formatter needs and that nobody can write down
 once — the TypeScript SDK a Vue project pinned, a virtualenv's interpreter. Configuration says how to
-find it; CRIME searches for it every time a server is started; the answer fills any `${name}` in a
+find it; Varde searches for it every time a server is started; the answer fills any `${name}` in a
 `[lsp.*]` or `[formatter.*]` row. The search runs from the directory of the file being served up to
 the workspace root, nearest first, and never above it — so a monorepo package that installs its own
 toolchain gets its own answer.
@@ -154,9 +154,9 @@ its state — `installed`, `missing`, `stopped`, `no-install-command`, `missing-
 | `args` | `[]` | array of strings | Its arguments. `${fact}` names are filled. |
 | `also_served_by` | `[]` | array of language names | Other languages' servers that also serve this language's files. A `.vue` file is served by the Vue server *and* the TypeScript server. |
 | `install.macos`, `install.linux`, `install.windows` | per row | string | What installs the server on that OS. Run in the terminal pane when the row is taken in Tools. A row with no key for your OS says `no-install-command` and offers nothing. |
-| `initialization_options` | unset | table | Handed to the server untouched at start-up, as JSON. CRIME reads nothing inside it; `${fact}` values are filled, and a key whose value asked for an unfound optional fact is dropped. |
+| `initialization_options` | unset | table | Handed to the server untouched at start-up, as JSON. Varde reads nothing inside it; `${fact}` values are filled, and a key whose value asked for an unfound optional fact is dropped. |
 | `partial` | unset | string | What this server, installed and running, still cannot do — in your words. Shown on its row, which then reads `partly-working`. |
-| `unanswerable.request`, `unanswerable.response` | unset | two strings, both or neither | A question this server puts to its client that CRIME will not answer, and the method to refuse it on — so the server moves on instead of waiting forever. |
+| `unanswerable.request`, `unanswerable.response` | unset | two strings, both or neither | A question this server puts to its client that Varde will not answer, and the method to refuse it on — so the server moves on instead of waiting forever. |
 
 Shipped rows:
 
@@ -204,7 +204,7 @@ Shipped rows:
 
 `--stdin-filepath ${file}` is how one `prettier` is told whether it is reading JSON or YAML — the
 bytes do not say. A language with no row refuses `:format` out loud and names the table to write,
-e.g. `[formatter.txt] in .crime/config.toml`.
+e.g. `[formatter.txt] in .varde/config.toml`.
 
 ### `[speech]`
 
@@ -217,8 +217,8 @@ What reads a Selection aloud. Explained in full in [reading-aloud.md](reading-al
 | `voice` | `""` | string | Path to the voice model; a leading `~` is your home directory. Blank until the install fills it in. |
 | `speed` | `1.0` | float | Multiplier, higher is faster. Applies to the next Reading. |
 | `player.macos`, `player.linux` | `"afplay"`, `"aplay"` | string | What plays the stream. No `player.windows` is shipped. |
-| `install.macos`, `install.linux` | shipped | string | Installs `piper` with `uv` and fetches the `en_US-bryce-medium` voice into `~/.crime/voices/`. Run in the shell pane when the row is taken in Tools. No `install.windows`. |
-| `configures.voice` | `"~/.crime/voices/en_US-bryce-medium.onnx"` | string | Written into `voice` once the install exits 0, unless `voice` is already set. |
+| `install.macos`, `install.linux` | shipped | string | Installs `piper` with `uv` and fetches the `en_US-bryce-medium` voice into `~/.varde/voices/`. Run in the shell pane when the row is taken in Tools. No `install.windows`. |
+| `configures.voice` | `"~/.varde/voices/en_US-bryce-medium.onnx"` | string | Written into `voice` once the install exits 0, unless `voice` is already set. |
 
 ### Substitutions, in one place
 
@@ -226,13 +226,13 @@ What reads a Selection aloud. Explained in full in [reading-aloud.md](reading-al
 |---|---|---|
 | `${<fact>}` | `[lsp.*].args`, `[lsp.*].initialization_options`, `[formatter.*].args` | The path a `[facts.<fact>]` search found. Unfound and required: the server is not started. Unfound and optional: the argument or option key carrying it is dropped. |
 | `${file}` | `[formatter.*].args` | The absolute path of the buffer being formatted. |
-| `${voice}`, `${scale}`, `${dir}` | `[speech].args` | The voice model path, `1 / speed`, and CRIME's scratch directory. |
+| `${voice}`, `${scale}`, `${dir}` | `[speech].args` | The voice model path, `1 / speed`, and Varde's scratch directory. |
 
 Nothing else is a placeholder. There is no environment-variable expansion and no template language.
 
 ### `install.<os>`: run when you take the row
 
-Taking a row in Tools (`i`) is the whole install: the row is appended to `~/.crime/config.toml` if
+Taking a row in Tools (`i`) is the whole install: the row is appended to `~/.varde/config.toml` if
 the file lacks it, and its `install` key runs in the terminal pane, where you watch it and answer a
 `sudo` prompt. Its exit status comes back to the row, which reads `install-failed` if it failed.
 An install whose first program (or the one after `sudo`) is not on your `PATH` is not run at all:
@@ -243,10 +243,10 @@ Which key applies is the operating system the binary was built for. Once the com
 with no restart — unless the installer only appended to your shell profile, in which case a restart is
 offered, never taken.
 
-## What else lives in `.crime/`
+## What else lives in `.varde/`
 
-A project's `.crime/` folder holds more than the config. Which of it belongs in version control is
-your decision — CRIME never writes ignore rules — but this repo's own `.gitignore` is the recommended
+A project's `.varde/` folder holds more than the config. Which of it belongs in version control is
+your decision — Varde never writes ignore rules — but this repo's own `.gitignore` is the recommended
 split:
 
 | Path | What it is | Commit? |
@@ -257,10 +257,10 @@ split:
 | `state.json` | Per-user session state (below) | No — it is yours, not the project's. |
 | `risk.json` | The Risk figure, cached against the commit it was measured at | No — derived, changes on every commit. |
 | `snapshots/<n>/` | The Refactor loop's copy of the files an Iteration touched, so a failed Iteration can be put back | No — derived. |
-| `refactor-done` | The sentinel the AI session writes to say an Iteration is finished; CRIME deletes it before each one | No. |
+| `refactor-done` | The sentinel the AI session writes to say an Iteration is finished; Varde deletes it before each one | No. |
 | `lsp-<language>.log` | One transcript per language server, the place to look when a server would not start | No — per session. |
 
-`state.json` is what CRIME remembers about *you* in this project between sessions: the last view
+`state.json` is what Varde remembers about *you* in this project between sessions: the last view
 (Edit, Review or Story); the AI command you last started; which tree folders were expanded; the tree
 divider's position and the AI pane's width and shape (beside the editor or tall); which pane is in
 the Corner beneath the tree; whether the key reminder is up, whether the editor is dimmed, and
@@ -269,26 +269,26 @@ and there is nothing in it to edit by hand.
 
 ## The Bare workspace
 
-`crime` with no folder argument opens the current directory as a **Bare workspace**: the folder is
-still the workspace — the file tree is it and `:w` writes there — but nothing of CRIME's is written
-into it. There is no project config layer at all (a `.crime/config.toml` that happens to sit in the
+`varde` with no folder argument opens the current directory as a **Bare workspace**: the folder is
+still the workspace — the file tree is it and `:w` writes there — but nothing of Varde's is written
+into it. There is no project config layer at all (a `.varde/config.toml` that happens to sit in the
 folder is not read), nothing is seeded, Risk is not measured unasked, and everything that would have
-gone in `.crime/` goes in a **Sidecar** under `~/.crime/paths/`, named for the folder and the
-process and deleted when CRIME exits. A Bare workspace therefore forgets everything between runs;
-one that remembers is a project, and `crime .` is how you ask for that.
+gone in `.varde/` goes in a **Sidecar** under `~/.varde/paths/`, named for the folder and the
+process and deleted when Varde exits. A Bare workspace therefore forgets everything between runs;
+one that remembers is a project, and `varde .` is how you ask for that.
 
 The one exception is a submitted review, which would otherwise be destroyed at exit: from a Bare
-workspace it goes to `~/.crime/reviews/`, durable and shared by every Bare workspace, under the same
+workspace it goes to `~/.varde/reviews/`, durable and shared by every Bare workspace, under the same
 retention.
 
-So `~/.crime/` holds: `config.toml` (yours), `voices/` (where the shipped install puts a model),
+So `~/.varde/` holds: `config.toml` (yours), `voices/` (where the shipped install puts a model),
 `tmp/` (a Reading's stream, swept on start), `paths/` (Sidecars) and `reviews/` (Bare-workspace
-reviews). CRIME creates the directories it needs and never edits the config.
+reviews). Varde creates the directories it needs and never edits the config.
 
 ## Versions and the Update notice
 
-CRIME is installed as a symlink into its own checkout (see [../install.md](../install.md)), so the
-binary you are running and the source on disk can drift apart. On start CRIME compares the
+Varde is installed as a symlink into its own checkout (see [../install.md](../install.md)), so the
+binary you are running and the source on disk can drift apart. On start Varde compares the
 **Version** the checkout's `Cargo.toml` claims against the **Running version** the binary was built
 from. When the checkout's is strictly newer, an **Update** exists, and one yellow line —
 `Update available: palette u` — appears above the key reminder. Equal or older is not an Update, so
@@ -298,7 +298,7 @@ Palette `u` (or `:update`) runs `cd <checkout> && cargo build --release` in the 
 the symlink already names the file that build writes, the build *is* the install, and the next
 launch is the new version. With no checkout above the binary it is a binary install instead: palette
 `u` downloads the newer Release for this platform, verifies its checksum, puts it in place of the
-running binary and relaunches CRIME on it. With neither a checkout nor a newer Release, `:update`
+running binary and relaunches Varde on it. With neither a checkout nor a newer Release, `:update`
 refuses with `nothing-to-update` and does nothing.
 
 The comparison is of version numbers, not commits, so a change committed without a version bump is

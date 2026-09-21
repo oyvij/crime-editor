@@ -10,7 +10,7 @@ Feature: The word under the cursor is marked
   word, and `State` is a different name.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And "src/main.rs" is open in the editor holding:
       """
       let state = 1

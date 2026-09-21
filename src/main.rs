@@ -1,5 +1,5 @@
 //! The edge. Reads the world, executes effects, draws. Every decision it makes
-//! is delegated to `crime::update` — see AGENTS.md.
+//! is delegated to `varde::update` — see AGENTS.md.
 
 mod pty;
 mod rpc;
@@ -7,22 +7,6 @@ mod ui;
 
 use anyhow::Result;
 use clap::Parser as ClapParser;
-use crime::authorship;
-use crime::editor;
-use crime::format;
-use crime::keys::{self, Drafts};
-use crime::layout;
-use crime::mouse;
-use crime::preview;
-use crime::reading;
-use crime::review::{GitFile, GitStatus};
-use crime::risk::{self, Figures, Metrics, Space};
-use crime::startup::{self, Fact, FactValue, PathStatus, Startup, StartupError};
-use crime::story;
-use crime::tree::Entry;
-use crime::{
-    crime_dir, tmp_dir, tree, update, Direction, Effect, Event, Modal, Pane, ReplaceFailed, State,
-};
 use crossterm::cursor::SetCursorStyle;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -36,32 +20,48 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 use terminput_crossterm::{to_terminput_key, to_terminput_mouse};
+use varde::authorship;
+use varde::editor;
+use varde::format;
+use varde::keys::{self, Drafts};
+use varde::layout;
+use varde::mouse;
+use varde::preview;
+use varde::reading;
+use varde::review::{GitFile, GitStatus};
+use varde::risk::{self, Figures, Metrics, Space};
+use varde::startup::{self, Fact, FactValue, PathStatus, Startup, StartupError};
+use varde::story;
+use varde::tree::Entry;
+use varde::{
+    tmp_dir, tree, update, varde_dir, Direction, Effect, Event, Modal, Pane, ReplaceFailed, State,
+};
 
 /// Shown whenever there is nothing more urgent to say.
 const HINT: &str = " Ctrl+Space or Esc Esc commands (e/r view · f find · a AI · t terminal · w write · s submit · q quit) · ^F search · / filter · gt/gT buffers · :q close · :qa quit · Alt+hjkl focus · Enter open · → row actions · n/N/d shortcuts";
 
 #[derive(ClapParser)]
 #[command(
-    name = "crime",
-    about = "Command · Review · Integrated · Modal · Editor"
+    name = "varde",
+    about = "A terminal IDE that reviews, tests and ships your work"
 )]
 struct Args {
     /// Folder to open as the workspace. Omitted, the current folder is opened
-    /// as a Bare workspace: nothing of CRIME's is written into it.
+    /// as a Bare workspace: nothing of Varde's is written into it.
     folder: Option<PathBuf>,
-    /// Print the programs CRIME can be configured to run and what installs
+    /// Print the programs Varde can be configured to run and what installs
     /// each on this OS, one tab-separated line each, and exit.
     #[arg(long, conflicts_with = "folder")]
     deps: bool,
-    /// Print the template a new `~/.crime/config.toml` starts as, and exit.
+    /// Print the template a new `~/.varde/config.toml` starts as, and exit.
     #[arg(long, conflicts_with_all = ["folder", "deps"])]
     default_config: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let crime_home = home().join(crime::CRIME_DIR);
-    let global_config = config_layer(&crime_home.join(startup::CONFIG_FILE));
+    let varde_home = home().join(varde::VARDE_DIR);
+    let global_config = config_layer(&varde_home.join(startup::CONFIG_FILE));
     if args.deps {
         let deps = match startup::deps(global_config.as_deref(), std::env::consts::OS) {
             Ok(deps) => deps,
@@ -80,7 +80,7 @@ fn main() -> Result<()> {
         print!("{}", startup::template());
         return Ok(());
     }
-    // Optional rather than defaulted to ".", because `crime` and `crime .`
+    // Optional rather than defaulted to ".", because `varde` and `varde .`
     // name the same folder and must not mean the same thing: which it was is
     // the library's decision, and a default here would have thrown the fact
     // away before it could be reported (ADR 0016).
@@ -88,13 +88,13 @@ fn main() -> Result<()> {
     let root = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     let sidecar = args.folder.is_none().then(|| sidecar(&root));
     // Before this session's own is created, and on every start rather than only
-    // a bare one: the directory swept is CRIME's own and a project workspace
+    // a bare one: the directory swept is Varde's own and a project workspace
     // has no Sidecar to lose, so there is one rule instead of a condition.
     sweep();
 
-    // Where this binary came from, for the update check. `crime` is installed as
+    // Where this binary came from, for the update check. `varde` is installed as
     // a symlink into its checkout, so the executable is
-    // <checkout>/target/release/crime — canonicalize explicitly, because macOS
+    // <checkout>/target/release/varde — canonicalize explicitly, because macOS
     // does not promise `current_exe` resolves the link it was invoked through.
     // Resolved once, here: it is also the file `:update` replaces and relaunches,
     // and on Linux asking again after the replacement names a deleted inode.
@@ -107,16 +107,16 @@ fn main() -> Result<()> {
         path_status: path_status(folder),
         global_config,
         project_config: config_layer(
-            &crime_dir(&root, sidecar.as_deref()).join(startup::CONFIG_FILE),
+            &varde_dir(&root, sidecar.as_deref()).join(startup::CONFIG_FILE),
         ),
-        state_json: read(&crime_dir(&root, sidecar.as_deref()).join(STATE_FILE)),
-        risk_json: read(&crime_dir(&root, sidecar.as_deref()).join(crime::risk::FILE)),
+        state_json: read(&varde_dir(&root, sidecar.as_deref()).join(STATE_FILE)),
+        risk_json: read(&varde_dir(&root, sidecar.as_deref()).join(varde::risk::FILE)),
         head: head_commit(&root),
         repo: git_status(&root),
-        reviews: numbered(&crime::reviews_dir(&root, sidecar.as_deref(), &crime_home)),
+        reviews: numbered(&varde::reviews_dir(&root, sidecar.as_deref(), &varde_home)),
         root: root.clone(),
         sidecar,
-        crime_home,
+        varde_home,
         checkout_manifest: checkout
             .as_ref()
             .and_then(|checkout| read(&checkout.join("Cargo.toml"))),
@@ -139,8 +139,8 @@ fn main() -> Result<()> {
     run(state, root, exe, startup_effects)
 }
 
-/// Where a Bare workspace keeps what a project keeps in `.crime`. Keyed by the
-/// folder *and* the process id: two CRIMEs on one folder must not share a
+/// Where a Bare workspace keeps what a project keeps in `.varde`. Keyed by the
+/// folder *and* the process id: two Vardes on one folder must not share a
 /// Sidecar, since quitting one deletes it, and a sweep of dead Sidecars needs a
 /// live one to be recognisable. Both parts are only observable here, which is
 /// why the path is derived at the edge and handed in. Only `home` and the pid
@@ -151,7 +151,7 @@ fn sidecar(root: &Path) -> PathBuf {
 }
 
 fn sidecars() -> PathBuf {
-    home().join(crime::CRIME_DIR).join("paths")
+    home().join(varde::VARDE_DIR).join("paths")
 }
 
 /// The process a Sidecar's name was built from, which is what the sweep reads
@@ -168,11 +168,11 @@ fn pid_of(name: &str) -> Option<u32> {
 }
 
 /// Quitting deletes a Sidecar; a crash does not, so on start every Sidecar
-/// whose CRIME is gone is deleted. Everything under `~/.crime` is CRIME's, so
+/// whose Varde is gone is deleted. Everything under `~/.varde` is Varde's, so
 /// everything in it can go (ADR 0014) — the one thing that must not go is the
 /// Sidecar of an instance still running, and the *only* way to tell that one
 /// apart is the process id in its name. That is why the path is keyed by pid
-/// rather than by folder alone: keyed by folder, a second CRIME on the same
+/// rather than by folder alone: keyed by folder, a second Varde on the same
 /// folder would have its state swept out from under it by this very loop, and
 /// quitting the first would delete the second's Sidecar besides. A name with
 /// no pid in it has no live process either, so it goes too — one rule, no
@@ -195,7 +195,7 @@ fn sweep() {
 
 /// Signal 0 delivers nothing and only asks whether the process is there.
 /// `EPERM` is an answer, not a failure: the process exists and belongs to
-/// somebody else, and deleting the Sidecar of a running CRIME is the one
+/// somebody else, and deleting the Sidecar of a running Varde is the one
 /// mistake this check exists to avoid.
 fn alive(pid: u32) -> bool {
     let answer = unsafe { libc::kill(pid as libc::pid_t, 0) };
@@ -238,7 +238,7 @@ fn describe(error: &StartupError, path: &Path) -> String {
 }
 
 /// The reviews a directory already holds, by number. Numbering from what is
-/// there rather than from nothing: `~/.crime/reviews/` is shared by every Bare
+/// there rather than from nothing: `~/.varde/reviews/` is shared by every Bare
 /// workspace, so a session that starts at `0001` writes over the review
 /// submitted from another folder. A name that is not `NNNN.json` is not a
 /// review and is left out of the count, and out of the retention sweep with it.
@@ -335,7 +335,7 @@ fn git_status(root: &Path) -> Option<Vec<GitFile>> {
     )
 }
 
-/// The hunks the range under the spine is made of, at CRIME's pinned diff
+/// The hunks the range under the spine is made of, at Varde's pinned diff
 /// options, so binary detection, untracked content and hunk boundaries all
 /// come from git2 rather than a second, hand-rolled read of blobs and files.
 /// Computed on the same poll as `git_status` so the Remainder rides that
@@ -565,13 +565,13 @@ struct Status {
 
 struct Edge {
     /// The terminal strip's shells, side by side, never empty while the loop
-    /// runs: the last one exiting is how CRIME ends.
+    /// runs: the last one exiting is how Varde ends.
     shells: Vec<pty::Pane>,
     ai: Option<pty::Pane>,
     root: PathBuf,
     /// The Bare workspace's Sidecar, as `main` derived it — the edge's own copy
     /// of what it told the core, for the effects it executes against a path of
-    /// CRIME's rather than one the core named.
+    /// Varde's rather than one the core named.
     sidecar: Option<PathBuf>,
     status: Status,
     drafts: Drafts,
@@ -581,19 +581,19 @@ struct Edge {
     cursor_style: &'static str,
     /// Parsed tokens for the current buffer, kept until it changes. Re-parsing
     /// a whole file every frame is what made a big file feel heavy.
-    highlighted: (PathBuf, u64, Vec<Vec<crime::highlight::Token>>),
+    highlighted: (PathBuf, u64, Vec<Vec<varde::highlight::Token>>),
     /// The new and old sides of the diff under review, each parsed whole when
     /// the diff was read. No key: a diff is only ever on screen because a
     /// `ReadDiff` put it there, and that is the one place either side changes.
     diff_sides: (
-        Vec<Vec<crime::highlight::Token>>,
-        Vec<Vec<crime::highlight::Token>>,
+        Vec<Vec<varde::highlight::Token>>,
+        Vec<Vec<varde::highlight::Token>>,
     ),
     /// The current buffer's Preview rows, kept until the buffer changes or the
     /// pane does. Width is half the key because rows reflow: the same file at
     /// two widths is two different answers. "Never parse per frame" is sharper
     /// here than for tokens — a diagram is routed, not merely scanned.
-    previewed: (PathBuf, u64, usize, Vec<crime::preview::Row>),
+    previewed: (PathBuf, u64, usize, Vec<varde::preview::Row>),
     /// A query waiting for typing to settle.
     pending_search: Option<(String, Instant)>,
     /// When to tell the core that typing has paused long enough to be worth
@@ -652,10 +652,10 @@ struct Edge {
     /// wherever the `PATH` probe is dropped, so a re-check after an install
     /// looks again (R31.27).
     facts: Option<(BTreeSet<PathBuf>, BTreeMap<String, String>)>,
-    /// `~/.crime`, so the stream a Reading builds can be put under
+    /// `~/.varde`, so the stream a Reading builds can be put under
     /// [`tmp_dir`] — outside every workspace, which is the whole of why
-    /// nothing flickers in the file tree when CRIME speaks (ADR 0014).
-    crime_home: PathBuf,
+    /// nothing flickers in the file tree when Varde speaks (ADR 0014).
+    varde_home: PathBuf,
     /// The `[speech]` rows, the edge's own copy of what it told the core, the
     /// way `sidecar` above is. `perform` holds no `State`, and which binary
     /// speaks and which one plays is the edge's business anyway: the core
@@ -789,7 +789,7 @@ fn run(
         on_path: None,
         git: None,
         facts: None,
-        crime_home: state.crime_home.clone(),
+        varde_home: state.varde_home.clone(),
         speech: state.speech.clone(),
         voice: None,
         playing: None,
@@ -820,7 +820,7 @@ fn run(
         &story::named_files(&state.story_set),
     );
     let mut queue: VecDeque<Event> = VecDeque::new();
-    // Creating `.crime`, and asking for the figures nobody had to request.
+    // Creating `.varde`, and asking for the figures nobody had to request.
     // Both wait for the edge to exist rather than running before the TUI opens:
     // the directory is wanted before anything writes into it, which is not
     // until this loop runs, and the analysis answers down a channel the edge
@@ -1000,7 +1000,7 @@ fn queue_due_windows(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
     fired
 }
 
-/// Raw mode, the alternate screen, and the input modes CRIME needs from the
+/// Raw mode, the alternate screen, and the input modes Varde needs from the
 /// host terminal. Returns the handle the backend takes and whether the Kitty
 /// keyboard protocol was accepted — which teardown has to pop again.
 fn enter_terminal(title: &str) -> Result<(std::io::Stdout, bool)> {
@@ -1008,7 +1008,7 @@ fn enter_terminal(title: &str) -> Result<(std::io::Stdout, bool)> {
     terminal::enable_raw_mode()?;
     let mut out = std::io::stdout();
     // Bracketed paste is what makes a paste one event rather than a burst of
-    // keystrokes indistinguishable from fast typing — without it CRIME has
+    // keystrokes indistinguishable from fast typing — without it Varde has
     // nothing to mark as a paste, and a multi-line paste is submitted a line at
     // a time by whatever is reading it.
     execute!(
@@ -1033,7 +1033,7 @@ fn enter_terminal(title: &str) -> Result<(std::io::Stdout, bool)> {
     // since its CSI-u parser reads the modifier field and drops the text one.
     // So asking for it threw away every character that needs a composing key:
     // on a Norwegian layout Option+8/9 and Shift+Option+8/9 are the only way to
-    // type [], {} and they were unreachable in every pane, CRIME's own and
+    // type [], {} and they were unreachable in every pane, Varde's own and
     // hosted alike, because the bytes never arrived. Anything a layout composes
     // — AltGr, dead keys, an IME — was lost the same way and just as silently.
     //
@@ -1042,7 +1042,7 @@ fn enter_terminal(title: &str) -> Result<(std::io::Stdout, bool)> {
     // rich the terminal is, and the Ctrl double-tap is a gesture nothing can
     // perform. What replaced it is Ctrl+Space, claimed in `keys` before the
     // hosted-pane split so it opens the palette from every pane rather than
-    // only the ones CRIME interprets. Escape stays armed as the second way out
+    // only the ones Varde interprets. Escape stays armed as the second way out
     // of a hosted pane. A wrong answer here is a pane nobody can leave.
     //
     // The cost of dropping the flag is that Option is no longer reported as
@@ -1225,7 +1225,7 @@ fn drain_servers(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
         dirty = true;
         queue.push_back(Event::LspGone {
             language,
-            why: crime::lsp::Gone::Exited,
+            why: varde::lsp::Gone::Exited,
         });
     }
     dirty
@@ -1273,7 +1273,7 @@ fn refresh_git(
     // repository the Story describes, and which branch is checked out there is
     // what Story view says it is on. `git_status` and `ignored` stay the
     // workspace's — the tree's marks and what it hides are about the folder
-    // CRIME was opened on, not about a clone that is not in it.
+    // Varde was opened on, not about a clone that is not in it.
     let repo = state.repo_root().to_path_buf();
     let fresh_hunks = file_hunks(
         &repo,
@@ -1308,7 +1308,7 @@ fn refresh_git(
     state.head = head;
     // Which branch that commit is on, told on the same poll and for the same
     // reason: only the edge can read it, and a `git switch` in the terminal
-    // pane is a branch change CRIME did not make.
+    // pane is a branch change Varde did not make.
     state.branch = head_branch(&repo);
     dirty
 }
@@ -1469,7 +1469,7 @@ fn cache_highlight(state: &State, edge: &mut Edge) {
         edge.highlighted = (
             path.clone(),
             buffer.revision(),
-            crime::highlight::highlight(&name, buffer.shown()),
+            varde::highlight::highlight(&name, buffer.shown()),
         );
     }
 }
@@ -1482,17 +1482,17 @@ fn cache_preview(state: &State, edge: &mut Edge) {
         .current_buffer
         .as_ref()
         .and_then(|path| state.buffers.get(path).map(|buffer| (path, buffer)))
-        .filter(|_| crime::previewing(state));
+        .filter(|_| varde::previewing(state));
     let Some((path, buffer)) = current else {
         if !edge.previewed.3.is_empty() {
             edge.previewed = (PathBuf::new(), u64::MAX, 0, Vec::new());
         }
         return;
     };
-    let columns = crime::preview_columns(state);
+    let columns = varde::preview_columns(state);
     let key = (path.clone(), buffer.revision(), columns);
     if (&edge.previewed.0, edge.previewed.1, edge.previewed.2) != (&key.0, key.1, key.2) {
-        edge.previewed = (key.0, key.1, key.2, crime::preview_rows(state));
+        edge.previewed = (key.0, key.1, key.2, varde::preview_rows(state));
     }
 }
 
@@ -1531,7 +1531,7 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
     Ok(())
 }
 
-/// What survives a quit, in [`crime_dir`]: the buffers that were open, the
+/// What survives a quit, in [`varde_dir`]: the buffers that were open, the
 /// selection, the view. Read once at startup and written once on the way out.
 const STATE_FILE: &str = "state.json";
 
@@ -1727,8 +1727,8 @@ fn tell_core(state: &mut State, edge: &mut Edge) {
         .shells
         .iter()
         .map(|shell| match shell.busy() {
-            true => crime::Shell::Busy,
-            false => crime::Shell::Idle,
+            true => varde::Shell::Busy,
+            false => varde::Shell::Idle,
         })
         .collect();
     state.terminal_mouse = edge.shells[state.split()].mouse_encoding();
@@ -1775,7 +1775,7 @@ fn start_voice(state: &State, edge: &mut Edge) {
 /// A failure is reported and leaves nothing held, which is exactly what
 /// `voice_running` then tells the core.
 fn spawn_voice(edge: &mut Edge, speed: f32) -> Option<Voice> {
-    let dir = tmp_dir(&edge.crime_home);
+    let dir = tmp_dir(&edge.varde_home);
     let scale = reading::duration_scale(speed);
     let voice = reading::voice_file(&edge.speech.voice, &home()).unwrap_or_default();
     let args: Vec<String> = edge
@@ -1859,7 +1859,7 @@ fn speak(
         .collect();
     let stream = said
         .filter(|said| !said.is_empty())
-        .and_then(|said| stitch(&tmp_dir(&edge.crime_home), &said));
+        .and_then(|said| stitch(&tmp_dir(&edge.varde_home), &said));
     let Some((whole, offsets)) = stream else {
         // The child is gone or would not answer. Dropping it is what makes the
         // next press start a fresh one, and what makes `voice_running` stop
@@ -2135,10 +2135,10 @@ fn probe_path(state: &State, edge: &mut Edge) {
         return;
     }
     edge.on_path = Some(
-        crime::tools::rows(state)
+        varde::tools::rows(state)
             .into_iter()
             .flat_map(|row| {
-                let installer = row.install.as_deref().and_then(crime::tools::installer);
+                let installer = row.install.as_deref().and_then(varde::tools::installer);
                 [Some(row.command), installer]
             })
             .flatten()
@@ -2301,7 +2301,7 @@ fn translate_mouse(
         MouseEventKind::ScrollLeft => mouse::Kind::ScrollLeft,
         MouseEventKind::ScrollRight => mouse::Kind::ScrollRight,
         // Exhaustive over the buttons, and deliberately: the catch-all that
-        // stood here swallowed every sideways wheel report for CRIME's whole
+        // stood here swallowed every sideways wheel report for Varde's whole
         // life, so a sideways swipe did nothing anywhere and said nothing
         // either. A kind crossterm grows now fails the build instead.
         MouseEventKind::Down(MouseButton::Middle)
@@ -2449,7 +2449,7 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
             };
             match std::process::Command::new(opener).arg(&url).spawn() {
                 // Reaped off the loop: an opener hands off and exits at once,
-                // and an unwaited child is a zombie until CRIME quits.
+                // and an unwaited child is a zombie until Varde quits.
                 Ok(mut child) => {
                     std::thread::spawn(move || {
                         let _ = child.wait();
@@ -2464,7 +2464,7 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
             }
         }
         // OSC 52: the terminal puts it on the clipboard of whatever machine you
-        // are actually sitting at. That terminal is CRIME's own stdout: sent to
+        // are actually sitting at. That terminal is Varde's own stdout: sent to
         // the shell pane, the sequence was typed at its prompt and copied nothing.
         Effect::ClipboardViaTerminal(text) => {
             let _ = execute!(
@@ -2548,7 +2548,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
             // for. Nothing reads it back — a core that parsed a server's log
             // would be branching on which server it is (R31.1).
             let log =
-                crime_dir(&edge.root, edge.sidecar.as_deref()).join(format!("lsp-{language}.log"));
+                varde_dir(&edge.root, edge.sidecar.as_deref()).join(format!("lsp-{language}.log"));
             let log = match std::fs::File::create(&log) {
                 Ok(file) => Some(file),
                 Err(error) => {
@@ -2573,7 +2573,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                 // told rather than left holding a conversation with nobody.
                 Err(_) => queue.push_back(Event::LspGone {
                     language,
-                    why: crime::lsp::Gone::FailedToStart,
+                    why: varde::lsp::Gone::FailedToStart,
                 }),
             }
         }
@@ -2596,7 +2596,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                     edge.servers.remove(&language);
                     queue.push_back(Event::LspGone {
                         language,
-                        why: crime::lsp::Gone::Exited,
+                        why: varde::lsp::Gone::Exited,
                     });
                 }
             }
@@ -2604,7 +2604,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
             // learns here rather than by waiting for a reply that cannot come.
             None => queue.push_back(Event::LspGone {
                 language,
-                why: crime::lsp::Gone::Exited,
+                why: varde::lsp::Gone::Exited,
             }),
         },
         // One timer, restarted: the core sends this on every change while
@@ -2700,7 +2700,7 @@ fn perform_files(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) -
             }
         }
         Effect::SaveState(contents) => {
-            let path = crime_dir(&edge.root, edge.sidecar.as_deref()).join(STATE_FILE);
+            let path = varde_dir(&edge.root, edge.sidecar.as_deref()).join(STATE_FILE);
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -2792,8 +2792,8 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             // converts; every decision about what it found is the library's.
             let answer = edge.analysed.clone();
             let root = edge.root.clone();
-            // The receiver outlives every job — it is dropped when CRIME
-            // exits — so a send that fails is a CRIME already shutting down.
+            // The receiver outlives every job — it is dropped when Varde
+            // exits — so a send that fails is a Varde already shutting down.
             std::thread::spawn(move || {
                 answer_figures(generation, files, base, &root, &answer);
             });
@@ -2812,7 +2812,7 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
         Effect::ReadBranches => queue.push_back(Event::Branches(read_branches(&edge.root))),
         // The download's exit status, as the sentinel carries it (ADR 0015),
         // and the Guest repo read exactly as any other repository is — `git2`,
-        // like every read in CRIME: only the clone and the fetch shell out. A
+        // like every read in Varde: only the clone and the fetch shell out. A
         // sentinel that cannot be read is a failure too, with no status to
         // name: refused out loud rather than reported as a download that
         // worked.
@@ -2828,12 +2828,12 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
                     how,
                     status: Some(status.to_string()),
                 },
-                // A sentinel this CRIME asked for and cannot read is a failure
+                // A sentinel this Varde asked for and cannot read is a failure
                 // with no status to name, reported as one rather than as a
                 // clone that worked. The reason is printed with the rest of
                 // what the edge cannot show on screen.
                 Err(error) => {
-                    eprintln!("crime: cannot read {}: {error}", sentinel.display());
+                    eprintln!("varde: cannot read {}: {error}", sentinel.display());
                     story::Branching::DownloadFailed { how, status: None }
                 }
             };
@@ -2852,7 +2852,7 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
                 Ok(text) => Some(text),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
                 Err(error) => {
-                    eprintln!("crime: cannot read {}: {error}", path.display());
+                    eprintln!("varde: cannot read {}: {error}", path.display());
                     None
                 }
             };
@@ -2866,7 +2866,7 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
         Effect::ReadInstallStatus(sentinel) => {
             let status = std::fs::read_to_string(&sentinel)
                 .inspect_err(|error| {
-                    eprintln!("crime: cannot read {}: {error}", sentinel.display())
+                    eprintln!("varde: cannot read {}: {error}", sentinel.display())
                 })
                 .ok();
             queue.push_back(Event::InstallEnded(status));
@@ -2925,7 +2925,7 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
                 let outcome = match exe {
                     Some(exe) => replace_binary(&exe, &asset, &checksums),
                     None => {
-                        eprintln!("crime: update failed: the running binary could not be located");
+                        eprintln!("varde: update failed: the running binary could not be located");
                         Err(ReplaceFailed::Replace)
                     }
                 };
@@ -2989,13 +2989,13 @@ fn latest_release(url: &str) -> Option<String> {
         }
         Ok(finished) => {
             eprintln!(
-                "crime: release check failed: {}",
+                "varde: release check failed: {}",
                 String::from_utf8_lossy(&finished.stderr).trim()
             );
             None
         }
         Err(error) => {
-            eprintln!("crime: release check failed: curl: {error}");
+            eprintln!("varde: release check failed: curl: {error}");
             None
         }
     }
@@ -3008,12 +3008,12 @@ fn replace_binary(exe: &Path, asset: &str, checksums: &str) -> Result<(), Replac
     let list = download(checksums).ok_or(ReplaceFailed::Download)?;
     let binary = download(asset).ok_or(ReplaceFailed::Download)?;
     startup::verify(&String::from_utf8_lossy(&list), asset, &binary).inspect_err(|failed| {
-        eprintln!("crime: update failed: {failed:?} for {asset}");
+        eprintln!("varde: update failed: {failed:?} for {asset}");
     })?;
     // Named per thread, so a second `:update` while the first still downloads
     // writes its own file rather than into the one being renamed.
     let temp = exe.with_file_name(format!(
-        ".crime-update-{}-{:?}",
+        ".varde-update-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
     ));
@@ -3024,7 +3024,7 @@ fn replace_binary(exe: &Path, asset: &str, checksums: &str) -> Result<(), Replac
         })
         .and_then(|()| std::fs::rename(&temp, exe));
     written.map_err(|error| {
-        eprintln!("crime: update failed: replacing {}: {error}", exe.display());
+        eprintln!("varde: update failed: replacing {}: {error}", exe.display());
         let _ = std::fs::remove_file(&temp);
         ReplaceFailed::Replace
     })
@@ -3039,13 +3039,13 @@ fn download(url: &str) -> Option<Vec<u8>> {
         Ok(finished) if finished.status.success() => Some(finished.stdout),
         Ok(finished) => {
             eprintln!(
-                "crime: update failed: {url}: {}",
+                "varde: update failed: {url}: {}",
                 String::from_utf8_lossy(&finished.stderr).trim()
             );
             None
         }
         Err(error) => {
-            eprintln!("crime: update failed: curl: {error}");
+            eprintln!("varde: update failed: curl: {error}");
             None
         }
     }
@@ -3159,7 +3159,7 @@ fn answer_figures(
 /// Where an Iteration's files are kept while its session edits them. Per-user
 /// derived data, ignored rather than committed.
 fn snapshot_dir(root: &Path, sidecar: Option<&Path>, iteration: u32) -> PathBuf {
-    crime_dir(root, sidecar).join(format!("snapshots/{iteration}"))
+    varde_dir(root, sidecar).join(format!("snapshots/{iteration}"))
 }
 
 /// Copies the working tree aside, so a failed Gate has somewhere to go back to
@@ -3175,10 +3175,10 @@ fn snapshot(root: &Path, sidecar: Option<&Path>, iteration: u32) {
     let dir = snapshot_dir(root, sidecar, iteration);
     let _ = std::fs::remove_dir_all(&dir);
     for name in walk(root) {
-        // CRIME's own folder is never part of a Scope: a workspace that does
-        // not ignore `.crime` would otherwise have each snapshot copy the one
+        // Varde's own folder is never part of a Scope: a workspace that does
+        // not ignore `.varde` would otherwise have each snapshot copy the one
         // before it, and the sentinel is deleted per Iteration anyway.
-        if Path::new(&name).starts_with(crime::CRIME_DIR) {
+        if Path::new(&name).starts_with(varde::VARDE_DIR) {
             continue;
         }
         let to = dir.join(&name);
@@ -3245,7 +3245,7 @@ fn resolve_story(
     // A spelling that resolves but has no path is a range git cannot answer
     // for — two branches with no merge-base between them. Authoring into the
     // empty string an `unwrap_or_default` would hand over writes the story set
-    // nowhere, silently; a range CRIME cannot name is refused like any other.
+    // nowhere, silently; a range Varde cannot name is refused like any other.
     let Some(out) = story_artifact_path(dir, &repository, &spelling) else {
         return refused();
     };
@@ -3297,7 +3297,7 @@ fn read_branches(root: &Path) -> story::Branching {
 /// pointing at the same commit — which is what `git switch` does with a branch
 /// that exists only on a remote, and what makes a branch pushed but never
 /// checked out reachable at all. Nothing more than the ref: the upstream, the
-/// config and the remote are the reviewer's repository's, and CRIME is only
+/// config and the remote are the reviewer's repository's, and Varde is only
 /// reading their branch.
 ///
 /// The reason is git's own words on the way out: a checkout can fail (a file in
@@ -3355,7 +3355,7 @@ fn checkout(root: &Path, name: &str) -> Result<String, String> {
 /// The sides come from [`story::inventory`]'s two revisions rather than from
 /// the working tree, so a fully committed range hands over its own diff and not
 /// a later commit's. `None` when git cannot resolve the spelling at all: a
-/// hand-over CRIME cannot fill in is left unwritten rather than written empty.
+/// hand-over Varde cannot fill in is left unwritten rather than written empty.
 fn story_context(root: &Path, spelling: &str) -> Option<String> {
     let repository = git2::Repository::open(root).ok()?;
     let (base, head) = range_ends(&repository, spelling)?;
@@ -3463,7 +3463,7 @@ fn bare_default_branch(repository: &git2::Repository) -> Option<String> {
 /// The path a story set for this spelling belongs at, per ADR 0005 —
 /// `<base12>-<head12|worktree>.json` — computed here rather than left for
 /// the AI to derive: only the edge has git, and the whole point of naming by
-/// revision is that CRIME, not the CLI's own guess, decides where a
+/// revision is that Varde, not the CLI's own guess, decides where a
 /// re-authored range lands.
 fn story_artifact_path(
     dir: &Path,
@@ -3651,7 +3651,7 @@ fn measured_at(root: &Path, files: &[String], base: &str) -> Figures {
 /// Which language the analyser handles this file as, if it handles it at all.
 /// Which languages those are is the analyser's own answer, not a list here — and
 /// a file in any other one is not part of the answer, so it is dropped rather
-/// than reported as something CRIME failed at.
+/// than reported as something Varde failed at.
 fn language(path: &Path) -> Option<rust_code_analysis::LANG> {
     let extension = path
         .extension()
@@ -3707,7 +3707,7 @@ fn space(analysed: &rust_code_analysis::FuncSpace) -> Space {
 
 /// Runs a settled query: reads the project, lets open buffers stand in for
 /// their files, and scans.
-fn run_search(state: &State, root: &Path, query: &str) -> crime::search::Results {
+fn run_search(state: &State, root: &Path, query: &str) -> varde::search::Results {
     let disk = walk(root)
         .into_iter()
         .filter_map(|name| {
@@ -3716,7 +3716,7 @@ fn run_search(state: &State, root: &Path, query: &str) -> crime::search::Results
                 .map(|contents| (name, contents))
         })
         .collect();
-    crime::search::scan(query, &crime::search::sources(state, disk))
+    varde::search::scan(query, &varde::search::sources(state, disk))
 }
 
 /// One file's diff as the edge reads it: the rows, the blob oid of what is on
@@ -3724,16 +3724,16 @@ fn run_search(state: &State, root: &Path, query: &str) -> crime::search::Results
 ///
 /// The sides are parsed here rather than at draw time for the reason the
 /// buffer's tokens are, and they are parsed *whole* for the reason
-/// [`crime::review::diff_tokens`] takes whole ones: a diff is two sources
+/// [`varde::review::diff_tokens`] takes whole ones: a diff is two sources
 /// interleaved, and a row highlighted on its own restarts every token that
 /// spans lines. `old` is empty where there is nothing to read — no repository,
 /// no commit, a file `HEAD` does not have.
 #[derive(Default)]
 struct Diff {
-    lines: Vec<crime::DiffLine>,
+    lines: Vec<varde::DiffLine>,
     revision: String,
-    new_side: Vec<Vec<crime::highlight::Token>>,
-    old_side: Vec<Vec<crime::highlight::Token>>,
+    new_side: Vec<Vec<varde::highlight::Token>>,
+    old_side: Vec<Vec<varde::highlight::Token>>,
 }
 
 /// A unified diff of one file against HEAD, with the new-file line numbers a
@@ -3770,7 +3770,7 @@ fn diff_lines(root: &Path, path: &Path) -> Diff {
     let mut lines = Vec::new();
     let _ = diff.print(git2::DiffFormat::Patch, |_, _, line| {
         if matches!(line.origin(), '+' | '-' | ' ') {
-            lines.push(crime::DiffLine {
+            lines.push(varde::DiffLine {
                 new_line: line.new_lineno().map(|n| n as usize),
                 old_line: line.old_lineno().map(|n| n as usize),
                 removed: line.origin() == '-',
@@ -3813,12 +3813,12 @@ fn diff_lines(root: &Path, path: &Path) -> Diff {
     Diff {
         lines,
         revision,
-        new_side: crime::highlight::highlight(
+        new_side: varde::highlight::highlight(
             &name,
             &std::fs::read_to_string(path).unwrap_or_default(),
         ),
         old_side: old_text
-            .map(|text| crime::highlight::highlight(&name, &text))
+            .map(|text| varde::highlight::highlight(&name, &text))
             .unwrap_or_default(),
     }
 }
@@ -3846,12 +3846,12 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
     ),
     (
         "language-server-failed",
-        "Could not start the language server — see .crime/lsp-<language>.log, and its command in .crime/config.toml",
+        "Could not start the language server — see .varde/lsp-<language>.log, and its command in .varde/config.toml",
         ui::Tone::Warning,
     ),
     (
         "language-server-stopped",
-        "The language server stopped — see .crime/lsp-<language>.log; no diagnostics, hover or completion until it is restarted",
+        "The language server stopped — see .varde/lsp-<language>.log; no diagnostics, hover or completion until it is restarted",
         ui::Tone::Warning,
     ),
     (
@@ -3884,12 +3884,12 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
         "The language server knows nothing about the symbol under the cursor",
         ui::Tone::Notice,
     ),
-    // The two sentences above are false when CRIME is what declined to answer,
+    // The two sentences above are false when Varde is what declined to answer,
     // and they are the sentences that sent a reader looking at their own
-    // install instead of at CRIME. One slug for both keys: it is one refusal.
+    // install instead of at Varde. One slug for both keys: it is one refusal.
     (
         "needs-a-companion",
-        "This language server relays that question to a second server CRIME does not run — see .crime/config.toml",
+        "This language server relays that question to a second server Varde does not run — see .varde/config.toml",
         ui::Tone::Warning,
     ),
     (
@@ -3939,7 +3939,7 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
     ),
     (
         "no-test-command",
-        "No test command — set risk.test_command in .crime/config.toml",
+        "No test command — set risk.test_command in .varde/config.toml",
         ui::Tone::Warning,
     ),
     (
@@ -4021,7 +4021,7 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
     ("no-such-motion", "No such motion", ui::Tone::Warning),
     (
         "nothing-to-update",
-        "Nothing to update from — no checkout of CRIME, and no newer Release found",
+        "Nothing to update from — no checkout of Varde, and no newer Release found",
         ui::Tone::Warning,
     ),
     // One per step of replacing the binary, so a network error, a Release with
@@ -4063,7 +4063,7 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
     ),
     (
         "no-voice",
-        "No voice on this machine — press i to install the speech row, which fetches one and names it in ~/.crime/config.toml",
+        "No voice on this machine — press i to install the speech row, which fetches one and names it in ~/.varde/config.toml",
         ui::Tone::Warning,
     ),
     (
@@ -4073,7 +4073,7 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
     ),
     (
         "no-player",
-        "No audio player — set speech.player in ~/.crime/config.toml to something on this machine",
+        "No audio player — set speech.player in ~/.varde/config.toml to something on this machine",
         ui::Tone::Warning,
     ),
 ];
@@ -4094,7 +4094,7 @@ fn notice_text(notice: &str) -> (&str, ui::Tone) {
 
 /// Adds and drops watches to match the folders the core says it needs — never a
 /// whole subtree, which is what keeps .git's objects and node_modules off the
-/// watch list. Which folders those are is `crime::watched_folders`' decision:
+/// watch list. Which folders those are is `varde::watched_folders`' decision:
 /// the set used to be assembled here, and a set assembled in `main.rs` is a set
 /// with no test, which is how a buffer in a collapsed folder came to be watched
 /// by nobody.
@@ -4103,7 +4103,7 @@ fn sync_watches(
     watcher: &mut notify::RecommendedWatcher,
     watched: &mut BTreeSet<PathBuf>,
 ) {
-    let wanted = crime::watched_folders(state);
+    let wanted = varde::watched_folders(state);
     for path in wanted.difference(watched).cloned().collect::<Vec<_>>() {
         if watcher.watch(&path, RecursiveMode::NonRecursive).is_ok() {
             watched.insert(path);
@@ -4121,7 +4121,7 @@ fn collect_watch_events(
     queue: &mut VecDeque<Event>,
 ) {
     let git_dir = state.root.join(".git");
-    let stories_dir = crime_dir(&state.root, state.sidecar.as_deref()).join("stories");
+    let stories_dir = varde_dir(&state.root, state.sidecar.as_deref()).join("stories");
     while let Ok(Ok(event)) = receiver.try_recv() {
         let notify::Event { kind, paths, .. } = event;
         for path in paths {
@@ -4240,16 +4240,16 @@ mod tests {
         alive, authorship, checkout, committed, flatten, found, notice_text, pid_of, range_ends,
         read_branches, rewrite, samples, short_date, sidecar, space, stitch, watched_path,
     };
-    use crime::risk;
-    use crime::startup::{Fact, FactValue};
-    use crime::story;
-    use crime::{tree, Event, State};
     use notify::event::{CreateKind, DataChange, ModifyKind, RenameMode};
     use std::collections::BTreeMap;
     use std::collections::BTreeSet;
     use std::collections::VecDeque;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use varde::risk;
+    use varde::startup::{Fact, FactValue};
+    use varde::story;
+    use varde::{tree, Event, State};
 
     /// R35.4's silence, in the unit the container counts in. A sample is one
     /// channel's, so a stereo second is twice a mono one — counting frames
@@ -4348,7 +4348,7 @@ mod tests {
         assert!(whole.exists(), "the whole stream is what a seek cuts from");
     }
 
-    /// The shipped fact, spelled here so these tests search for what CRIME
+    /// The shipped fact, spelled here so these tests search for what Varde
     /// actually ships without reaching for the whole config merge. The
     /// `PROGRAMS` unit test in `startup.rs` holds the two spellings level.
     fn typescript_sdk() -> Fact {
@@ -4383,8 +4383,8 @@ mod tests {
     #[test]
     fn flattening_a_path_collides_with_no_other_path() {
         assert_eq!(
-            flatten(Path::new("/home/me/projects/crime")),
-            "%home%me%projects%crime"
+            flatten(Path::new("/home/me/projects/varde")),
+            "%home%me%projects%varde"
         );
         assert_ne!(flatten(Path::new("/a/b")), flatten(Path::new("/a%b")));
     }
@@ -4628,7 +4628,7 @@ mod tests {
                 gone.clone(),
                 &State::default(),
                 &root.path().join(".git"),
-                &root.path().join(".crime/stories"),
+                &root.path().join(".varde/stories"),
                 &mut queue,
             );
 
@@ -4703,7 +4703,7 @@ mod tests {
             .expect("a commit");
 
         let buffers = [root.join("a.rs"), root.join("new.rs")];
-        let ada = crime::authorship::Authored {
+        let ada = varde::authorship::Authored {
             author: "Ada Lovelace".to_string(),
             date: "2026-01-05".to_string(),
         };
@@ -4715,7 +4715,7 @@ mod tests {
         );
         assert_eq!(found.get(&buffers[1]), Some(&Vec::new()));
 
-        let poison = crime::authorship::Authored {
+        let poison = varde::authorship::Authored {
             author: "nobody walked this".to_string(),
             date: String::new(),
         };
@@ -4755,14 +4755,14 @@ mod tests {
     fn a_verified_asset_replaces_the_binary_and_a_bad_one_does_not() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("a temp directory");
-        let exe = dir.path().join("crime");
+        let exe = dir.path().join("varde");
         fs::write(&exe, "old").expect("the running binary");
-        let asset = dir.path().join("crime-linux-x86_64");
+        let asset = dir.path().join("varde-linux-x86_64");
         fs::write(&asset, "foo").expect("the Asset");
         let sums = dir.path().join("SHA256SUMS");
         let url = |path: &Path| format!("file://{}", path.display());
 
-        fs::write(&sums, "0000000000000000000000000000000000000000000000000000000000000000  crime-linux-x86_64\n")
+        fs::write(&sums, "0000000000000000000000000000000000000000000000000000000000000000  varde-linux-x86_64\n")
             .expect("a wrong list");
         assert_eq!(
             super::replace_binary(&exe, &url(&asset), &url(&sums)),
@@ -4770,7 +4770,7 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&exe).expect("the binary"), "old");
 
-        fs::write(&sums, "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae  crime-linux-x86_64\n")
+        fs::write(&sums, "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae  varde-linux-x86_64\n")
             .expect("the list");
         assert_eq!(
             super::replace_binary(&exe, &url(&asset), &url(&sums)),
@@ -4936,7 +4936,7 @@ mod tests {
                 path,
                 &State::default(),
                 &root.path().join(".git"),
-                &root.path().join(".crime/stories"),
+                &root.path().join(".varde/stories"),
                 &mut queue,
             );
         }
@@ -4976,7 +4976,7 @@ mod tests {
                 path,
                 &State::default(),
                 &root.path().join(".git"),
-                &root.path().join(".crime/stories"),
+                &root.path().join(".varde/stories"),
                 &mut queue,
             );
         }
@@ -5005,7 +5005,7 @@ mod tests {
     fn what_is_not_folder_contents_is_no_removal_either() {
         let root = tempfile::tempdir().expect("a temp directory");
         let git = root.path().join(".git");
-        let stories = root.path().join(".crime/stories");
+        let stories = root.path().join(".varde/stories");
 
         for path in [git.join("index.lock"), stories.join("gone.json")] {
             let mut queue = VecDeque::new();

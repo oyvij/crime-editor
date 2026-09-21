@@ -1,7 +1,7 @@
 Feature: Formatting a file
 
   `:format` lays the file in the Buffer out the way the project says it should be laid out. Two
-  things can do that, and CRIME asks them in that order: the Language server already talking about
+  things can do that, and Varde asks them in that order: the Language server already talking about
   this file, and — where no server will — a Formatter, an external command named in configuration
   exactly as a server is.
 
@@ -17,34 +17,34 @@ Feature: Formatting a file
   comes back replaces the Buffer, which is the same rule the Language server is held to: a formatter
   told about the file on disk formats a file the reader is not looking at. So a dirty Buffer stays
   dirty and nothing is written — `:w` is the user's — and a formatter that can only rewrite a file in
-  place is a formatter CRIME does not support.
+  place is a formatter Varde does not support.
 
   Two refusals carry as much of this as the happy path does, because they are what a plausible
   implementation makes silent. A language nothing configures is told so, naming the key to write. A
   command that is configured and not installed puts its install command on the terminal's input line
   and runs nothing at all — `SetTerminalInput`, never `RunInTerminal`, for the reason ADR 0012
   gives. (Tools' `i` runs its install since ADR 0018; `:format` does not take a row.) Typed and not run is a promise about bytes, so the
-  string is stripped of control characters on the way: a newline in it is the Enter CRIME says it
+  string is stripped of control characters on the way: a newline in it is the Enter Varde says it
   never presses.
 
   A command that exits fine and prints nothing did not format the file empty. That is what a
-  formatter rewriting the file in place prints — the shape CRIME does not support — so it is refused
+  formatter rewriting the file in place prints — the shape Varde does not support — so it is refused
   the way a command that failed is, rather than applied as an answer.
 
   Nothing is remembered about a command that was missing, which is the whole of "format instantly
   after installing, with no restart": each `:format` asks the machine afresh.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project is a git repository
-    And CRIME was built for "macos"
+    And Varde was built for "macos"
 
   Rule: A formatter is a row in a config file, and nowhere else
 
     Scenario: A fresh install has a formatter for the languages the ask names
       Given there is no global config
       And the project has no config file
-      When CRIME starts in the project
+      When Varde starts in the project
       Then a formatter is configured for "html"
       And a formatter is configured for "css"
       And a formatter is configured for "javascript"
@@ -55,7 +55,7 @@ Feature: Formatting a file
     Scenario: A global config naming no formatter configures none
       Given the global config is empty
       And the project has no config file
-      When CRIME starts in the project
+      When Varde starts in the project
       Then there is no formatter configured for "json"
       And there is no formatter configured for "rust"
 
@@ -66,19 +66,19 @@ Feature: Formatting a file
         [formatter.json]
         command = "jq"
         """
-      When CRIME starts in the project
+      When Varde starts in the project
       Then the formatter for "json" is "jq"
 
-    Scenario: A formatter entry no layer ever gave a command stops CRIME from starting
+    Scenario: A formatter entry no layer ever gave a command stops Varde from starting
       Given the global config is empty
       And the project config is:
         """
         [formatter.ada]
         args = ["--write"]
         """
-      When CRIME starts in the project
-      Then CRIME refuses to start
-      And the error names the file ".crime/config.toml"
+      When Varde starts in the project
+      Then Varde refuses to start
+      And the error names the file ".varde/config.toml"
 
   Rule: The configured command sees the Buffer, and its answer replaces it
 
@@ -94,7 +94,7 @@ Feature: Formatting a file
         """
         {"a":1}
         """
-      And it was run with the arguments "--stdin-filepath /home/me/projects/crime/data/thing.json"
+      And it was run with the arguments "--stdin-filepath /home/me/projects/varde/data/thing.json"
 
     Scenario: What the command answers replaces the buffer
       Given a formatter "prettier" is configured for "json"
@@ -229,7 +229,7 @@ Feature: Formatting a file
         """
       When I run ":format" in the editor
       Then the notice is "no-formatter-configured"
-      And the message names "[formatter.txt] in .crime/config.toml"
+      And the message names "[formatter.txt] in .varde/config.toml"
       And no formatter was run
 
     Scenario: A file with no extension is named by the name it has
@@ -239,7 +239,7 @@ Feature: Formatting a file
         """
       When I run ":format" in the editor
       Then the notice is "no-formatter-configured"
-      And the message names "[formatter.Makefile] in .crime/config.toml"
+      And the message names "[formatter.Makefile] in .varde/config.toml"
       And no formatter was run
 
     Scenario: A server that offers no formatting leaves it to the configured command

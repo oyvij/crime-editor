@@ -37,7 +37,7 @@ Feature: The Risk list
   what the pane holds and what the keys and the mouse do to it.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project is a git repository
     And the risk threshold is 20
     And the figures were computed for the scope "workspace":
@@ -95,13 +95,13 @@ Feature: The Risk list
     Then the terminal pane has focus
 
   Scenario: The pane's visibility is mine, and survives a restart
-    Given the project ".crime/state.json" records the Risk list as shown
-    When CRIME starts in the project
+    Given the project ".varde/state.json" records the Risk list as shown
+    When Varde starts in the project
     Then the Risk list is shown
 
   Scenario: A pane never opened stays closed on a restart
-    Given the project ".crime/state.json" records the Risk list as hidden
-    When CRIME starts in the project
+    Given the project ".varde/state.json" records the Risk list as hidden
+    When Varde starts in the project
     Then the corner is empty
 
   Scenario: The list is a worklist, worst first
@@ -166,14 +166,14 @@ Feature: The Risk list
     And the Risk list pane has focus
     And the Risk list selection is "draw"
     When I press "Enter"
-    Then "/home/me/projects/crime/src/ui.rs" is open in the editor
+    Then "/home/me/projects/varde/src/ui.rs" is open in the editor
     And the cursor is on line 17
     And the editor pane has focus
 
   Scenario: A click on a row opens what Enter opens and leaves the keyboard in the pane
     Given the Risk list is shown
     When I click the Risk list row "draw"
-    Then "/home/me/projects/crime/src/ui.rs" is open in the editor
+    Then "/home/me/projects/varde/src/ui.rs" is open in the editor
     And the cursor is on line 17
     And the Risk list pane has focus
 
@@ -187,7 +187,7 @@ Feature: The Risk list
     Given the figure has gone stale
     And the Risk list is shown
     When I click the Risk list row "draw"
-    Then "/home/me/projects/crime/src/ui.rs" is open in the editor
+    Then "/home/me/projects/varde/src/ui.rs" is open in the editor
     And the Risk list state is "stale"
 
   Scenario: A Row selection is not text, so it is never copied
@@ -268,7 +268,7 @@ Feature: The Risk list
     Then the Risk list is empty
     And the keyboard is on the Risk list pane actions
 
-  Scenario: The action's prompt carries what CRIME already measured
+  Scenario: The action's prompt carries what Varde already measured
     Given the Risk list is shown
     And an AI session is running in the AI pane
     When I ask for a refactor of the Function "route"

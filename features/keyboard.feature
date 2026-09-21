@@ -17,7 +17,7 @@ Feature: Working without a mouse
   receives keys, even when it does nothing with them.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the file tree shows the collapsed folder "src"
     And "src" contains "tree.js"
 
@@ -76,7 +76,7 @@ Feature: Working without a mouse
     When I paste "echo one"
     Then the terminal received "echo one"
 
-  Scenario: A paste into a pane CRIME interprets reaches no child
+  Scenario: A paste into a pane Varde interprets reaches no child
     Given the editor pane has focus
     When I paste "echo one"
     Then the terminal received nothing
@@ -102,7 +102,7 @@ Feature: Working without a mouse
     And the file tree pane has focus
     And the tree selection is "src"
     When I press "Down"
-    Then "/home/me/projects/crime/src/tree.js" is open in the editor
+    Then "/home/me/projects/varde/src/tree.js" is open in the editor
     And the file tree pane has focus
 
   Scenario: Moving onto a folder previews nothing
@@ -135,7 +135,7 @@ Feature: Working without a mouse
     And the file tree pane has focus
     And the tree selection is "src/tree.js"
     When I press "Enter"
-    Then "/home/me/projects/crime/src/tree.js" is open in the editor
+    Then "/home/me/projects/varde/src/tree.js" is open in the editor
     And the editor pane has focus
 
   Scenario: Expanding a folder keeps you in the tree

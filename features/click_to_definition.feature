@@ -10,7 +10,7 @@ Feature: A held modifier makes a name a link to its definition
   at all.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the current view is Edit
     And a language server for "rust" is ready
     And "src/lib.rs" is open in the editor holding:

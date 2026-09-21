@@ -9,9 +9,9 @@ leaning on one.
 
 These were stated, not proposed. The grilling should test them, not reopen them silently.
 
-- **The TUI stays the product.** CRIME remains a terminal TUI, unchanged. The GUI is an
+- **The TUI stays the product.** Varde remains a terminal TUI, unchanged. The GUI is an
   *alternative* app for better visibility, not a replacement and not a merge.
-- **No separate windows.** Everything stays inside CRIME's one window. The Markdown preview stays
+- **No separate windows.** Everything stays inside Varde's one window. The Markdown preview stays
   in the editor pane where it is today; a companion window next to the terminal was rejected.
 - **The terminal's theme must carry over.** An app does not run inside the terminal, so it does
   not inherit its palette — this was raised as the objection, and the GUI has to answer it.
@@ -20,7 +20,7 @@ These were stated, not proposed. The grilling should test them, not reopen them 
 
 ## What the code already gives a second front end
 
-- **The core is pure.** `crime::update(&State, Event) -> (State, Vec<Effect>)` in `src/lib.rs`
+- **The core is pure.** `varde::update(&State, Event) -> (State, Vec<Effect>)` in `src/lib.rs`
   makes every decision; effects are data. No terminal, pty, git or filesystem in `src/` outside
   the edge.
 - **The edge is small and the terminal stack lives only there.** `main.rs`, `ui.rs`, `pty.rs` and
@@ -54,15 +54,15 @@ This is what "pure" does not mean: the core is free of I/O, not free of cells.
 ## Colour today
 
 Counted in `ui.rs`: about 110 uses of *named* ANSI colours (`Cyan`, `DarkGray`, `Yellow`, …) —
-the terminal's theme decides what those look like, which is why CRIME matches the terminal today —
+the terminal's theme decides what those look like, which is why Varde matches the terminal today —
 and about 70 fixed ones (`Rgb`, `Indexed`). Syntax highlighting has its own `editor.theme`.
 A GUI has to answer "what is cyan?" itself, and must anyway: the shell and AI panes inside it
 print ANSI colours.
 
 ## The shape the conversation converged on
 
-**Two front ends on one core.** `crime .` in a terminal is today's TUI. A GUI app (say
-`crime --gui .`) is the same panes in the same places in its own window, where:
+**Two front ends on one core.** `varde .` in a terminal is today's TUI. A GUI app (say
+`varde --gui .`) is the same panes in the same places in its own window, where:
 
 - the editor, shell and AI panes stay a cell grid (code is monospace; hosted panes must be), and
 - the reading and comprehension panes — preview, story, Reading, risk — draw in pixels: real
@@ -79,7 +79,7 @@ TUI-only *lay out to columns* step. The TUI's output stays identical and the exi
 tests prove it. story, Reading and risk probably need the same split.
 
 **The palette:** the TUI asks the terminal for its colours (OSC 10/11 for foreground and
-background, OSC 4 for the sixteen ANSI colours) and saves the answer in CRIME's config directory;
+background, OSC 4 for the sixteen ANSI colours) and saves the answer in Varde's config directory;
 the GUI reads it. A `[palette]` section in config is the override, and the fallback for a terminal
 or tmux that does not answer. Fonts cannot be queried, so the GUI needs a `font` and `size` key.
 This fits the edge rule — the edge asks, the answer comes back as data — the reverse direction of
@@ -89,7 +89,7 @@ the replies `queries::reply` already gives children.
 
 - **A Neovide-style GUI (the whole window a cell grid).** Neovide is a Rust GPU front end for
   Neovim that draws Neovim's grid with better fonts, smooth scroll and an animated cursor; it still
-  looks like a TUI. Cheapest form for CRIME: keep `ui.rs` unchanged behind a ratatui GUI backend
+  looks like a TUI. Cheapest form for Varde: keep `ui.rs` unchanged behind a ratatui GUI backend
   (`ratatui-wgpu`, `egui_ratatui`, `bevy_ratatui` — none checked for maintenance or ratatui 0.30
   support). About 1–2 weeks, no core change. Set aside because it gives sharper text and nothing
   else: no real graphics, no proportional prose.
@@ -97,7 +97,7 @@ the replies `queries::reply` already gives children.
   estimated 5–10k lines of the core — off cells, and breaks the one-layout rule. Set aside for the
   hybrid.
 - **A companion window next to the TUI,** showing only the rich preview. Rejected by the owner: no
-  windows outside CRIME.
+  windows outside Varde.
 - **Images inside the terminal** (Kitty graphics protocol, as in Kitty, WezTerm, Ghostty). Real
   diagrams, even real fonts rendered into an image, inside today's pane. Limits: those terminals
   only (needs today's text as the fallback), unreliable through tmux, slow over ssh, text in an
@@ -112,7 +112,7 @@ the replies `queries::reply` already gives children.
 
 1. **Toolkit.** egui (redraws from state every frame, built-in animation helpers, easy to mix text,
    images and custom drawing) or iced (Elm architecture — `update`, `view`, messages — the closest
-   fit to CRIME's own shape, but younger animation support)? Is there a maintained terminal-grid
+   fit to Varde's own shape, but younger animation support)? Is there a maintained terminal-grid
    widget for either, or does the GUI draw `vt100`'s grid itself?
 2. **Which panes go pixel,** and is the line between grid and pixel panes the right one?
 3. **Drawing twice.** Every future feature in a pixel pane is drawn for the terminal and for the
@@ -135,7 +135,7 @@ the replies `queries::reply` already gives children.
 ## Proposed first step
 
 A 1–2 week spike in egui: only the Markdown preview in the editor pane, fed from the existing
-`crime::preview` output, with real fonts, one real mermaid diagram, the terminal's palette, and one
+`varde::preview` output, with real fonts, one real mermaid diagram, the terminal's palette, and one
 animation (smooth scroll, or a highlight fading in). It tests all three goals on the pane where
 they matter most, and touches nothing in the core.
 

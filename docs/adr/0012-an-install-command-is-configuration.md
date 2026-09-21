@@ -1,19 +1,19 @@
 # An install command is configuration, not a branch
 
 > **Partly superseded by `docs/adr/0018-the-global-config-is-the-list-of-programs.md`:** program
-> rows now live in `~/.crime/config.toml`, which CRIME writes from a template, and taking a row from
+> rows now live in `~/.varde/config.toml`, which Varde writes from a template, and taking a row from
 > the server list appends it there and runs the install in the shell pane. "Nothing is ever written
 > to the user's config file" and "The command is typed, never run" no longer hold.
 
-`docs/adr/0011-a-language-server-is-a-second-hosted-child.md` states, flatly: **CRIME never
+`docs/adr/0011-a-language-server-is-a-second-hosted-child.md` states, flatly: **Varde never
 installs, downloads, updates or bootstraps a server. It runs what is configured.** This decision
 amends that sentence. It does not reverse the argument behind it, because the argument was never
-about installing — it was about CRIME *knowing how* to install.
+about installing — it was about Varde *knowing how* to install.
 
 Read 0011's own reasoning back:
 
 > A bootstrapper needs a table of where each server comes from and how it is built, which is the
-> match arm above wearing a package manager's clothes, and it would make CRIME's behaviour a
+> match arm above wearing a package manager's clothes, and it would make Varde's behaviour a
 > function of a network it cannot see.
 
 Two costs, and neither one is "a server got installed". The first is the table. The second is the
@@ -30,7 +30,7 @@ install.macos = "brew install zls"
 ```
 
 So the decision is the smallest one that closes the gap: **an install command is one more key in the
-`[lsp.<language>]` table, shipped as TOML data, and CRIME never composes it.** The forbidden thing
+`[lsp.<language>]` table, shipped as TOML data, and Varde never composes it.** The forbidden thing
 is unchanged and now stated in a form a grep can check: search `src/` for a package manager's name —
 `brew`, `npm`, `pip`, `apt`, `cargo`, `rustup`, `go`, `winget` — and every hit must be inside
 `DEFAULTS` or a fixture, exactly as 0011 already requires for the servers themselves. One grep, two
@@ -74,8 +74,8 @@ which means either restarting a server when a second language appears or reading
 when it applies, and the second is this section's promise reversed. One boolean on the *fact*, read
 only by the spawn gate, keeps the option opaque.
 
-This is not the rule `src/lsp.rs` states for *capabilities* ("CRIME asks for nothing yet, so it claims
-nothing"), and the distinction is worth keeping. A capability is a claim about what CRIME can do, and
+This is not the rule `src/lsp.rs` states for *capabilities* ("Varde asks for nothing yet, so it claims
+nothing"), and the distinction is worth keeping. A capability is a claim about what Varde can do, and
 announcing one before the code that reads it invites a server to send what nobody looks at. An
 initialization option is a claim about nothing: it is a value going the other way, and the party it
 describes is the server.
@@ -85,29 +85,29 @@ workspace — `node_modules/typescript/lib` — so `DEFAULTS` carries none of th
 reason the `install` table carries no `clangd` command for macOS. What it does ship is the
 `${fact}` a `[facts.*]` search resolves at every spawn, which is the same refusal one layer up: a
 declared search is not a path on somebody else's disk. An invented path that does not exist is worse than an honest
-blank, because a server that fails on a configured-looking value reads as CRIME's bug rather than as a
+blank, because a server that fails on a configured-looking value reads as Varde's bug rather than as a
 row to fix. The same applies to `[lsp.vue]`, whose `args` want `--tsdk=<dir>`: the flag is correct and
 the directory is machine-specific, so the arg is not shipped half-finished either. A path on this
 machine is the edge's to find and tell the core, which is R31.23's split and a later decision.
 
 ## The command is typed, never run
 
-CRIME types the install command into the terminal pane and does not press Enter — `SetTerminalInput`,
+Varde types the install command into the terminal pane and does not press Enter — `SetTerminalInput`,
 not `RunInTerminal`. The tree's actions already work this way, and the reason transfers exactly: an
-install is a command with consequences on a machine CRIME does not own, and the person who owns it is
+install is a command with consequences on a machine Varde does not own, and the person who owns it is
 sitting in front of the pane.
 
 This is also what answers 0011's second cost without any machinery. The network is not invisible: the
 request is made by a command the user read first, in a shell they control, whose output lands where
-they can see it. There is nothing for CRIME to interpret, which matters more than it looks —
+they can see it. There is nothing for Varde to interpret, which matters more than it looks —
 `docs/adr/0004-hosted-panes-are-transparent.md` forbids reading what a pane prints, so a design that
 needed to know whether `brew` succeeded would have had to break that rule or guess. This design needs
-neither: **what changes CRIME's behaviour is the probe finding the command**, on a later pass, and a
+neither: **what changes Varde's behaviour is the probe finding the command**, on a later pass, and a
 probe is a fact rather than a claim.
 
 A consequence worth stating, because it is a feature and reads like a limitation: a default install
 command that is wrong for this machine is **editable in place**. It is sitting on the terminal's input
-line, and a Debian default on Fedora is one word away from being right. A command CRIME had already
+line, and a Debian default on Fedora is one word away from being right. A command Varde had already
 executed would instead be a failure to diagnose.
 
 ## Per-OS, because a command is not portable and a branch is still forbidden
@@ -123,23 +123,23 @@ scenario can set, and "the Linux row shows the Linux command" is otherwise unspe
 genuinely not packaged anywhere — `zls` on Linux is a tarball or a build from source, `jdtls` is not
 in most distributions — and inventing a plausible command for them would be worse than admitting the
 gap. The row says there is nothing configured, and the user is one line of TOML away from fixing it
-for themselves and every future CRIME on that machine.
+for themselves and every future Varde on that machine.
 
 ## Nothing is ever written to the user's config file
 
 The install commands ship **inside the binary**, as `startup::DEFAULTS`, which is already the bottom
-layer of F9's merge. This is the whole of "the commands are added automatically when CRIME is
+layer of F9's merge. This is the whole of "the commands are added automatically when Varde is
 installed or updated": a new version carries new and corrected commands, they are live on first run,
 and no file was touched.
 
-Writing them into `~/.crime/config.toml` instead was considered and rejected, and each reason is
+Writing them into `~/.varde/config.toml` instead was considered and rejected, and each reason is
 independent:
 
 **It would clobber deliberate edits.** A merge of shipped defaults into a file a human has been
 editing is a merge with no conflict resolution and no undo, on the one file a broken copy of which
-locks the user out of CRIME (0011's sibling concern: `ConfigError` exists to make that recoverable).
+locks the user out of Varde (0011's sibling concern: `ConfigError` exists to make that recoverable).
 
-**It would freeze what it wrote.** A command written to disk at install time is a command later CRIME
+**It would freeze what it wrote.** A command written to disk at install time is a command later Varde
 versions can never improve, because the user's file now beats the defaults — by design, key by key.
 The feature would work perfectly once and then rot, silently, in the direction of looking configured.
 
@@ -176,20 +176,20 @@ It remains the obvious fallback if the `install` keys prove too thin in practice
 cleanly: a row with no install command for this OS is exactly the case the AI session is good at. That
 is a later decision, and it is not blocked by this one.
 
-## Amendment: the first configured command CRIME runs against your source
+## Amendment: the first configured command Varde runs against your source
 
-Everything above is about a command CRIME *types*. `:format` (F32) is the first time CRIME **executes**
+Everything above is about a command Varde *types*. `:format` (F32) is the first time Varde **executes**
 a command a workspace's own configuration named, against the text on screen, with no keystroke between
 the decision and the process. That is a different act from the install command, and the difference is
 worth naming rather than discovering.
 
-It is acceptable here for the reason `docs/adr/0010-crime-owns-the-test-gate.md` already accepted the
-larger version of it: CRIME runs the project's tests, out of the project's own config, and a test
+It is acceptable here for the reason `docs/adr/0010-varde-owns-the-test-gate.md` already accepted the
+larger version of it: Varde runs the project's tests, out of the project's own config, and a test
 suite is arbitrary code with far more reach than a formatter. What makes both acceptable is not the
 size of the command but who asked for it. A formatter runs because a reader typed `:format`, over the
 buffer they are looking at, and what it is handed is that buffer's text on stdin and — where a row
 asked for it — the file's *name* (`${file}`, which is what lets one `prettier` tell JSON from YAML).
-It is never handed the file's contents and CRIME writes no file, so a row configured to rewrite the
+It is never handed the file's contents and Varde writes no file, so a row configured to rewrite the
 file in place formats stale bytes nobody is looking at and prints nothing back, which R32.11 refuses
 out loud: the shape is unsupported rather than prevented. The command is split
 with `shlex` and executed directly, never through a shell, so nothing from the workspace is
@@ -204,13 +204,13 @@ So the two live in one table, one is run and one is offered, and each is the sma
 
 ## Consequences
 
-**Nothing installs without a keystroke, and nothing runs without a second one.** CRIME does not offer
+**Nothing installs without a keystroke, and nothing runs without a second one.** Varde does not offer
 to install a server because a file was opened, and does not press Enter for you.
 
 **A command that appears is a reason to forget that it was missing.** A failed spawn writes a `Gone`
 conversation and `lsp::sync` skips any language that has one — deliberately, so that opening a second
 file of that language does not re-run a binary that is not there, and consequently the language is
-written off for the session. So the probe reporting a command CRIME holds a `Gone` conversation for
+written off for the session. So the probe reporting a command Varde holds a `Gone` conversation for
 **drops the conversation**, and the next pass spawns it exactly as a fresh start would. No restart, no
 retry loop, no timer.
 

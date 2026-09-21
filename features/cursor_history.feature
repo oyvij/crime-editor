@@ -1,7 +1,7 @@
 Feature: Cursor history
 
   Where the cursor has been, and the way back. Reading code is following it: a definition three files
-  away, a call site, a search hit — and then the way back to what you were actually working on. CRIME
+  away, a call site, a search hit — and then the way back to what you were actually working on. Varde
   had every way of getting somewhere and no way of returning.
 
   A Visit is one place the cursor has been: a file, a line, a column and the text that line held.
@@ -518,10 +518,10 @@ Feature: Cursor history
   Scenario: The history is this session's, and does not survive a restart
     Given I jump to "src/filter.rs" line 1
     And the Cursor history pane is shown
-    When CRIME starts in the project
+    When Varde starts in the project
     Then the cursor history is empty
 
   Scenario: The pane's visibility survives a restart
-    Given the project ".crime/state.json" records the corner pane as "History"
-    When CRIME starts in the project
+    Given the project ".varde/state.json" records the corner pane as "History"
+    When Varde starts in the project
     Then the Cursor history pane is shown

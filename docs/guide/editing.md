@@ -98,7 +98,7 @@ a keyboard extend and `V` all produce the same thing.
 
 Ctrl and Command are aliases on copy and paste. Copying with nothing selected does nothing.
 Copying uses the system clipboard and falls back to the terminal's own clipboard protocol (OSC 52)
-so it still reaches your machine when CRIME runs over SSH. Yanking with `y` copies to the
+so it still reaches your machine when Varde runs over SSH. Yanking with `y` copies to the
 clipboard as well as filling the register.
 
 Double-clicking a word picks it. Dragging picks characters in the editor, scrollback in the
@@ -121,7 +121,7 @@ commands. Line endings become line breaks however the source spelled them, paste
 no pairs, and the whole paste undoes in one `u`. A Preview refuses a paste out loud rather than
 editing a file you cannot see the characters of.
 
-A paste while one of CRIME's own lines has the keyboard — the `/` search line, the `:` command
+A paste while one of Varde's own lines has the keyboard — the `/` search line, the `:` command
 line, the tree filter — is typed into that line character by character, and a newline in it is
 `Enter`. A multi-line paste onto the `/` line therefore submits at its first line break.
 
@@ -183,7 +183,7 @@ without opening it — `Enter` still does that. A click on a file heading marks 
 ## Going back
 
 Reading code is following it — a definition three files away, a search hit — and then returning.
-CRIME records a **Visit** for every **Jump**: opening a file, switching Buffer, an in-file search
+Varde records a **Visit** for every **Jump**: opening a file, switching Buffer, an in-file search
 landing (`n`, `N`, `Enter` on a query), `gg` and `G`, and `gd` to a definition. Arrows, `j`/`k`
 and clicks are motions and record nothing, and browsing the tree does not count either. What is
 recorded is the place being *left*, so going back returns you to where you were.
@@ -222,7 +222,7 @@ punctuation nobody is looking at stays quiet.
 
 **Syntax highlighting** follows the file extension across roughly 220 syntaxes — TypeScript, TSX,
 Vue, Svelte, Kotlin, Swift, Zig, Dart, TOML, Terraform, Nix, Dockerfile, GraphQL and SCSS among
-them, and CRIME's own `config.toml`. An unknown extension, or none, renders as plain text. Colour
+them, and Varde's own `config.toml`. An unknown extension, or none, renders as plain text. Colour
 comes from `editor.theme` in configuration (`dark` unless set to `light`).
 
 `:dim` toggles the field the code sits on — a shade under the rest of the TUI, which lifts every
@@ -264,7 +264,7 @@ on the editor's bottom edge are clickable. See [Getting around](getting-around.m
 | `:qa` | close every buffer with nothing unsaved; names the ones it kept |
 | `:qa!` | close every buffer, discarding edits |
 
-Leaving CRIME is not on the `:` line at all — `Ctrl+Q`, or `q` in the palette — so a mistyped
+Leaving Varde is not on the `:` line at all — `Ctrl+Q`, or `q` in the palette — so a mistyped
 clear-up cannot take the session with it.
 
 A buffer with no unsaved edits follows the file on disk silently. A buffer **with** unsaved edits is
@@ -303,7 +303,7 @@ the moment you cross back.
 
 ## Configuration
 
-Two keys under `[editor]` in `~/.crime/config.toml` or `<project>/.crime/config.toml`, the project
+Two keys under `[editor]` in `~/.varde/config.toml` or `<project>/.varde/config.toml`, the project
 winning key by key — see [Configuration](configuration.md):
 
 ```toml

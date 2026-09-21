@@ -1,12 +1,12 @@
 Feature: The Refactor loop
 
-  CRIME hands an AI session a Scope and a goal, waits to be told the pass is finished, then runs the
+  Varde hands an AI session a Scope and a goal, waits to be told the pass is finished, then runs the
   project's tests itself, recomputes the figures itself, and applies the Gate. It does not ask the
-  session whether the pass was good: CRIME may not read what a hosted pane prints, so it cannot
-  verify a claim, so it measures — `docs/adr/0010-crime-owns-the-test-gate.md`.
+  session whether the pass was good: Varde may not read what a hosted pane prints, so it cannot
+  verify a claim, so it measures — `docs/adr/0010-varde-owns-the-test-gate.md`.
 
   Completion is a filesystem fact rather than a terminal one. The session writes a sentinel, seen by
-  the watcher that already exists, and CRIME deletes it before each Iteration begins so a leftover
+  the watcher that already exists, and Varde deletes it before each Iteration begins so a leftover
   cannot instantly complete the next one. Its contents are ignored. Silence is never completion: a
   session thinking for forty seconds looks exactly like one that finished, so the wait has no timeout
   and the exits are the stop action and the Iteration cap.
@@ -14,7 +14,7 @@ Feature: The Refactor loop
   The Gate is three conditions: the tests still pass, the primary figure moved down, and no other
   recorded metric moved up. The third is not politeness — cyclomatic complexity is trivially gamed by
   shredding one long Function into fifteen trivial ones, and cognitive complexity does not fall for
-  it. An Iteration failing any condition is returned to the snapshot CRIME took before it started,
+  it. An Iteration failing any condition is returned to the snapshot Varde took before it started,
   and the loop stops saying which condition stopped it. An Iteration that passes stands —
   uncommitted, always, because the loop's whole output is a working tree for you to review.
 
@@ -22,7 +22,7 @@ Feature: The Refactor loop
   commit: a file you had edited and the loop did not is never restored over.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project is a git repository
     And the risk threshold is 20
     And the configured test command is "cargo test"
@@ -37,7 +37,7 @@ Feature: The Refactor loop
   Scenario: Starting the loop hands the session the Scope, the figures and the target
     When I start the Refactor loop over the scope "workspace"
     Then the AI pane was sent a prompt naming the file "src/keys.rs"
-    And the AI pane was sent a prompt naming the file ".crime/risk.json"
+    And the AI pane was sent a prompt naming the file ".varde/risk.json"
     And the AI pane was sent a prompt naming the scope "workspace"
     And the AI pane was sent a prompt naming the target threshold "20"
     And the prompt was submitted to the AI
@@ -54,7 +54,7 @@ Feature: The Refactor loop
     When I start the Refactor loop over the scope "workspace"
     Then the AI pane was sent a prompt naming structural scattering as a failed pass
 
-  Scenario: The test command is never interpolated, because CRIME runs the tests
+  Scenario: The test command is never interpolated, because Varde runs the tests
     When I start the Refactor loop over the scope "workspace"
     Then no prompt sent to the AI contains "cargo test"
 
@@ -101,10 +101,10 @@ Feature: The Refactor loop
 
   Scenario: The sentinel is deleted before an Iteration begins
     When I start the Refactor loop over the scope "workspace"
-    Then the sentinel ".crime/refactor-done" was deleted
+    Then the sentinel ".varde/refactor-done" was deleted
 
   Scenario: A leftover sentinel cannot complete the Iteration it was left before
-    Given the sentinel ".crime/refactor-done" already exists
+    Given the sentinel ".varde/refactor-done" already exists
     When I start the Refactor loop over the scope "workspace"
     Then the Refactor loop wait state is "waiting-for-session"
     And no test command was run
@@ -118,13 +118,13 @@ Feature: The Refactor loop
 
   Scenario: The sentinel appearing ends the wait and runs the tests
     Given the Refactor loop is on Iteration 1 over the scope "workspace"
-    When the sentinel ".crime/refactor-done" appears
+    When the sentinel ".varde/refactor-done" appears
     Then the test command "cargo test" was run
     And the Refactor loop wait state is "waiting-for-tests"
 
   Scenario: The tests run off the shell pane, so the shell stays the user's
     Given the Refactor loop is on Iteration 1 over the scope "workspace"
-    When the sentinel ".crime/refactor-done" appears
+    When the sentinel ".varde/refactor-done" appears
     Then the test command "cargo test" was run
     And no command has been executed
 

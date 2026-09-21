@@ -17,7 +17,7 @@ Feature: Reaching the tree actions
   selected file, or the project root when nothing is selected.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the file tree shows the collapsed folder "src"
     And "src" contains "tree.js"
     And the file tree pane has focus
@@ -46,7 +46,7 @@ Feature: Reaching the tree actions
   Scenario: Clicking the delete icon runs the delete command
     Given the tree selection is "src"
     When I click the "delete" action on "src"
-    Then the terminal has executed "rm -r /home/me/projects/crime/src"
+    Then the terminal has executed "rm -r /home/me/projects/varde/src"
 
   Scenario: Clicking the search icon searches inside that folder only
     Given the tree selection is "src"
@@ -68,13 +68,13 @@ Feature: Reaching the tree actions
     Given the tree selection is "src"
     When I press "N"
     And I enter the name "tree"
-    Then the terminal has executed "mkdir -p /home/me/projects/crime/src/tree"
+    Then the terminal has executed "mkdir -p /home/me/projects/varde/src/tree"
 
   Scenario: d deletes the selected row
     Given the folder "src" is expanded
     And the tree selection is "src/tree.js"
     When I press "d"
-    Then the terminal has executed "rm /home/me/projects/crime/src/tree.js"
+    Then the terminal has executed "rm /home/me/projects/varde/src/tree.js"
 
   Scenario: Right steps into the row's actions
     Given the tree selection is "src"
@@ -116,7 +116,7 @@ Feature: Reaching the tree actions
     And I press "Right"
     And I press "Right"
     When I press "Enter"
-    Then the terminal input is "cd /home/me/projects/crime/src"
+    Then the terminal input is "cd /home/me/projects/varde/src"
 
   Scenario: Enter on the first action asks for a name
     Given the tree selection is "src"
@@ -146,7 +146,7 @@ Feature: Reaching the tree actions
     Given a system clipboard is available
     And the tree selection is "src"
     When I click the "copy-path" action on "src"
-    Then the clipboard holds "/home/me/projects/crime/src"
+    Then the clipboard holds "/home/me/projects/varde/src"
 
   Scenario: A row with no actions cannot be stepped into
     Given the tree selection is "src"
@@ -156,7 +156,7 @@ Feature: Reaching the tree actions
 
   Scenario: Dash returns the terminal to the project root
     When I press "-"
-    Then the terminal has executed "cd /home/me/projects/crime"
+    Then the terminal has executed "cd /home/me/projects/varde"
 
   Scenario: C collapses every open folder
     Given the folder "src" is expanded
@@ -168,23 +168,23 @@ Feature: Reaching the tree actions
     And the tree selection is "src"
     When I press "n"
     And I enter the name "new.js"
-    Then the terminal has executed "touch /home/me/projects/crime/src/new.js"
+    Then the terminal has executed "touch /home/me/projects/varde/src/new.js"
 
   Scenario: With no row selected, a new file lands in the project root
     Given no row is selected in the tree
     When I press "n"
     And I enter the name "notes.md"
-    Then the terminal has executed "touch /home/me/projects/crime/notes.md"
+    Then the terminal has executed "touch /home/me/projects/varde/notes.md"
 
   Scenario: With no row selected, a new directory lands in the project root
     Given no row is selected in the tree
     When I press "N"
     And I enter the name "docs"
-    Then the terminal has executed "mkdir -p /home/me/projects/crime/docs"
+    Then the terminal has executed "mkdir -p /home/me/projects/varde/docs"
 
   Scenario: A new file started on a file lands in that file's folder
     Given the folder "src" is expanded
     And the tree selection is "src/tree.js"
     When I press "n"
     And I enter the name "helper.js"
-    Then the terminal has executed "touch /home/me/projects/crime/src/helper.js"
+    Then the terminal has executed "touch /home/me/projects/varde/src/helper.js"

@@ -14,7 +14,7 @@ Feature: Reaching the review flow
   Moving the selection is browsing, so it keeps the list.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project is a git repository
     And the working tree contains:
       | path        | git status |
@@ -69,7 +69,7 @@ Feature: Reaching the review flow
     And the editor pane has focus
     When I press "e" in the editor
     Then the current view is Edit
-    And "/home/me/projects/crime/src/tree.js" is open in the editor
+    And "/home/me/projects/varde/src/tree.js" is open in the editor
 
   Scenario: Leaving Review view puts the editor back
     Given the diff for "src/tree.js" is shown

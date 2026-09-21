@@ -1,6 +1,6 @@
 # One selection, shared by the mouse and the keyboard
 
-CRIME had grown four separate notions of "selected": mouse-dragged text feeding the clipboard,
+Varde had grown four separate notions of "selected": mouse-dragged text feeding the clipboard,
 a linewise visual selection feeding vim's register, a linewise diff selection feeding review
 comments, and the file tree's current row. Yanking never reached the system clipboard and dragging
 never reached `p`, so "copy what I picked" meant different things depending on which hand you used.

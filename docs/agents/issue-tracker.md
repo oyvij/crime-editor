@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live as GitHub issues on `oyvij/crime-editor`. Use the `gh` CLI for
+Issues and specs for this repo live as GitHub issues on `oyvij/varde-editor`. Use the `gh` CLI for
 all operations. The repo is **public**: an issue is published the moment it is created, so nothing
 goes in one that could not go in a commit.
 

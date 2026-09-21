@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use toml::Table;
 
-/// The Settings: numbers CRIME cannot work without, built in and beaten key by
-/// key by `~/.crime/config.toml` and that by the project's own
+/// The Settings: numbers Varde cannot work without, built in and beaten key by
+/// key by `~/.varde/config.toml` and that by the project's own
 /// (`docs/adr/0018-the-global-config-is-the-list-of-programs.md`).
 /// `risk.threshold` is `risk::DEFAULT_THRESHOLD` and `editor.tab_width` is
 /// `editor::DEFAULT_TAB_WIDTH`, spelled as TOML — a test below holds each pair
@@ -44,7 +44,7 @@ speed = 1.0
 "#;
 
 /// The Program rows the binary carries: the rows [`template`] seeds
-/// `~/.crime/config.toml` with, live. They are not a layer of the merge: a row
+/// `~/.varde/config.toml` with, live. They are not a layer of the merge: a row
 /// no config file names does not run (ADR 0018).
 ///
 /// The `[lsp.*]` tables are the only place in the library a language server is
@@ -102,7 +102,7 @@ install.windows = "rustup component add rust-analyzer"
 
 # Every feature this server has is behind a question it puts to its client,
 # expecting the client to be running a TypeScript server as well and to relay it
-# there. CRIME does not relay — the question is refused, which is what gets the
+# there. Varde does not relay — the question is refused, which is what gets the
 # server past it and answering with what it can answer on its own instead of
 # waiting forever. What answers the rest is a *second server on the same file*:
 # `also_served_by` puts every question about a `.vue` file to the TypeScript
@@ -619,17 +619,17 @@ voice = ""
 
 player.macos = "afplay"
 player.linux = "aplay"
-install.macos = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -sL --output-dir ~/.crime/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json"
-install.linux = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl -sL --output-dir ~/.crime/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json"
-configures.voice = "~/.crime/voices/en_US-bryce-medium.onnx"
+install.macos = "uv tool install piper-tts && mkdir -p ~/.varde/voices && curl -sL --output-dir ~/.varde/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json"
+install.linux = "uv tool install piper-tts && mkdir -p ~/.varde/voices && curl -sL --output-dir ~/.varde/voices -O -O https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json"
+configures.voice = "~/.varde/voices/en_US-bryce-medium.onnx"
 "#;
 
-/// What starting lays down at `<project>/.crime/config.toml` the first time,
+/// What starting lays down at `<project>/.varde/config.toml` the first time,
 /// and only when nothing is there (Q38) — and what `install.sh` lays down at
-/// `~/.crime/config.toml` the same way, asked of `crime --default-config`, so
+/// `~/.varde/config.toml` the same way, asked of `varde --default-config`, so
 /// both files hold one text and the test below holds both. A key nobody can find is a key nobody
 /// sets: `editor.tab_width` was layered, merged and read on every start for its
-/// whole life while no `.crime/config.toml` existed anywhere to name it.
+/// whole life while no `.varde/config.toml` existed anywhere to name it.
 ///
 /// **Every key is commented out**, and that is the whole design. A seeded file
 /// holding live values would make "the project sets nothing" false — the merge
@@ -650,8 +650,8 @@ configures.voice = "~/.crime/voices/en_US-bryce-medium.onnx"
 /// reader who uncomments `tab_width` alone under a commented `[editor]` sets a
 /// top-level key that nothing reads. An empty table merges nothing, so they
 /// cost the effective config exactly what the comments do.
-pub const SEEDED_CONFIG: &str = r#"# CRIME reads this file on every start. A project's .crime/config.toml beats
-# ~/.crime/config.toml key by key, and both beat the defaults built into CRIME.
+pub const SEEDED_CONFIG: &str = r#"# Varde reads this file on every start. A project's .varde/config.toml beats
+# ~/.varde/config.toml key by key, and both beat the defaults built into Varde.
 # It arrives commented out on purpose: it is here so the keys can be found,
 # not so this version's answers can be pinned. Uncomment a line to disagree
 # with the default beside it; delete it again to go back to whatever the
@@ -706,14 +706,14 @@ pub const SEEDED_CONFIG: &str = r#"# CRIME reads this file on every start. A pro
 /// The Settings half of [`template`], commented out for the reason
 /// [`SEEDED_CONFIG`]'s are. `speech.speed` is not here but commented out inside
 /// [`PROGRAMS`]'s `[speech]` row, since TOML allows that table only once.
-const TEMPLATE_SETTINGS: &str = r#"# CRIME reads this file on every start. A project's .crime/config.toml beats
-# it key by key, and both beat the defaults built into CRIME.
+const TEMPLATE_SETTINGS: &str = r#"# Varde reads this file on every start. A project's .varde/config.toml beats
+# it key by key, and both beat the defaults built into Varde.
 #
 # The settings come first, commented out on purpose: they are here so the keys
 # can be found, not so this version's answers can be pinned. Uncomment a line
 # to disagree with the default beside it.
 #
-# The programs CRIME runs come after them — language servers, formatters, what
+# The programs Varde runs come after them — language servers, formatters, what
 # they need, and the voice — and those rows are live. Edit a row to change what
 # runs, or write one for a language this file does not name.
 
@@ -743,21 +743,21 @@ const TEMPLATE_SETTINGS: &str = r#"# CRIME reads this file on every start. A pro
 
 "#;
 
-/// What `~/.crime/config.toml` starts as, when CRIME starts and the edge read
-/// none, and what `crime --default-config` prints for `install.sh` to lay down
+/// What `~/.varde/config.toml` starts as, when Varde starts and the edge read
+/// none, and what `varde --default-config` prints for `install.sh` to lay down
 /// the same way: every Setting commented out, every Program row live (ADR 0018).
 pub fn template() -> String {
     [TEMPLATE_SETTINGS, PROGRAMS].concat()
 }
 
-pub const GLOBAL_LABEL: &str = "~/.crime/config.toml";
-pub const PROJECT_LABEL: &str = ".crime/config.toml";
+pub const GLOBAL_LABEL: &str = "~/.varde/config.toml";
+pub const PROJECT_LABEL: &str = ".varde/config.toml";
 
-/// The file both layers are read from: the global one under `~/.crime`, and
-/// the project's own under [`crate::crime_dir`].
+/// The file both layers are read from: the global one under `~/.varde`, and
+/// the project's own under [`crate::varde_dir`].
 pub const CONFIG_FILE: &str = "config.toml";
 
-/// Why CRIME refused to start. Precise enough to fix the file in another
+/// Why Varde refused to start. Precise enough to fix the file in another
 /// editor, which matters because a broken global config locks the user out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError {
@@ -770,7 +770,7 @@ pub struct ConfigError {
 /// three different places. The edge printed one sentence for all of them, so a
 /// deserialize fault about a missing key wore the parse fault's words and sent
 /// whoever read it hunting a syntax error that was not there — the same failure
-/// as a notice blaming a server for CRIME's own refusal, one layer down.
+/// as a notice blaming a server for Varde's own refusal, one layer down.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigFault {
     /// The text is not TOML at all.
@@ -828,17 +828,17 @@ pub enum PathStatus {
 #[derive(Debug, Default)]
 pub struct Startup {
     pub root: PathBuf,
-    /// The Sidecar, if the edge was given no folder to open: `crime` with no
-    /// argument is a Bare workspace, `crime <folder>` is a project. The edge
+    /// The Sidecar, if the edge was given no folder to open: `varde` with no
+    /// argument is a Bare workspace, `varde <folder>` is a project. The edge
     /// reports which it was by handing one or none — it never interprets argv,
-    /// and `crime` and `crime .` name the same folder
+    /// and `varde` and `varde .` name the same folder
     /// (`docs/adr/0016-a-bare-workspace-leaves-nothing-behind.md`).
     pub sidecar: Option<PathBuf>,
-    /// `~/.crime`, the user's own directory — where a submitted review goes
+    /// `~/.varde`, the user's own directory — where a submitted review goes
     /// when the workspace has nowhere durable to keep it (ADR 0016). Read at
     /// the edge like the Sidecar is, for the same reason: a home directory is
     /// not the library's to observe.
-    pub crime_home: PathBuf,
+    pub varde_home: PathBuf,
     /// The reviews already kept, by number, as the edge found them in
     /// [`crate::reviews_dir`]. Read from the directory rather than remembered
     /// in `state.json`: a Bare workspace has no state to remember it in, and
@@ -848,7 +848,7 @@ pub struct Startup {
     pub global_config: Option<String>,
     pub project_config: Option<String>,
     pub state_json: Option<String>,
-    /// `.crime/risk.json` as the edge found it, and what `HEAD` resolves to.
+    /// `.varde/risk.json` as the edge found it, and what `HEAD` resolves to.
     /// Whether the cached figure still describes the workspace is decided here,
     /// not there.
     pub risk_json: Option<String>,
@@ -858,10 +858,10 @@ pub struct Startup {
     /// the first changed file, and without it there is none to land on.
     pub repo: Option<Vec<crate::review::GitFile>>,
     /// The directory above the running binary, if the edge found one. Whether it
-    /// is CRIME's own checkout is decided here, not there.
+    /// is Varde's own checkout is decided here, not there.
     pub checkout: Option<PathBuf>,
     pub checkout_manifest: Option<String>,
-    /// What this binary was compiled from — the one version a running CRIME
+    /// What this binary was compiled from — the one version a running Varde
     /// knows for certain.
     pub running_version: String,
     /// Which operating system this binary was built for, as
@@ -877,7 +877,7 @@ pub struct Startup {
 /// This repository's latest Release — the one place the release host is named
 /// (ADR 0017). Unauthenticated: one request per launch is far inside the
 /// anonymous limit.
-pub const RELEASE_URL: &str = "https://api.github.com/repos/oyvij/crime-editor/releases/latest";
+pub const RELEASE_URL: &str = "https://api.github.com/repos/oyvij/varde-editor/releases/latest";
 
 /// A published Version newer than the Running version, and the two URLs
 /// `:update` fetches: this platform's Asset and the checksum list.
@@ -903,7 +903,7 @@ struct Attached {
 /// The file in a Release built for this platform. The release workflow's matrix
 /// spells the same names (`.github/workflows/release.yml`).
 fn asset_name(os: &str, arch: &str) -> String {
-    format!("crime-{os}-{arch}")
+    format!("varde-{os}-{arch}")
 }
 
 /// The Release a latest-release body describes, if it is an Update this
@@ -980,7 +980,7 @@ pub struct Server {
     pub also_served_by: Vec<String>,
     /// The file extensions this row owns, and the only way a file finds its
     /// server: the table name is then the language id the protocol is sent, so
-    /// a language CRIME has never heard of is a row and no release (ADR 0018).
+    /// a language Varde has never heard of is a row and no release (ADR 0018).
     /// Two rows claiming one extension is refused at start rather than settled
     /// by the order the merge happened to leave them in.
     #[serde(default)]
@@ -995,7 +995,7 @@ pub struct Server {
     /// What the server is told about its own world in the `initializationOptions`
     /// of `initialize` — where its toolchain lives, most often, which several
     /// servers will not run without. An arbitrary table, and that is the point:
-    /// CRIME inspects none of it, so a requirement nobody here anticipated is a
+    /// Varde inspects none of it, so a requirement nobody here anticipated is a
     /// row in a file rather than a release
     /// (`docs/adr/0012-an-install-command-is-configuration.md`, R31.26).
     ///
@@ -1012,13 +1012,13 @@ pub struct Server {
     /// What this server, installed and running, still cannot do — the reader's
     /// words, shown on its row. R31.25 forbids a language that reads as
     /// configured and answers nothing, and a language that answers *some* of it
-    /// is the same silence in a smaller shape: nothing CRIME can observe tells
+    /// is the same silence in a smaller shape: nothing Varde can observe tells
     /// a server with less to say from a file with less wrong in it. Named here
     /// for the reason a command is named here, and read nowhere except onto the
     /// row.
     #[serde(default)]
     pub partial: Option<String>,
-    /// A question this server asks the *client* that CRIME will not answer, and
+    /// A question this server asks the *client* that Varde will not answer, and
     /// the method to say so on. Data for the reason a command is data: which
     /// servers ask one, and what they ask it on, is a fact about a server, and
     /// an arm naming either is the one R31.1 forbids.
@@ -1033,9 +1033,9 @@ pub struct Server {
 }
 
 /// The two method names one such question needs: what the server asks on, and
-/// what CRIME answers on. Both, because they are one fact — a request method
+/// what Varde answers on. Both, because they are one fact — a request method
 /// with no response method is a refusal that cannot be spoken, and neither is
-/// any use alone. Named for what the key holds rather than for what CRIME does
+/// any use alone. Named for what the key holds rather than for what Varde does
 /// about it: `preview::Refusal` is already a different thing, and two of that
 /// word would send a reader to the wrong one.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -1047,7 +1047,7 @@ pub struct Unanswerable {
 /// What lays a language's files out, as configuration named it. The `[lsp.*]`
 /// table's shape a second time, and deliberately so: a formatter is a command
 /// on this machine that a project chooses, an OS packages differently, and
-/// nobody at CRIME can enumerate — the three properties
+/// nobody at Varde can enumerate — the three properties
 /// `docs/adr/0012-an-install-command-is-configuration.md` argues a name into
 /// the bottom layer of the merge for.
 ///
@@ -1091,7 +1091,7 @@ pub struct Formatter {
 ///
 /// Deliberately not a template language and not an expression: a marker path,
 /// and which of the two things found the answer is. Anything a marker cannot
-/// say is a fact CRIME does not ship, which is the same bargain
+/// say is a fact Varde does not ship, which is the same bargain
 /// `docs/adr/0012-an-install-command-is-configuration.md` strikes for installs.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Fact {
@@ -1116,7 +1116,7 @@ pub struct Fact {
     pub command_marker: Option<String>,
     /// Whether the server starts without it. A fact a server cannot run at all
     /// without and a fact it is merely better with are two different facts, and
-    /// nothing CRIME can observe tells them apart — so configuration says,
+    /// nothing Varde can observe tells them apart — so configuration says,
     /// which is the reason a command is configuration.
     ///
     /// Required is the default and the interesting case is why the other exists:
@@ -1196,7 +1196,7 @@ impl Config {
     ///
     /// Every layer was held to these same types as it was parsed and the merged
     /// table was held to being complete, so nothing here can fail for a config
-    /// CRIME started on — which is why this is a deserialize and not a walk
+    /// Varde started on — which is why this is a deserialize and not a walk
     /// deciding what to do about each wrong shape it meets, and why every
     /// `command` it returns is non-empty.
     pub fn servers(&self) -> BTreeMap<String, Server> {
@@ -1241,7 +1241,7 @@ impl Config {
     }
 }
 
-/// Why CRIME would not open. Each way a path can be unusable gets its own
+/// Why Varde would not open. Each way a path can be unusable gets its own
 /// reason, because a typo, a file and a permissions problem are three
 /// different things for the user to fix.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1255,9 +1255,9 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
         return Err(StartupError::Path(reason));
     }
     // A Bare workspace has no project configuration layer at all, so a
-    // `.crime/config.toml` that happens to sit in the folder — most likely
+    // `.varde/config.toml` that happens to sit in the folder — most likely
     // somebody else's — is not read. Skipped rather than refused: an
-    // unparseable file CRIME never looks at must not stop it starting either.
+    // unparseable file Varde never looks at must not stop it starting either.
     let project = match &input.sidecar {
         Some(_) => None,
         None => input.project_config.as_deref(),
@@ -1270,13 +1270,13 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
     let mut state = initial_state(input, &config, checkout, update);
 
     let mut effects = vec![
-        Effect::EnsureDir(crate::crime_dir(&input.root, input.sidecar.as_deref())),
+        Effect::EnsureDir(crate::varde_dir(&input.root, input.sidecar.as_deref())),
         // Swept before it is made, because a crash mid-Reading escapes both
         // the deletion the player's exit makes and the one quitting makes.
         // Safe with no pattern to match against precisely because everything
-        // under it is CRIME's (ADR 0014).
-        Effect::DeleteDir(crate::tmp_dir(&input.crime_home)),
-        Effect::EnsureDir(crate::tmp_dir(&input.crime_home)),
+        // under it is Varde's (ADR 0014).
+        Effect::DeleteDir(crate::tmp_dir(&input.varde_home)),
+        Effect::EnsureDir(crate::tmp_dir(&input.varde_home)),
     ];
     if binary_install {
         effects.push(Effect::CheckRelease {
@@ -1285,7 +1285,7 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
     }
     // A reader's own settings survive every start, and the core is already
     // holding the fact that decides it: `project_config` is what the edge read
-    // off `.crime/config.toml`, and it is `None` on exactly the folders that
+    // off `.varde/config.toml`, and it is `None` on exactly the folders that
     // have no file to lose. An `Effect` that asked the disk again would put
     // this promise in `main.rs`, where no scenario can reach it.
     // A Bare workspace seeds nothing: the file would land in a Sidecar deleted
@@ -1295,15 +1295,15 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
     // what decides it.
     if input.sidecar.is_none() && input.project_config.is_none() {
         effects.push(Effect::WriteFile {
-            path: crate::crime_dir(&input.root, input.sidecar.as_deref()).join(CONFIG_FILE),
+            path: crate::varde_dir(&input.root, input.sidecar.as_deref()).join(CONFIG_FILE),
             contents: SEEDED_CONFIG.to_string(),
         });
     }
     // The global file by the same rule, and in a Bare workspace too: it lives
-    // in `~/.crime`, not the workspace, so nothing about the folder decides it.
+    // in `~/.varde`, not the workspace, so nothing about the folder decides it.
     if input.global_config.is_none() {
         effects.push(Effect::WriteFile {
-            path: input.crime_home.join(CONFIG_FILE),
+            path: input.varde_home.join(CONFIG_FILE),
             contents: template(),
         });
     }
@@ -1343,7 +1343,7 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
     Ok((state, config, effects))
 }
 
-/// Why the path CRIME was opened on is not a workspace, if it is not one.
+/// Why the path Varde was opened on is not a workspace, if it is not one.
 fn path_refusal(status: PathStatus) -> Option<&'static str> {
     match status {
         PathStatus::Folder => None,
@@ -1486,7 +1486,7 @@ fn initial_state(
     State {
         root: input.root.clone(),
         sidecar: input.sidecar.clone(),
-        crime_home: input.crime_home.clone(),
+        varde_home: input.varde_home.clone(),
         reviews: input.reviews.clone(),
         view: last_view(input.state_json.as_deref()).unwrap_or(View::Edit),
         expanded: saved_paths(&input.root, input.state_json.as_deref(), "expanded")
@@ -1510,7 +1510,7 @@ fn initial_state(
         // The legacy key second, and only when the new one says nothing: state
         // written before the corner held more than the Risk list names the pane
         // rather than the slot, and reading it is what keeps a session saved by
-        // an older CRIME from silently resetting its layout.
+        // an older Varde from silently resetting its layout.
         corner: match saved_text(input.state_json.as_deref(), "corner").as_deref() {
             Some("Risk") => crate::layout::Corner::Risk,
             Some("Buffers") => crate::layout::Corner::Buffers,
@@ -1612,7 +1612,7 @@ pub(crate) fn speech(config: &Config, os: &str) -> crate::reading::Speech {
     }
 }
 
-/// A program CRIME can be configured to run, and what installs it on one OS.
+/// A program Varde can be configured to run, and what installs it on one OS.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dep {
     pub kind: &'static str,
@@ -1621,10 +1621,10 @@ pub struct Dep {
     pub install: Option<String>,
 }
 
-/// The `[lsp.*]`, `[formatter.*]` and `[speech]` rows `~/.crime/config.toml`
+/// The `[lsp.*]`, `[formatter.*]` and `[speech]` rows `~/.varde/config.toml`
 /// names — or the [`template`], when there is no file, since that is what the
 /// next start runs — read by the same merge startup does, so what `install.sh`
-/// offers is what CRIME would start. A file CRIME would refuse to start on is
+/// offers is what Varde would start. A file Varde would refuse to start on is
 /// refused here too. The speech row's player is a row of its own, kind
 /// `player`, with no install: the table names none, since it ships with macOS
 /// and comes with alsa-utils on Linux. Either is left out when no file names
@@ -1666,14 +1666,14 @@ fn cached(input: &Startup) -> Option<risk::Figures> {
 
 /// Which checkout the running binary came from, and whether it has moved ahead.
 ///
-/// A directory counts as CRIME's checkout only when its manifest parses and names
-/// the `crime` package. Another crate's manifest, a manifest that is not valid
+/// A directory counts as Varde's checkout only when its manifest parses and names
+/// the `varde` package. Another crate's manifest, a manifest that is not valid
 /// TOML, and a copied binary with nothing above it are all somebody else's
-/// directory, so none of them yields a checkout — which is what stops CRIME from
+/// directory, so none of them yields a checkout — which is what stops Varde from
 /// ever running a build somewhere the user did not expect. Note the deliberate
-/// contrast with the config files above: one that does not parse stops CRIME
+/// contrast with the config files above: one that does not parse stops Varde
 /// from starting, because the user handed it over and needs to fix it, while the
-/// checkout manifest was never handed to CRIME at all.
+/// checkout manifest was never handed to Varde at all.
 fn checkout(input: &Startup) -> (Option<PathBuf>, Option<String>) {
     let Some(root) = input.checkout.as_ref() else {
         return (None, None);
@@ -1686,7 +1686,7 @@ fn checkout(input: &Startup) -> (Option<PathBuf>, Option<String>) {
     else {
         return (None, None);
     };
-    if package.get("name").and_then(toml::Value::as_str) != Some("crime") {
+    if package.get("name").and_then(toml::Value::as_str) != Some("varde") {
         return (None, None);
     }
     let version = package
@@ -1729,7 +1729,7 @@ fn merge(base: &mut Table, overlay: Table) {
 /// `[facts.*]` entry. Two ways it can be unusable are refused here: TOML that
 /// does not parse, and a table naming a value that is not the shape it must be.
 /// The second is checked here rather than where the servers are read, because
-/// only the source text can say which line to name — and a server entry CRIME
+/// only the source text can say which line to name — and a server entry Varde
 /// cannot use, dropped quietly, is a language the user configured and nothing
 /// serves.
 ///
@@ -1865,7 +1865,7 @@ mod tests {
             project_config: Some(project_config.to_string()),
             ..Startup::default()
         })
-        .expect_err("CRIME started on a config it cannot use");
+        .expect_err("Varde started on a config it cannot use");
         match error {
             StartupError::Config(problem) => problem,
             other => panic!("expected a config fault, got {other:?}"),
@@ -1873,7 +1873,7 @@ mod tests {
     }
 
     /// R9.5's refusal, for the half of "malformed" that still parses: an entry
-    /// naming a command that is not a string is a server CRIME cannot run, and
+    /// naming a command that is not a string is a server Varde cannot run, and
     /// dropping it quietly leaves a language the user configured served by
     /// nothing, with no message and nothing to fix. The line comes from the
     /// source text, which is why the check is at the layer and not where the
@@ -2051,13 +2051,13 @@ mod tests {
             let template: toml::Table = PROGRAMS.parse().expect("the template parses");
             assert_eq!(
                 template["speech"]["configures"]["voice"].as_str(),
-                Some("~/.crime/voices/en_US-bryce-medium.onnx")
+                Some("~/.varde/voices/en_US-bryce-medium.onnx")
             );
             assert!(synth
                 .install
                 .as_deref()
                 .is_some_and(|line| line.starts_with("uv tool install piper-tts")
-                    && line.contains("--output-dir ~/.crime/voices")
+                    && line.contains("--output-dir ~/.varde/voices")
                     && line.contains("/en_US-bryce-medium.onnx ")));
             assert_eq!(
                 play,
@@ -2071,9 +2071,9 @@ mod tests {
         }
     }
 
-    /// `crime --deps` answers from the file, not the binary: a global config
+    /// `varde --deps` answers from the file, not the binary: a global config
     /// naming one server lists that server and nothing the template ships, and
-    /// one CRIME would refuse to start on is refused with its file and line.
+    /// one Varde would refuse to start on is refused with its file and line.
     #[test]
     fn deps_lists_the_rows_the_global_config_names() {
         let file = "[lsp.ruby]\ncommand = \"ruby-lsp\"\nextensions = [\"rb\"]\n";
@@ -2159,7 +2159,7 @@ mod tests {
         assert_eq!((problem.file.as_str(), problem.line), (PROJECT_LABEL, 2));
         assert_eq!(
             problem.to_string(),
-            ".crime/config.toml:2: [lsp.rust] and [lsp.rustier] both claim .rs"
+            ".varde/config.toml:2: [lsp.rust] and [lsp.rustier] both claim .rs"
         );
     }
 
@@ -2169,12 +2169,12 @@ mod tests {
             project_config: Some("[lsp.rust]\nextensions = [\"rs\", \"rs\"]\n".to_string()),
             ..Startup::default()
         })
-        .expect("CRIME started");
+        .expect("Varde started");
     }
 
     /// The template held to the same check as a file a reader wrote, and named
     /// here so a typo in the data fails as itself rather than as every scenario
-    /// that starts CRIME. One bad row empties its whole kind, so a count short
+    /// that starts Varde. One bad row empties its whole kind, so a count short
     /// of the tables is any row failing.
     #[test]
     fn every_template_row_parses_into_a_valid_row() {
@@ -2202,7 +2202,7 @@ mod tests {
     }
 
     /// R9.5 again, for the key this ticket adds: an install command that is not
-    /// a string is an entry CRIME cannot type, and dropping it quietly leaves a
+    /// a string is an entry Varde cannot type, and dropping it quietly leaves a
     /// row that offers nothing for a reason nobody can see.
     #[test]
     fn an_install_command_that_is_not_a_string_refuses_to_start() {
@@ -2219,7 +2219,7 @@ mod tests {
     /// carries it. The three spellings are `std::env::consts::OS`'s, which is
     /// what `main.rs` hands in.
     #[test]
-    fn every_default_install_command_is_keyed_by_an_os_that_can_run_crime() {
+    fn every_default_install_command_is_keyed_by_an_os_that_can_run_varde() {
         for (language, server) in fresh().servers() {
             for os in server.install.keys() {
                 assert!(
@@ -2263,7 +2263,7 @@ mod tests {
             project_config: Some("[lsp.vue]\nargs = [\"--from-project\"]\n".to_string()),
             ..Startup::default()
         })
-        .expect("CRIME started");
+        .expect("Varde started");
         let patched = &state.servers["vue"];
         let shipped = &fresh().servers()["vue"];
         assert_eq!(patched.args, ["--from-project"]);
@@ -2293,7 +2293,7 @@ mod tests {
             project_config: Some("[facts.typescript_sdk]\nvalue = \"marker\"\n".to_string()),
             ..Startup::default()
         })
-        .expect("CRIME started");
+        .expect("Varde started");
         let patched = &state.facts["typescript_sdk"];
         assert_eq!(patched.value, FactValue::Marker);
         assert_eq!(patched.marker, fresh().facts()["typescript_sdk"].marker);
@@ -2333,9 +2333,9 @@ mod tests {
         assert_eq!(
             messages,
             [
-                ".crime/config.toml:2: config is not valid TOML",
-                ".crime/config.toml:2: invalid type: integer `12`, expected a string",
-                ".crime/config.toml:1: [lsp.brainfuck] names no command",
+                ".varde/config.toml:2: config is not valid TOML",
+                ".varde/config.toml:2: invalid type: integer `12`, expected a string",
+                ".varde/config.toml:1: [lsp.brainfuck] names no command",
             ]
         );
     }
@@ -2355,7 +2355,7 @@ mod tests {
             ),
             ..Startup::default()
         })
-        .expect("CRIME started");
+        .expect("Varde started");
         let install = &state.servers["rust"].install;
         assert_eq!(install["macos"], "my-own-installer");
         assert_eq!(install["linux"], "rustup component add rust-analyzer");
@@ -2455,7 +2455,7 @@ mod tests {
     /// hands `Some("")` for a file it found and could not read — not UTF-8, or
     /// write-only — because an empty layer merges nothing and still says "a
     /// file is here". Seeding over it would be a silent delete of settings
-    /// CRIME could not parse, which is the one way this feature can destroy
+    /// Varde could not parse, which is the one way this feature can destroy
     /// something.
     #[test]
     fn a_config_that_is_there_but_says_nothing_is_not_seeded_over() {
@@ -2464,7 +2464,7 @@ mod tests {
             project_config: Some(String::new()),
             ..Startup::default()
         })
-        .expect("CRIME started");
+        .expect("Varde started");
         assert!(
             !effects
                 .iter()
@@ -2577,20 +2577,20 @@ mod tests {
     /// built for it.
     #[test]
     fn asset_names_match_the_release_workflow() {
-        assert_eq!(asset_name("macos", "aarch64"), "crime-macos-aarch64");
-        assert_eq!(asset_name("macos", "x86_64"), "crime-macos-x86_64");
-        assert_eq!(asset_name("linux", "x86_64"), "crime-linux-x86_64");
-        assert_eq!(asset_name("linux", "aarch64"), "crime-linux-aarch64");
+        assert_eq!(asset_name("macos", "aarch64"), "varde-macos-aarch64");
+        assert_eq!(asset_name("macos", "x86_64"), "varde-macos-x86_64");
+        assert_eq!(asset_name("linux", "x86_64"), "varde-linux-x86_64");
+        assert_eq!(asset_name("linux", "aarch64"), "varde-linux-aarch64");
     }
 
     /// `sha256sum`'s own line shape, which is what the release workflow writes.
     #[test]
     fn a_download_matching_its_line_is_verified() {
         let list = "\
-2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae  crime-linux-x86_64
-0000000000000000000000000000000000000000000000000000000000000000  crime-linux-aarch64
+2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae  varde-linux-x86_64
+0000000000000000000000000000000000000000000000000000000000000000  varde-linux-aarch64
 ";
-        let url = "https://example.test/download/v0.2.0/crime-linux-x86_64";
+        let url = "https://example.test/download/v0.2.0/varde-linux-x86_64";
         assert_eq!(verify(list, url, b"foo"), Ok(()));
         assert_eq!(verify(list, url, b"bar"), Err(ReplaceFailed::Checksum));
     }
@@ -2598,9 +2598,9 @@ mod tests {
     /// A name that only ends in the Asset's is another file's line.
     #[test]
     fn a_list_without_the_assets_line_names_no_asset() {
-        let list = "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae  old-crime-linux-x86_64\n";
+        let list = "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae  old-varde-linux-x86_64\n";
         assert_eq!(
-            verify(list, "https://example.test/crime-linux-x86_64", b"foo"),
+            verify(list, "https://example.test/varde-linux-x86_64", b"foo"),
             Err(ReplaceFailed::NoAsset)
         );
     }
@@ -2609,7 +2609,7 @@ mod tests {
     #[test]
     fn a_release_without_a_checksum_list_is_no_release() {
         let body = r#"{"tag_name": "v0.2.0", "assets": [
-            {"name": "crime-linux-x86_64", "browser_download_url": "https://example.test/a"}
+            {"name": "varde-linux-x86_64", "browser_download_url": "https://example.test/a"}
         ]}"#;
         assert_eq!(release(body, "linux", "x86_64", "0.1.0"), None);
     }
@@ -2637,7 +2637,7 @@ mod tests {
         assert!(is_update("0.2.0", "0.2.0-rc.1"));
     }
 
-    /// Neither side is something CRIME wrote, so neither is trusted to parse.
+    /// Neither side is something Varde wrote, so neither is trusted to parse.
     #[test]
     fn a_version_that_is_not_a_version_is_not_an_update() {
         assert!(!is_update("nightly", "0.1.0"));

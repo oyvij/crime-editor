@@ -12,7 +12,7 @@ Feature: Authorship
   at all rather than reporting an absence on every file — the Change bar's precedent.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And git is installed
     And the project is a git repository
     And the last commit holds "src/main.rs" as:

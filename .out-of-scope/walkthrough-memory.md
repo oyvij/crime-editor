@@ -1,6 +1,6 @@
 # Walkthrough memory
 
-CRIME does not remember where a reviewer was in a Story. Leaving a Story with Escape and entering it
+Varde does not remember where a reviewer was in a Story. Leaving a Story with Escape and entering it
 again starts at its first Step, and nothing about a Walkthrough survives a restart.
 
 ## Why this is out of scope

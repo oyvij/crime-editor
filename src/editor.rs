@@ -1455,10 +1455,10 @@ impl Buffer {
 /// disk for the CLI to read.
 pub fn merge_prompt(path: &str, disk: &str, buffer: &str) -> String {
     format!(
-        "{path} changed on disk while it had unsaved edits in CRIME.\n\
+        "{path} changed on disk while it had unsaved edits in Varde.\n\
          Merge the two and write the result to {path}.\n\n\
          --- on disk ---\n{disk}\n\
-         --- unsaved in CRIME ---\n{buffer}"
+         --- unsaved in Varde ---\n{buffer}"
     )
 }
 
@@ -2554,7 +2554,7 @@ mod tests {
         assert_eq!(buffer.shown(), "\"one\ntwo\"");
     }
 
-    // Story 7: normal mode is unchanged. Backspace there is CRIME's own
+    // Story 7: normal mode is unchanged. Backspace there is Varde's own
     // backwards delete rather than vim's move, and it took one character
     // before the pairing rules existed — with the cursor on the `)` of `x()y`
     // the paired rule reached it and took two.

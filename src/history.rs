@@ -76,7 +76,7 @@ pub fn row_actions(state: &State) -> Vec<&'static str> {
 
 /// Whether the line a Visit was taken from no longer holds what it recorded.
 /// Only ever asked of a file that is *still open*: with the buffer gone there
-/// is nothing to compare against and CRIME may not read the disk from here, so
+/// is nothing to compare against and Varde may not read the disk from here, so
 /// a closed file is not claimed to be stale either way. A row that is stale
 /// still shows what it recorded — it is the claim that it is current that is
 /// dropped, which is what `CONTEXT.md`'s Stale does for a Risk figure.
@@ -230,7 +230,7 @@ pub fn jumped(state: &State, event: &Event) -> Jump {
 /// the cursor there, so asking the resulting state answers "no" for every jump
 /// that lands in the file already on screen — a definition, a search hit, a
 /// Risk row in the file you are reading, which is the most common jump there is
-/// and the one CRIME could not come back from. The place the landing carries is
+/// and the one Varde could not come back from. The place the landing carries is
 /// what answers it instead, and a landing with no place at all (a file merely
 /// opened, and it is already the one on screen) really did go nowhere.
 pub fn record(state: &State, next: &mut State, jump: Jump) {

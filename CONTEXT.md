@@ -1,4 +1,4 @@
-# CRIME
+# Varde
 
 An IDE TUI: it opens on a folder and presents it as a workspace — a file tree, buffers, a diff
 review, a shell and an AI session, side by side in one terminal.
@@ -7,6 +7,20 @@ This file is the glossary and nothing else. `AGENTS.md` holds the working contra
 `docs/example-map.md` holds the spec; `docs/adr/` holds the decisions.
 
 ## Language
+
+### What it is called
+
+**Varde**:
+The editor. A stone cairn somebody stacked to mark the way for whoever comes next. Written `Varde`
+in prose, `varde` as the binary, the crate, the state directories and the release assets, and
+`VARDE` in nothing but the XTVERSION reply, where uppercase is the sequence's convention.
+_Avoid_: CRIME, the TUI, the tool, Varde Editor
+
+**CRIME**:
+What Varde was called until 0.161.1, and an acronym — Command · Review · Integrated · Modal ·
+Editor. Retired: `docs/adr/0020-the-editor-is-called-varde.md`. It survives only in that ADR and in
+release history, and a CRIME install does not update into a Varde one.
+_Avoid_: using it at all
 
 ### Selecting and copying
 
@@ -204,7 +218,7 @@ and the shell pane.
 _Avoid_: terminal pane, passthrough pane, pty pane
 
 **Reserved key**:
-A key CRIME claims from a hosted pane. An exhaustive list, not a policy: a key is reserved because
+A key Varde claims from a hosted pane. An exhaustive list, not a policy: a key is reserved because
 it is on the list, and everything not on it reaches the child.
 _Avoid_: global key, binding, shortcut
 
@@ -222,7 +236,7 @@ moves it, and a checkout whose code has changed without it is telling you someth
 _Avoid_: release, tag, build number, revision
 
 **Running version**:
-What the binary you are talking to was compiled from — the one thing a running CRIME knows for
+What the binary you are talking to was compiled from — the one thing a running Varde knows for
 certain about itself, because it was baked in when it was built.
 _Avoid_: current version, installed version, binary version
 
@@ -233,8 +247,8 @@ Update, so there is nothing to offer.
 _Avoid_: upgrade, new release, available version, newer build
 
 **Install kind**:
-How this CRIME got onto the machine: a **checkout install** (the binary sits inside its own
-checkout, which is `target/release/crime` under a manifest naming crime) or a **binary install**
+How this Varde got onto the machine: a **checkout install** (the binary sits inside its own
+checkout, which is `target/release/varde` under a manifest naming varde) or a **binary install**
 (anything else). Decided once at startup from where the binary is. Only a binary install asks the
 network anything.
 _Avoid_: install mode, distribution, channel
@@ -246,12 +260,12 @@ looks for one.
 _Avoid_: tag, build, download
 
 **Asset**:
-The one file in a Release built for this platform, named `crime-<os>-<arch>`. A Release with no
+The one file in a Release built for this platform, named `varde-<os>-<arch>`. A Release with no
 Asset for this platform offers no Update.
 _Avoid_: artifact, package, binary (that is what is running)
 
 **Relaunch**:
-CRIME replacing itself with the binary now on disk, keeping its arguments. Not a restart of the
+Varde replacing itself with the binary now on disk, keeping its arguments. Not a restart of the
 session: the shell and the AI pane end with the old process, as they do on quit.
 _Avoid_: restart, reload, reboot
 
@@ -265,25 +279,25 @@ evidence about that file than a configured number is.
 _Avoid_: tab size, tab stop (that is where a Candidate left a blank), shift width, indentation
 
 **Setting**:
-A value CRIME cannot work without — an indent width, a double-tap window, a threshold, a speed. It has
+A value Varde cannot work without — an indent width, a double-tap window, a threshold, a speed. It has
 a built-in answer that a config file may beat, and a file that does not name it changes nothing.
-_Avoid_: option, preference, program (that is a row naming something CRIME starts)
+_Avoid_: option, preference, program (that is a row naming something Varde starts)
 
 **Program row**:
-A config table naming something CRIME starts — a language server, a formatter, the voice — with the
+A config table naming something Varde starts — a language server, a formatter, the voice — with the
 files it serves and the command that installs it. Program rows exist only in a config file: a row no
-file names does not run, and the ones CRIME knows about but the user has not taken are *available*,
+file names does not run, and the ones Varde knows about but the user has not taken are *available*,
 not configured, until taken from Tools.
 _Avoid_: default, built-in server, plugin, integration
 
 **Tools**:
-The one list of everything CRIME runs — language servers, formatters, requirements and speech —
+The one list of everything Varde runs — language servers, formatters, requirements and speech —
 each row with its status and one key that takes it: configured in the global file and installed.
-It shows the rows the reader has and the ones CRIME knows about that they have not taken yet.
+It shows the rows the reader has and the ones Varde knows about that they have not taken yet.
 _Avoid_: servers list, formatter list, plugins, extensions, marketplace
 
 **Seeding**:
-Writing a file the first time CRIME opens a folder, and only when nothing is there — the project's
+Writing a file the first time Varde opens a folder, and only when nothing is there — the project's
 `config.toml`, whose every key arrives commented out. The global `config.toml` is seeded the same
 way when it is missing, except that its Program rows arrive live, since nothing else will run them. A key nobody can find is a key nobody sets,
 which is the whole reason it is written at all; a live value in it would be this binary's answer
@@ -293,35 +307,35 @@ already read being absent, so the decision is the core's and the write is an ord
 _Avoid_: scaffolding, generating, initialising, installing, creating (that is the folder)
 
 **Bare workspace**:
-A workspace CRIME writes nothing into — opened by naming no folder at all, which is the whole of how
+A workspace Varde writes nothing into — opened by naming no folder at all, which is the whole of how
 it is asked for. The folder is still the workspace: the file tree is it, and `:w` writes there.
-Everything that would have gone in the project's `.crime/` goes in a Sidecar instead, so a Bare
+Everything that would have gone in the project's `.varde/` goes in a Sidecar instead, so a Bare
 workspace forgets everything between runs and seeds nothing, measures no Risk unasked, and cannot be
 told to remember — one that remembers is a project
 (`docs/adr/0016-a-bare-workspace-leaves-nothing-behind.md`).
 _Avoid_: bare-bone instance, temp instance, scratch workspace, editor mode
 
 **Sidecar**:
-Where a Bare workspace's own state lives — under `~/.crime/paths/`, named for the folder and the
-process, deleted when CRIME exits and swept on start when a crash escaped that. It holds what belongs
-to CRIME, never what belongs to the user: a Guest repo, a story set, a session's `state.json`. A
+Where a Bare workspace's own state lives — under `~/.varde/paths/`, named for the folder and the
+process, deleted when Varde exits and swept on start when a crash escaped that. It holds what belongs
+to Varde, never what belongs to the user: a Guest repo, a story set, a session's `state.json`. A
 submitted review is the one thing that does not go here, because an output destroyed at exit is a
 different kind of nothing than a trace not left.
-_Avoid_: scratch (taken twice — `.scratch/` was the old issue tracker, `~/.crime/tmp/` is a Reading's
+_Avoid_: scratch (taken twice — `.scratch/` was the old issue tracker, `~/.varde/tmp/` is a Reading's
 audio), shadow, cache, temp folder
 
 ### Walking a change
 
 **Range**:
 The two revisions a Story set is authored for, and the spelling that names them: a base, a head, and
-the text a reviewer typed or CRIME resolved. Always the change the head *introduced* — a merge-base
+the text a reviewer typed or Varde resolved. Always the change the head *introduced* — a merge-base
 against the base, never tip against tip, because a base that has moved on since the head forked
 would otherwise read as the head deleting everything that landed meanwhile. `worktree` is a legal
 head and names the uncommitted change; there is only one working tree, so there is only one of those.
 _Avoid_: diff, revision range (say Range), commit range, base..head
 
 **Guest repo**:
-A repository CRIME cloned into a Sidecar to author a Story set for a branch of it — somebody else's
+A repository Varde cloned into a Sidecar to author a Story set for a branch of it — somebody else's
 code, on somebody else's remote, present for one session. Its files are never in the file tree and
 are never saved to: a Guest repo is read, and it is gone at exit. Cloned and fetched by the user's own
 `git`, never by `git2` (`docs/adr/0015-a-clone-is-the-users-own-git.md`).
@@ -330,7 +344,7 @@ _Avoid_: temp clone, external repo, checkout, scratch repo
 **Repository under review**:
 Whichever repository a Story set's git questions are asked of — the Guest repo when one has been
 cloned, the workspace otherwise (`State::repo_root`). Not the same thing as the workspace: the tree,
-a save and what `.gitignore` covers are the folder CRIME was opened on, while a range, a checkout and
+a save and what `.gitignore` covers are the folder Varde was opened on, while a range, a checkout and
 a Step's staleness belong to the repository the Story describes.
 _Avoid_: workspace root (that is the folder), target repo, current repo
 
@@ -462,9 +476,9 @@ a mix — one figure describing two different sets of files is a figure nobody c
 _Avoid_: target, selection (that is text you picked), range (that is a Story set's)
 
 **Refactor loop**:
-CRIME's own iteration over an AI session: it hands the session a Scope and a goal, waits to be told
+Varde's own iteration over an AI session: it hands the session a Scope and a goal, waits to be told
 a pass is finished, then measures the workspace and decides whether that pass stands. The deciding
-is CRIME's. A session that reports success is reporting what it believes, and belief is not a
+is Varde's. A session that reports success is reporting what it believes, and belief is not a
 measurement.
 _Avoid_: agent loop, auto-refactor, AI run, automation
 
@@ -498,7 +512,7 @@ nobody promised)
 ### Knowing what the code means
 
 **Language server**:
-A child process CRIME hosts to answer questions about code it has no other way to answer — what a
+A child process Varde hosts to answer questions about code it has no other way to answer — what a
 name is, where it is defined, what is wrong with it. Named in configuration and never in a branch, for
 the reason a CLI in a Hosted pane is never named (`docs/adr/0011-a-language-server-is-a-second-hosted-child.md`).
 It has no pane, so it is not a Hosted pane; it is the other kind of hosted child.
@@ -509,7 +523,7 @@ what computes Risk)
 Which state of a Buffer a message is about. It is the Buffer's revision — bumped by every content
 change and nothing else — sent with the text and quoted back in what the server says about it. A
 message naming any other version describes text the user has already edited past and is dropped —
-and so is a reply to something CRIME asked, measured against the version it was asked at, which is
+and so is a reply to something Varde asked, measured against the version it was asked at, which is
 the same rule read the other way round.
 _Avoid_: sequence, generation, timestamp, revision number (say revision, or Document version)
 
@@ -543,7 +557,7 @@ _Avoid_: declaration, source, target, reference (find-references is a different 
 **Candidate**:
 One of the things a Language server offers as what you might be typing. Chosen from a list with the
 keys the rest of the workspace uses, and inserted as the text it holds — never reformatted, and
-expanded only where the server marked it a snippet and CRIME said it could receive one. Dismissing
+expanded only where the server marked it a snippet and Varde said it could receive one. Dismissing
 leaves the Buffer holding exactly the characters that were typed, which is the promise the whole
 feature stands on.
 _Avoid_: completion (that is the act), suggestion, item, proposal
@@ -560,7 +574,7 @@ _Avoid_: placeholder (that is the `${1:…}` in the reply, not the place in the 
 **Trigger character**:
 A character a Language server named as one it wants to be told about, so that it can lay out the text
 around it the moment it is typed. The server's own list, read off its `initialize` reply and never
-spelled in CRIME: rust-analyzer names `.`, `=`, `<`, `>`, `{`, `(`, `|` and `+`, jdtls names `;`, `}`
+spelled in Varde: rust-analyzer names `.`, `=`, `<`, `>`, `{`, `(`, `|` and `+`, jdtls names `;`, `}`
 and a newline, clangd names a newline alone, and gopls and the TypeScript server name none. What
 comes back is edits, applied as one thing to undo — and dropped when the reader has typed on since,
 which is the Document version rule read the other way round.

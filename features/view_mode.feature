@@ -160,7 +160,7 @@ Feature: The command palette
   Scenario: The palette can quit
     Given the view palette is shown
     When I press "q"
-    Then CRIME exits
+    Then Varde exits
 
   Scenario: An unrecognised key is ignored and the palette stays open
     Given the view palette is shown

@@ -16,10 +16,10 @@ Feature: The file tree shows the workspace
   The selected row is left exactly where it is, and collapsing is given no rule of its own
   for it. A row still on screen stays selected. One inside a folder that just closed keeps
   naming a path the tree no longer draws, and the next Up or Down lands on a row that is
-  there — the answer every list in CRIME already gives for a selection it cannot find.
+  there — the answer every list in Varde already gives for a selection it cannot find.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
 
   Scenario: Directories are listed before files, each alphabetically
     Given the workspace folder contains:
@@ -39,11 +39,11 @@ Feature: The file tree shows the workspace
     Given the workspace folder contains:
       | name       | kind      |
       | .gitignore | file      |
-      | .crime     | directory |
+      | .varde     | directory |
       | src        | directory |
     When the file tree is rendered
     Then the file tree lists, in order:
-      | .crime     |
+      | .varde     |
       | src        |
       | .gitignore |
 

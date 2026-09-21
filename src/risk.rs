@@ -103,7 +103,7 @@ impl Figures {
 /// makes measuring compete with typing.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Figure {
-    /// Nothing measured yet. In a project CRIME asks for an analysis the moment
+    /// Nothing measured yet. In a project Varde asks for an analysis the moment
     /// it opens, so a workspace with no figure is one being measured rather than
     /// one nobody asked about; a Bare workspace measures only when asked, and
     /// stays here until somebody does.
@@ -218,15 +218,15 @@ pub fn went_stale(risk: &mut Risk) {
     }
 }
 
-/// Where the figure is cached, in [`crate::crime_dir`]. Derived per-user data
+/// Where the figure is cached, in [`crate::varde_dir`]. Derived per-user data
 /// that changes on every commit, so it is ignored rather than committed — a
 /// committed cache is a merge conflict in a file nobody reads by hand.
 pub const FILE: &str = "risk.json";
 
-/// The figure as it is written: CRIME's own shape, a flat list of Functions
+/// The figure as it is written: Varde's own shape, a flat list of Functions
 /// plus the commit it was measured at and which metric produced it. The
 /// analyser is pinned pre-1.0, so its types may not reach the file format —
-/// its next release must not silently change what CRIME wrote.
+/// its next release must not silently change what Varde wrote.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Persisted {
     pub commit: String,
@@ -247,7 +247,7 @@ pub fn persist(figures: &Figures, commit: &str) -> String {
         functions: figures.functions.clone(),
         unparsed: figures.unparsed,
     })
-    .expect("CRIME's own shape holds nothing serde can refuse")
+    .expect("Varde's own shape holds nothing serde can refuse")
 }
 
 /// The cached figure, if it still describes the workspace. A file recording
@@ -256,7 +256,7 @@ pub fn persist(figures: &Figures, commit: &str) -> String {
 pub fn cached(json: &str, head: &str) -> Option<Figures> {
     let saved: Persisted = serde_json::from_str(json).ok()?;
     // The metric is checked, not merely recorded: a figure measured under a
-    // metric this CRIME does not compute — coverage-weighted CRAP, one day —
+    // metric this Varde does not compute — coverage-weighted CRAP, one day —
     // read as a CX figure is a number labelled with the wrong promise.
     (saved.commit == head && saved.metric == METRIC).then_some(Figures {
         functions: saved.functions,
@@ -301,7 +301,7 @@ pub fn on_screen(view: View) -> Scope {
 /// The whole answer for a Scope, from what the edge could read: one entry per
 /// file in a language the analyser handles, carrying its space tree, or `None`
 /// where the file would not read or would not parse. Counting those here rather
-/// than at the edge is what keeps "a supported file CRIME could not read is
+/// than at the edge is what keeps "a supported file Varde could not read is
 /// Unparsed" a rule with a test rather than an `if` in `main.rs`.
 pub fn figures(analysed: Vec<(String, Option<Space>)>) -> Figures {
     let mut all = Vec::new();
@@ -386,7 +386,7 @@ pub enum Standing {
     Computed,
 }
 
-/// The figure measured for a Scope, where the one figure CRIME holds is that
+/// The figure measured for a Scope, where the one figure Varde holds is that
 /// Scope's. Which Scope it describes is `Risk::before`'s presence: a review
 /// answer measures both sides of the change and arrives as a pair, and a
 /// workspace answer has no other side. Anything else is the wrong figure —
@@ -532,7 +532,7 @@ pub fn on_actions(state: &State) -> bool {
     state.focus == crate::Pane::Risk && state.risk_selection >= list(state).len()
 }
 
-/// The ask handed to an AI session for one Function. It carries what CRIME
+/// The ask handed to an AI session for one Function. It carries what Varde
 /// already measured — the Function, its file and its figure — so the session
 /// does not spend a turn rediscovering it, and it says what is *not* wanted:
 /// this is one prompt with no Gate behind it, so a commit would be a change
@@ -564,11 +564,11 @@ the change is for me to review in the working tree.",
 // ---- F29: the Refactor loop ----
 
 /// Where the session says a pass is finished. A file rather than a line of
-/// output, because CRIME may not read what a hosted pane prints
+/// output, because Varde may not read what a hosted pane prints
 /// (`docs/adr/0004-hosted-panes-are-transparent.md`): completion is made a
 /// filesystem fact the watcher already sees, and any CLI that can edit files
-/// can write one. Its contents are ignored — CRIME recomputes the real figures
-/// itself (`docs/adr/0010-crime-owns-the-test-gate.md`).
+/// can write one. Its contents are ignored — Varde recomputes the real figures
+/// itself (`docs/adr/0010-varde-owns-the-test-gate.md`).
 pub const SENTINEL: &str = "refactor-done";
 
 /// The documented default cap: ten Iterations, so a loop cannot run all
@@ -690,7 +690,7 @@ impl Refactor {
 }
 
 /// What the Gate will run: configuration if the project set one, else the
-/// project's shape. `None` refuses the loop — CRIME never reports a passing
+/// project's shape. `None` refuses the loop — Varde never reports a passing
 /// Gate having run nothing.
 pub fn test_command(configured: Option<&str>, entries: &[Entry]) -> Option<String> {
     if let Some(command) = configured
@@ -729,7 +729,7 @@ fn refused(state: &State, scope: Scope) -> Option<&'static str> {
 }
 
 /// Starts the loop over a Scope: the session is handed the Scope and the goal,
-/// and the judgement stays CRIME's. The sentinel goes first, so a leftover from
+/// and the judgement stays Varde's. The sentinel goes first, so a leftover from
 /// a previous pass cannot complete this one instantly, and the files are
 /// snapshotted before the session is let at them, so a failed Gate has
 /// somewhere to go back to.
@@ -756,7 +756,7 @@ pub fn start(state: &mut State, scope: Scope) -> Vec<Effect> {
         ..Refactor::default()
     };
     let mut effects = vec![
-        Effect::DeleteFile(crate::crime_dir(&state.root, state.sidecar.as_deref()).join(SENTINEL)),
+        Effect::DeleteFile(crate::varde_dir(&state.root, state.sidecar.as_deref()).join(SENTINEL)),
         Effect::Snapshot { iteration: 1 },
     ];
     effects.extend(crate::queue_for_ai(state, prompt));
@@ -960,7 +960,7 @@ fn totals(figures: &Figures) -> Metrics {
 /// lowers the total and is put back. That is the conservative direction: the
 /// loop stops, naming the condition, rather than accepting a pass it cannot
 /// measure. Shredding is caught by cognitive complexity, which is what that
-/// metric is in the Gate for (`docs/adr/0010-crime-owns-the-test-gate.md`).
+/// metric is in the Gate for (`docs/adr/0010-varde-owns-the-test-gate.md`).
 fn gate(before: &Figures, after: &Figures, threshold: u32) -> Verdict {
     let improved = count(&after.functions, threshold) < count(&before.functions, threshold)
         || totals(after).cyclomatic < totals(before).cyclomatic;
@@ -1003,7 +1003,7 @@ pub fn figures_arrived(
     let mut effects = Vec::new();
     if let Some(contents) = arrived(&mut state.risk, generation, figures, commit.as_deref()) {
         effects.push(Effect::WriteFile {
-            path: crate::crime_dir(&state.root, state.sidecar.as_deref()).join(FILE),
+            path: crate::varde_dir(&state.root, state.sidecar.as_deref()).join(FILE),
             contents,
         });
     }
@@ -1116,7 +1116,7 @@ fn accept(state: &mut State, iteration: &Iteration, after: Figures) -> Vec<Effec
     let mut effects = vec![
         // The same two the loop opened with: a leftover sentinel would complete
         // this Iteration before its session had started on it.
-        Effect::DeleteFile(crate::crime_dir(&state.root, state.sidecar.as_deref()).join(SENTINEL)),
+        Effect::DeleteFile(crate::varde_dir(&state.root, state.sidecar.as_deref()).join(SENTINEL)),
         Effect::Snapshot { iteration: number },
     ];
     effects.extend(crate::queue_for_ai(state, prompt));
@@ -1156,14 +1156,14 @@ fn revert(
 
 /// The ask that starts an Iteration. One generic constant carrying no
 /// project-specific fact except the data interpolated here: the Scope, where
-/// CRIME wrote the figures, the worst few Functions, the target, an
+/// Varde wrote the figures, the worst few Functions, the target, an
 /// instruction to obey whatever convention file the repository holds, and what
 /// a good split is. The last of those is not the Gate going soft: the third
 /// condition still reverts a shredded pass, but it does so an Iteration late,
 /// and an Iteration is the expensive unit here
-/// (`docs/adr/0010-crime-owns-the-test-gate.md`).
+/// (`docs/adr/0010-varde-owns-the-test-gate.md`).
 ///
-/// The test command is never in it, because CRIME runs the tests — which keeps
+/// The test command is never in it, because Varde runs the tests — which keeps
 /// the most project-specific string in the system out of a prompt that has to
 /// work on any workspace. No provider is named: whatever CLI the user already
 /// starts is the one that reads this.
@@ -1187,9 +1187,9 @@ fn loop_prompt(state: &State, scope: Scope) -> String {
         })
         .collect();
     // The Scope's files by name, where the Scope is a file set: the session
-    // cannot read the git status CRIME read, so a Scope named only by its word
+    // cannot read the git status Varde read, so a Scope named only by its word
     // is a Scope the session has to guess at — and a guess is an edit outside
-    // it. Nothing but the prompt keeps the loop inside its Scope; CRIME cannot
+    // it. Nothing but the prompt keeps the loop inside its Scope; Varde cannot
     // stop a session touching a file, it can only measure and put the pass
     // back.
     let files = match scope {
@@ -1206,7 +1206,7 @@ fn loop_prompt(state: &State, scope: Scope) -> String {
         "Lower the Risk in this workspace, over the scope {scope}.\n\n\
 {files}\
 The target is no function above a {METRIC} figure of {threshold}. I measured the figures \
-myself and wrote every one of them to {CRIME_DIR}/{FILE}; the worst are:\n\n\
+myself and wrote every one of them to {VARDE_DIR}/{FILE}; the worst are:\n\n\
 {worst}\n\
 Refactor those to lower their complexity without changing behaviour. Follow the convention \
 files this repository holds, change nothing else, and do not commit: the working tree is what \
@@ -1219,12 +1219,12 @@ original it was cut out of rather than after what it does, has traded nested com
 structural scattering and left the code harder to read than it found it. Fewer well-named \
 extractions beat many small ones. Where a function cannot be split that way, leave it as it \
 is and tell me why rather than shredding it.\n\n\
-When the pass is finished, create the file {CRIME_DIR}/{SENTINEL}. Its contents are ignored. I then run \
+When the pass is finished, create the file {VARDE_DIR}/{SENTINEL}. Its contents are ignored. I then run \
 this project's tests and measure the figures again myself, and put the whole pass back if \
 either got worse — so finish and write that file rather than judging the pass yourself.",
         scope = scope.as_str(),
         threshold = state.risk_threshold,
-        CRIME_DIR = crate::CRIME_DIR,
+        VARDE_DIR = crate::VARDE_DIR,
     )
 }
 
@@ -1977,7 +1977,7 @@ mod tests {
     }
 
     /// What a review-scoped session is handed: the Scope's files by name, since
-    /// it cannot read the git status CRIME read, and the Scope's own worst
+    /// it cannot read the git status Varde read, and the Scope's own worst
     /// Functions — never a file nobody is reviewing, in either half. The prompt
     /// is the whole of what keeps the loop inside its Scope, so what it names is
     /// the Scope's boundary; a scenario can only hold that a file is absent from
@@ -2025,7 +2025,7 @@ mod tests {
         );
     }
 
-    /// Every ask CRIME sends about complexity says what a good split is. The
+    /// Every ask Varde sends about complexity says what a good split is. The
     /// Gate's third condition already reverts a shredded pass, but it does so
     /// an Iteration late, and the row action's one-shot ask has no Gate behind
     /// it at all (R28.14) — so the wording is the only thing standing between a

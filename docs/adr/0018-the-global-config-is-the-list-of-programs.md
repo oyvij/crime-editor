@@ -1,4 +1,4 @@
-# The global config is the list of programs CRIME runs
+# The global config is the list of programs Varde runs
 
 `startup::DEFAULTS` has been the bottom layer of F9's merge since ADR 0011, and ADR 0012 defended it
 at length: shipped defaults reach every machine on upgrade, and nothing is ever written to the
@@ -8,14 +8,14 @@ could read the whole answer in one place. And one piece of it could not be confi
 which file belongs to which language server was a `match` in `lsp::language`, so a server for a
 language that `match` did not name could not be added at all.
 
-This decision splits the settings by kind. **A setting is a number CRIME cannot work without; a
-program is a row naming something CRIME starts.** The two get opposite answers.
+This decision splits the settings by kind. **A setting is a number Varde cannot work without; a
+program is a row naming something Varde starts.** The two get opposite answers.
 
 ## Settings stay built in
 
 `view.double_tap_ms`, `editor.tab_width`, `editor.minimap`, `risk.threshold`, `risk.max_iterations`
-and `speech.speed` keep their values in the binary, beaten by `~/.crime/config.toml` and that by the
-project's `.crime/config.toml`, key by key — F9 exactly as it is. The code needs a value whatever
+and `speech.speed` keep their values in the binary, beaten by `~/.varde/config.toml` and that by the
+project's `.varde/config.toml`, key by key — F9 exactly as it is. The code needs a value whatever
 any file says, and a key missing from a file must never break the editor. Everything ADR 0012 said
 about frozen values is true here and still decides it: these are the numbers a later release is
 most likely to correct.
@@ -23,13 +23,13 @@ most likely to correct.
 ## Programs live only in the file
 
 `[lsp.*]`, `[formatter.*]`, `[facts.*]` and every `[speech]` key except `speed` are read from
-`~/.crime/config.toml` (and, above it, the project's `.crime/config.toml`) **and from nowhere else**.
+`~/.varde/config.toml` (and, above it, the project's `.varde/config.toml`) **and from nowhere else**.
 A row that is not in a file does not run. There is no bottom layer for them: what the file says is
-what CRIME starts, and what `crime --deps`, `install.sh --list` and the Tools list report.
+what Varde starts, and what `varde --deps`, `install.sh --list` and the Tools list report.
 
-The binary still carries the rows, as a **template**: the text written into `~/.crime/config.toml`
+The binary still carries the rows, as a **template**: the text written into `~/.varde/config.toml`
 when there is none. That happens in two places, and both write the same text — `install.sh`, which
-asks the binary for it (`crime --default-config`), and CRIME's own start, as an ordinary seeded
+asks the binary for it (`varde --default-config`), and Varde's own start, as an ordinary seeded
 write when the edge read no global layer. Deleting the file gets it back on the next start. It is
 never written over an existing file.
 
@@ -62,13 +62,13 @@ on every row, since there is nothing left to ask first. The two tables do not co
 file's server and its formatter are separate choices, so a `.rs` extension named in both is two
 facts, not a duplicate.
 
-What stays in code is what CRIME *links* rather than *runs*. The Risk metric's parser
+What stays in code is what Varde *links* rather than *runs*. The Risk metric's parser
 (`rust_code_analysis`) and the syntax highlighter are libraries in the binary, so choosing one for a
 file is not a program row and is outside this decision.
 
-## Tools: one list of everything CRIME runs
+## Tools: one list of everything Varde runs
 
-The palette's Servers list (`v`) becomes **Tools**, and it lists everything CRIME runs, grouped by
+The palette's Servers list (`v`) becomes **Tools**, and it lists everything Varde runs, grouped by
 kind: language servers, formatters, requirements (`[facts.*]`) and speech (the synthesizer with its
 voice, and the player). Formatters had no list at all before: `:format` ran them, and nowhere showed
 which were installed. There is one list rather than one per kind because every row has the same
@@ -80,7 +80,7 @@ Every row's status uses the same words: `installed`, `missing`, `missing-require
 taken with the same key.
 
 Tools shows the rows the file names **and** every template row the file does not have. The second group is marked as available, not configured. The same rule answers
-two situations: a row the user deleted, and a row a newer CRIME added to its template. So an upgrade
+two situations: a row the user deleted, and a row a newer Varde added to its template. So an upgrade
 never edits the file, and a new server still reaches the user. It shows up in the list, and it
 becomes theirs when they take it.
 
@@ -99,13 +99,13 @@ Taking a row is one keypress and does everything:
 
 The write never touches an existing table. It appends a whole table whose name the file does not
 have, through `toml_edit`, so every comment and every hand edit around it survives. If the file does
-not parse, CRIME writes nothing and runs nothing, and the refusal names the `ConfigError`. Taking a
+not parse, Varde writes nothing and runs nothing, and the refusal names the `ConfigError`. Taking a
 row the file already has writes nothing and only runs the install.
 
 **This reverses ADR 0012's "the command is typed, never run".** Its reasons were real: an install
-changes a machine CRIME does not own, is often `sudo` or a global `npm`, and a default wrong for this
+changes a machine Varde does not own, is often `sudo` or a global `npm`, and a default wrong for this
 distribution could be fixed on the input line first. What answers them now is where it runs, not
-whether CRIME presses Enter. The shell pane is visible and interactive, so the network request is
+whether Varde presses Enter. The shell pane is visible and interactive, so the network request is
 still one the reader watches and a `sudo` still asks the reader. A wrong default fails on screen
 with its exit status recorded, and the row is one edit away from right. What the reader asked for
 by taking the row was the install. Stopping one Enter short of it only added a step.
@@ -115,21 +115,21 @@ starts with, or the one after `sudo`, is probed on `PATH` like any command. If i
 row reads `needs-installer` and names it (`npm`, `uv`, `go`), and nothing is written or run. Package
 managers are `install.sh`'s job, as the next section explains.
 
-## install.sh installs CRIME and the package managers, and nothing else
+## install.sh installs Varde and the package managers, and nothing else
 
 `install.sh` stops asking about language servers, formatters and the voice. They are all installed
-from Tools inside CRIME, one keypress each, when the reader wants them. Nothing is preinstalled.
+from Tools inside Varde, one keypress each, when the reader wants them. Nothing is preinstalled.
 The script gets faster and has fewer ways to fail, since each extra install was another network
-request and another prompt before CRIME had even started.
+request and another prompt before Varde had even started.
 
 What it still does:
 
-- Installs CRIME itself, from a Release or from source.
-- Writes `~/.crime/config.toml` from the template when it is missing.
+- Installs Varde itself, from a Release or from source.
+- Writes `~/.varde/config.toml` from the template when it is missing.
 - **Asks about each package manager the template's install commands use** (`npm`, `uv`, `go`,
   `brew`, and on Linux `apt`'s packages), y/N. Each question explains why it is asked by naming
   the rows that need that manager: "npm is used to install typescript, javascript, vue, python,
-  and the prettier formatters". The list comes from `crime --deps`, so a new row that needs a new
+  and the prettier formatters". The list comes from `varde --deps`, so a new row that needs a new
   manager is asked about with no change to the script.
 - The toolchain for a source build, git, the default AI CLI and the URL opener, as before.
 
@@ -149,7 +149,7 @@ parses, and no two `[lsp.*]` rows claim one extension.
 The list is a helper, not a boundary. A language the template does not know is a row the reader
 writes, as the Ruby example above shows, and it is treated exactly like a template row once it is in
 the file. So Tools stays useful: finding a server and installing it takes one key, whether or not
-CRIME has heard of the language before.
+Varde has heard of the language before.
 
 A row whose install command is wrong for some machine is a bug in data, not in code. Fixing it is a
 template edit and a release, and readers who already have the row keep their own copy, as the
@@ -189,17 +189,17 @@ per-computer, and install writes no found path back into it.
 ## An install writes what it configures
 
 Some installs put a value on disk that the row then has to name. The voice is the case that exists:
-the speech install downloads a model to `~/.crime/voices/`, and `speech.voice` stayed blank, so the
+the speech install downloads a model to `~/.varde/voices/`, and `speech.voice` stayed blank, so the
 reader ran the install, pressed read, and was offered the same install again. Writing a config row
 is not enough when the row itself needs the install's result.
 
 So a row may carry `configures`, the keys its install makes true, written into
-`~/.crime/config.toml` once the install exits with status 0:
+`~/.varde/config.toml` once the install exits with status 0:
 
 ```toml
 [speech]
-install.linux = "uv tool install piper-tts && mkdir -p ~/.crime/voices && curl … "
-configures.voice = "~/.crime/voices/en_US-bryce-medium.onnx"
+install.linux = "uv tool install piper-tts && mkdir -p ~/.varde/voices && curl … "
+configures.voice = "~/.varde/voices/en_US-bryce-medium.onnx"
 ```
 
 The value is a path the row's own install command names, not one this machine happened to have.
@@ -223,7 +223,7 @@ A reader who never opened Tools is still one key from reading aloud.
 The template's `voice` stays blank, for ADR 0013's reason: a 61MB file on somebody else's disk is
 not a value to claim before the install that puts it there. `configures` is what fills it in, at
 the moment that install succeeds. `install.sh` no longer installs the voice or writes this key:
-speech is taken from inside CRIME like every other row.
+speech is taken from inside Varde like every other row.
 
 ## What this supersedes
 
@@ -241,19 +241,19 @@ over in a new place: search `src/` for a server's, formatter's or package manage
 
 ## Consequences
 
-**The file is long, and that is the feature.** Every server CRIME knows about is in it, readable,
-with its install command beside it. Nothing CRIME starts is invisible.
+**The file is long, and that is the feature.** Every server Varde knows about is in it, readable,
+with its install command beside it. Nothing Varde starts is invisible.
 
 **A corrected row does not reach a file that already has it.** When a release fixes a server's
 `args`, a user who already has that row keeps the old one. This is the cost ADR 0012 predicted, and
 it is accepted: the list shows the template's version beside a row that differs from it, and taking
 it again replaces nothing — the user reads the difference and edits their own row. A marker on
-rows CRIME wrote, so it could refresh the ones nobody has edited, was considered and rejected:
+rows Varde wrote, so it could refresh the ones nobody has edited, was considered and rejected:
 it is a migration with a second author for one file, which is what ADR 0012 warned about.
 
-**A broken global file stops every program.** Before, a syntax error in `~/.crime/config.toml`
+**A broken global file stops every program.** Before, a syntax error in `~/.varde/config.toml`
 still left the built-in servers running. Now it leaves none running, and the `ConfigError` is the
-whole story. That is the same refusal CRIME already gives, and it is honest: CRIME no longer knows
+whole story. That is the same refusal Varde already gives, and it is honest: Varde no longer knows
 which servers the user wants.
 
 **Taking a row is the whole install.** The row, its facts, what its install configures and the

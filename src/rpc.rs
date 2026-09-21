@@ -5,7 +5,7 @@
 //! `lsp_server`'s — rust-analyzer's own crate, synchronous, and the reason no
 //! `Content-Length` is spelled out here.
 //!
-//! Nothing in this file decides anything. What is said is built in `crime::lsp`
+//! Nothing in this file decides anything. What is said is built in `varde::lsp`
 //! and arrives as a string; what a server says goes back as a string.
 
 use anyhow::Result;
@@ -69,7 +69,7 @@ impl Server {
     /// take it is a server that is gone, which the caller learns from `alive`.
     pub fn send(&mut self, json: &str) {
         // Nothing here is dropped quietly. A message the protocol cannot carry
-        // is CRIME's own bug and the conversation cannot continue past it, so
+        // is Varde's own bug and the conversation cannot continue past it, so
         // it ends the same way a closed stdin does: the caller sees `alive`
         // go false and tells the core the server is gone.
         let written = serde_json::from_str::<Message>(json).ok().map(|message| {
@@ -101,7 +101,7 @@ impl Server {
 }
 
 impl Drop for Server {
-    /// A server outliving CRIME is a process the user cannot see and did not
+    /// A server outliving Varde is a process the user cannot see and did not
     /// start. The protocol's own `shutdown` needs a reply nobody is left to
     /// read, so this is the honest end of it.
     fn drop(&mut self) {

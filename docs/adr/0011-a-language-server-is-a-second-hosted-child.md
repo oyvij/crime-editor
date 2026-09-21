@@ -1,22 +1,22 @@
 # A language server is a second hosted child
 
 > **Amended by `docs/adr/0018-the-global-config-is-the-list-of-programs.md`:** server rows are no
-> longer a bottom layer in `startup::DEFAULTS` but a template written into `~/.crime/config.toml`, and
+> longer a bottom layer in `startup::DEFAULTS` but a template written into `~/.varde/config.toml`, and
 > `lsp::language` is replaced by an `extensions` key on each row.
 
-CRIME hosts a shell and an AI CLI, and `docs/adr/0004-hosted-panes-are-transparent.md` forbids any
+Varde hosts a shell and an AI CLI, and `docs/adr/0004-hosted-panes-are-transparent.md` forbids any
 branch anywhere that tests which CLI is running in one. A language server is the same kind of thing:
-a child process CRIME spawns, talks a documented protocol to, and must have no opinions about. It
+a child process Varde spawns, talks a documented protocol to, and must have no opinions about. It
 differs from the two hosted panes in one respect only — it has no pane, because its channel is
 JSON-RPC over stdio rather than a grid of cells. Everything ADR-0004 argues about a hosted pane
 therefore transfers, and this ADR records the transfer rather than restating it.
 
 The rule, stated for servers: **no branch in `src/` names a language server.** Not `rust-analyzer`,
 not `tsserver`, not `gopls`, not by command, not by version, not by sniffing its capabilities reply
-for a string only one server sends. A server CRIME has never been run against works for the same
+for a string only one server sends. A server Varde has never been run against works for the same
 reason the others do.
 
-The cost ADR-0004 pays — CRIME's own bindings given up inside a hosted pane — has no analogue here,
+The cost ADR-0004 pays — Varde's own bindings given up inside a hosted pane — has no analogue here,
 because a server owns no keyboard. What this rule costs instead is the workaround: the moment one
 server is wrong about something, the fix is in the protocol handling, the document sync or the
 staleness rule, and fixing it there fixes it for the servers nobody has tried. That is the same trade
@@ -24,7 +24,7 @@ and the same reason.
 
 ## Why shipping defaults is not naming a provider
 
-CRIME must work on a fresh install with nothing configured, and that means it must know that Rust is
+Varde must work on a fresh install with nothing configured, and that means it must know that Rust is
 usually served by `rust-analyzer`. Those two sentences look like they contradict the rule above, and
 they do not, because *where* the name lives is the whole of the distinction.
 
@@ -44,18 +44,18 @@ match language {
 Both spell the same string. Three things separate them, and each one is a property of the merge layer
 rather than a matter of taste:
 
-**Overridable.** A default in the bottom layer is beaten by `~/.crime/config.toml`, and that by
-`<project>/.crime/config.toml`, key by key, because F9's merge already works that way. A user who
+**Overridable.** A default in the bottom layer is beaten by `~/.varde/config.toml`, and that by
+`<project>/.varde/config.toml`, key by key, because F9's merge already works that way. A user who
 prefers a different server for Rust, or a different one in one repository, changes a file. A match
 arm can only be beaten by a fork.
 
 **Inspectable.** The defaults are a string a user can read, and F9's effective-setting machinery can
-print what CRIME actually resolved. A match arm's answer is visible only by reading CRIME's source
+print what Varde actually resolved. A match arm's answer is visible only by reading Varde's source
 and reasoning about which arm fired.
 
-**Extensible without a release.** A language nobody at CRIME has heard of is served by adding four
-lines of TOML. Under a match arm it is served by a CRIME release, which is exactly the "a newly bound
-provider feature needs no CRIME release" consequence ADR-0004 claims.
+**Extensible without a release.** A language nobody at Varde has heard of is served by adding four
+lines of TOML. Under a match arm it is served by a Varde release, which is exactly the "a newly bound
+provider feature needs no Varde release" consequence ADR-0004 claims.
 
 So the falsifiable form of the rule is a grep: search `src/` for any server's command name, and
 every hit must be inside the `DEFAULTS` string or a test fixture. A hit in an `if`, a `match`, or a
@@ -72,9 +72,9 @@ is data; what we assume about the child from its name is a provider branch.
 Two adjacent decisions are settled by the same argument, so they are recorded here rather than
 discovered later:
 
-**CRIME never installs, downloads, updates or bootstraps a server.** It runs what is configured. A
+**Varde never installs, downloads, updates or bootstraps a server.** It runs what is configured. A
 bootstrapper needs a table of where each server comes from and how it is built, which is the match
-arm above wearing a package manager's clothes, and it would make CRIME's behaviour a function of a
+arm above wearing a package manager's clothes, and it would make Varde's behaviour a function of a
 network it cannot see.
 
 **A missing binary is a message, never a fallback to a different server.** "rust-analyzer was not
@@ -132,7 +132,7 @@ ended.
 ## Consequences
 
 **A workspace with no server configured for its language is not a degraded workspace.** It spawns
-nothing and behaves exactly as CRIME does today. That is the falsifiable form of "adding this feature
+nothing and behaves exactly as Varde does today. That is the falsifiable form of "adding this feature
 takes nothing away", and it is asserted as an absence in `features/language_intelligence.feature`,
 the way this suite asserts every other promise not to do something.
 
@@ -143,7 +143,7 @@ conversation state by language, not a performance optimisation.
 **Nothing a server says is trusted about the present.** Every reply carries either a document version
 or a request identifier, and the core drops what does not match what it is holding — the stale-version
 drop. A server is a correct participant in a conversation that has moved on; it is not wrong to answer
-a question late. It is CRIME that would be wrong to draw the answer.
+a question late. It is Varde that would be wrong to draw the answer.
 
 **The server sees the buffer, never the disk.** The same rule writing already follows. A server told
 about the file on disk answers questions about a file the user is not looking at, and every position

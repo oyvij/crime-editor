@@ -76,7 +76,7 @@ pub struct Flow {
 
 /// One value a Step's claim depends on, and where it came from. `cite` is
 /// present for `literal` and `fixture` provenance and absent for `invented` —
-/// CRIME never checks that a value is really a literal (that would need a
+/// Varde never checks that a value is really a literal (that would need a
 /// parser per language), so this is the whole of what it can promise: a place
 /// to jump to, or an honest admission that there is none.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -90,7 +90,7 @@ pub struct Value {
 
 impl Value {
     /// What is actually shown: a value with nowhere to point is displayed as
-    /// invented regardless of what its own `provenance` field claims. CRIME
+    /// invented regardless of what its own `provenance` field claims. Varde
     /// never checks that a value is really a literal, so an authored
     /// `literal` with no `cite` is exactly the unsupported claim it refuses
     /// to repeat as though it were supported.
@@ -137,9 +137,9 @@ pub struct Site {
     pub to: u32,
     /// The lines the Site names, as they read when the Story arrived — the
     /// baseline the stale check compares against. Not authored: the AI names
-    /// the file, the side, the kind and the range, and CRIME reads the text
+    /// the file, the side, the kind and the range, and Varde reads the text
     /// off its own copy once, on arrival ([`fill`]). Defaulted rather than
-    /// dropped, because the sets already in `.crime/stories/` carry a
+    /// dropped, because the sets already in `.varde/stories/` carry a
     /// transcription and a set on disk has to keep loading.
     #[serde(default)]
     pub text: String,
@@ -196,7 +196,7 @@ pub enum Set {
     /// Parsed, and waiting for the edge to say what each Site's lines
     /// currently hold — the round trip [`fill`] documents. Never walkable: a
     /// Step shown here would be shown with no baseline behind its stale
-    /// check, which is a Step CRIME cannot yet say anything true about.
+    /// check, which is a Step Varde cannot yet say anything true about.
     ///
     /// `attempt` is which authoring round wrote this artifact — `Some(1)` for
     /// the first, `Some(2)` for one written in answer to a fix request, and
@@ -227,7 +227,7 @@ pub enum Set {
     /// with no branches.
     NotARepository,
     /// `:story?` with work nobody has committed. Refused before the picker is
-    /// drawn, because picking a row checks that branch out and CRIME never
+    /// drawn, because picking a row checks that branch out and Varde never
     /// checks out over an uncommitted change.
     WorkingTreeDirty,
     /// `:story? <url>` in a project workspace. A project workspace is locked
@@ -236,7 +236,7 @@ pub enum Set {
     GuestNeedsBareWorkspace,
     /// `:story? <url>` on a machine with no `git` to run. The clone is the
     /// user's own git (ADR 0015), which makes the binary a runtime dependency
-    /// for this one feature — and an absence CRIME says out loud.
+    /// for this one feature — and an absence Varde says out loud.
     NoGit,
     /// The download is running in the shell pane, where its progress and any
     /// passphrase prompt are the reviewer's to see and answer. Carries the URL
@@ -267,9 +267,9 @@ pub enum Set {
     /// choice.
     AuthoringAbandoned,
     /// The artifact failed [`problems`] and has been handed back: the fix
-    /// request naming these Steps is in the AI's pane, and CRIME is waiting
+    /// request naming these Steps is in the AI's pane, and Varde is waiting
     /// again. Nothing here is walkable — a half-checked Story shown as
-    /// walkable is a Step CRIME already knows is wrong. Told apart from
+    /// walkable is a Step Varde already knows is wrong. Told apart from
     /// [`Set::Authoring`] on purpose: a reviewer who cannot tell a second
     /// round from a slow first one has no way to know whether waiting longer
     /// is reasonable.
@@ -328,7 +328,7 @@ pub fn decide(force: bool, authored: bool, spelling: String, out: String) -> Res
 
 /// The authoring prompt (ADR 0006), pasted into the AI pane exactly as a
 /// submitted review's is: inline text, so it is actionable by any CLI.
-/// `{RANGE}` and `{OUT}` are the only substitutions CRIME makes — `{OUT}` is
+/// `{RANGE}` and `{OUT}` are the only substitutions Varde makes — `{OUT}` is
 /// the exact path ADR 0005 names for this range, computed by the edge from
 /// git's own oids rather than left for the CLI to derive (and maybe
 /// abbreviate, or resolve against a different `HEAD`) on its own.
@@ -339,7 +339,7 @@ screen at a time, to build a mental model of it. Follow how the code runs, not h
 arranged: start where control enters, and go where it goes — into unchanged code when the flow
 goes there. A file-by-file summary is not a walkthrough.
 
-`{CONTEXT}` already holds everything CRIME knows about this change: the two oids the range resolved
+`{CONTEXT}` already holds everything Varde knows about this change: the two oids the range resolved
 to, its diff, and every changed file's contents with line numbers down the side. Read it once rather
 than running `git diff` or `git log`, and rather than reopening a changed file to count lines. It
 carries the changes only — a step whose `site.kind` is `context` points deliberately at code this
@@ -460,7 +460,7 @@ way and not the obvious other way.
   will see if it is filed under context.
 - `from`/`to` are line numbers at the revision `side` names, not at any other revision.
 - Do not write the lines themselves. A site is the file, the side, the kind and the range, and
-  nothing else — CRIME reads what those lines hold off its own copy of the file.
+  nothing else — Varde reads what those lines hold off its own copy of the file.
 - A site may point at prose — a design document that argues the change is a legitimate step, and
   often the most valuable one.
 
@@ -538,7 +538,7 @@ pub const CONTEXT_CAP: usize = 256 * 1024;
 /// had to. The wording is the library's, so the two things the file can say
 /// live next to each other.
 pub const CONTEXT_UNAVAILABLE: &str =
-    "# The change\n\nCRIME could not read this range out of git, so nothing is handed over here.\n\
+    "# The change\n\nVarde could not read this range out of git, so nothing is handed over here.\n\
      Work the change out yourself, from the range the prompt names.\n";
 
 const TRUNCATION: &str =
@@ -549,7 +549,7 @@ const TRUNCATION: &str =
 /// everything the AI would otherwise spend round trips rediscovering about a
 /// range the reviewer has already confirmed.
 ///
-/// Pure, so the format the prompt describes and the format CRIME writes cannot
+/// Pure, so the format the prompt describes and the format Varde writes cannot
 /// drift apart without a test saying so. The edge gathers `files` from git and
 /// writes the result; it formats nothing.
 ///
@@ -603,7 +603,7 @@ pub fn context_file(
     truncated(out, cap)
 }
 
-/// The unified diff of one file's two sides, at CRIME's pinned context width —
+/// The unified diff of one file's two sides, at Varde's pinned context width —
 /// `git2` renders it, for the same reason [`hunks`] asks `git2` for the hunk
 /// boundaries: a hand-rolled diff is a second answer to a solved question.
 fn diff_text(old: &str, new: &str, file: &str) -> String {
@@ -700,7 +700,7 @@ pub struct BranchRef {
 /// What `:story?` found. Whether the folder is a repository at all, and whether
 /// its working tree is clean, are edge facts, so this is told rather than
 /// derived. A dirty tree is refused up front because picking a branch checks it
-/// out, and CRIME never checks out over work nobody has saved.
+/// out, and Varde never checks out over work nobody has saved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Branching {
     Listed(Vec<BranchRef>),
@@ -719,18 +719,18 @@ pub enum Branching {
     },
 }
 
-/// Whether the working tree holds work a checkout would tread on. CRIME's own
+/// Whether the working tree holds work a checkout would tread on. Varde's own
 /// directory is not the reviewer's work: opening a project workspace writes
-/// `state.json` and `risk.json` into it, and CRIME never edits the project's
+/// `state.json` and `risk.json` into it, and Varde never edits the project's
 /// `.gitignore` (`configuration.feature`) — so counting those refused the
 /// picker in every repository that had not ignored them, which is every
 /// repository the first time. Ignored files are already absent from what git is
 /// asked (`git_status`), so what is left here is the one exception that is
-/// CRIME's own making.
+/// Varde's own making.
 pub fn uncommitted(files: &[crate::review::GitFile]) -> bool {
     files
         .iter()
-        .any(|file| !Path::new(&file.path).starts_with(crate::CRIME_DIR))
+        .any(|file| !Path::new(&file.path).starts_with(crate::VARDE_DIR))
 }
 
 /// The branch list to show, from the refs the edge read: local and
@@ -783,7 +783,7 @@ pub fn branches(refs: &[BranchRef], needle: &str) -> Vec<String> {
 
 /// Where the clone reports its exit status, inside the Sidecar the Guest repo
 /// is cloned into. A file rather than the pane's output, for the reason
-/// [`crate::risk::SENTINEL`] is one: CRIME may not read what a hosted pane
+/// [`crate::risk::SENTINEL`] is one: Varde may not read what a hosted pane
 /// prints, so completion is made a filesystem fact the watcher already sees.
 pub const DOWNLOAD_SENTINEL: &str = "download-done";
 
@@ -824,7 +824,7 @@ pub fn guest_name(url: &str) -> String {
 /// The clone or the fetch, as one line for the shell pane to run (ADR 0015). The sentinel
 /// is removed first and written last: `echo $?` after a `;` records the status
 /// whatever it was, where `&& touch` writes nothing on a failure and leaves
-/// CRIME waiting forever, and a sentinel left over from an earlier clone is a
+/// Varde waiting forever, and a sentinel left over from an earlier clone is a
 /// completion the watcher reports before this one has started.
 ///
 /// Written to a temporary name and moved into place, because this sentinel is
@@ -985,7 +985,7 @@ fn staleness_against(site: &Site, exists: bool, current_text: &str) -> Staleness
 /// on its own cadence regardless of the tree, which is what the Remainder
 /// already relies on — this rides the same poll rather than a second one. A
 /// buffer the reviewer is actively editing overrides it for the new side,
-/// since an unsaved edit is the freshest thing CRIME knows about a file and
+/// since an unsaved edit is the freshest thing Varde knows about a file and
 /// the poll cannot see it until it is written.
 ///
 /// The new side is the working tree even over a committed range, which the
@@ -1106,7 +1106,7 @@ pub fn fill(artifact: &mut Artifact, files: &[FileHunks]) {
     }
 }
 
-/// What is wrong with one Step, in the four ways CRIME can tell without
+/// What is wrong with one Step, in the four ways Varde can tell without
 /// judgement. Never "the code does not do what the claim says" and never "the
 /// Steps are out of execution order" — those are judgements and they stay with
 /// the AI.
@@ -1255,7 +1255,7 @@ pub fn refusal(problems: &[Problem]) -> String {
 /// `{OUT}` is worked out from the range the artifact records rather than
 /// remembered: a set is named for its revisions (ADR 0005), and by the time
 /// the checks have run, the `out` the reviewer confirmed is two events behind.
-const FIX_PROMPT: &str = r#"CRIME checked the story set you wrote to `{OUT}` and cannot accept it yet. These steps do not hold up:
+const FIX_PROMPT: &str = r#"Varde checked the story set you wrote to `{OUT}` and cannot accept it yet. These steps do not hold up:
 
 {PROBLEMS}
 
@@ -1290,7 +1290,7 @@ pub fn fix_prompt(dir: &Path, artifact: &Artifact, problems: &[Problem]) -> Stri
         .replace("{OUT}", &out)
 }
 
-/// Where the artifact CRIME just read was written, worked out from the range
+/// Where the artifact Varde just read was written, worked out from the range
 /// it records rather than remembered. A set is named for its revisions (ADR
 /// 0005), so the name is a function of the artifact — which is what lets a fix
 /// request name the same path without the confirmed `out` being carried
@@ -1308,7 +1308,7 @@ fn artifact_path_of(dir: &Path, artifact: &Artifact) -> String {
 }
 
 /// Whether an arriving artifact is the set already loaded, ignoring the text
-/// CRIME filled in — how a re-read of what is on screen is told from a
+/// Varde filled in — how a re-read of what is on screen is told from a
 /// newly-authored set. Story view re-reads its folder every time it is opened,
 /// and a set the AI no longer transcribes arrives from disk with its text
 /// missing every time: refilling on the re-read would take the baseline from
@@ -1635,8 +1635,8 @@ pub fn range_status(file: &Path, resolves: impl Fn(&str) -> bool) -> RangeStatus
 /// re-authoring replaces by naming rather than by logic. `base` and `head`
 /// are each a 12-char oid prefix, or `head` is the literal `worktree` — the
 /// same shape [`range_status`] reads back out of a filename.
-/// `dir` is CRIME's own directory ([`crate::crime_dir`]), which is absolute:
-/// the path is handed to an AI session whose working directory CRIME did not
+/// `dir` is Varde's own directory ([`crate::varde_dir`]), which is absolute:
+/// the path is handed to an AI session whose working directory Varde did not
 /// set, so a relative one would name a file somewhere nobody agreed on — and
 /// in a Bare workspace it would land in the folder ticket 03 promises to
 /// leave alone.
@@ -1671,7 +1671,7 @@ pub fn revisions(spelling: &str) -> Option<(&str, &str, bool)> {
 /// range from a dirty one.
 pub const WORKTREE: &str = "worktree";
 
-/// CRIME's own pinned `context_lines`, shared with `main.rs`'s `diff_lines`
+/// Varde's own pinned `context_lines`, shared with `main.rs`'s `diff_lines`
 /// so a claim and the Remainder always subtract the same shape.
 pub const CONTEXT_LINES: u32 = 3;
 
@@ -1784,13 +1784,13 @@ pub struct FileHunks {
     /// reviewer is looking at, so they read the working tree, while
     /// [`problems`] judges what the AI wrote against the range it wrote it
     /// for. Judging a Step at the working tree would refuse a correct Story
-    /// the morning after, for the crime of the reviewer having kept typing —
+    /// the morning after, for the varde of the reviewer having kept typing —
     /// which is what the stale marker is for.
     pub head_exists: bool,
     pub head_text: String,
 }
 
-/// Diffs two sides of one file with CRIME's pinned options. Pure: bytes in,
+/// Diffs two sides of one file with Varde's pinned options. Pure: bytes in,
 /// hunks out. No repository is opened and no file is read — `git2::Patch`
 /// diffs the two buffers handed to it and nothing else.
 pub fn hunks(old: &[u8], new: &[u8]) -> Vec<Hunk> {
@@ -2049,7 +2049,7 @@ pub fn refused(state: &State) -> bool {
 /// use. The buffer's path is absolute; comparing that finds nothing and shows no
 /// comment, silently. The *repository's* root, not the workspace's: a Guest
 /// repo's files are opened inside the clone, and relative to the workspace they
-/// spell `.crime/…/src/x.rs` — a name no Site has, so the mark covered nothing
+/// spell `.varde/…/src/x.rs` — a name no Site has, so the mark covered nothing
 /// and every line of a Guest walk was dimmed.
 pub fn shown_file(state: &State) -> String {
     state
@@ -2344,28 +2344,28 @@ mod tests {
         assert_eq!(branches(&refs, ""), ["a", "b", "c"]);
     }
 
-    /// The picker's refusal is about the reviewer's work, and CRIME's own
+    /// The picker's refusal is about the reviewer's work, and Varde's own
     /// directory is not it — a project workspace has files written into it by
-    /// being opened, and CRIME never edits the `.gitignore` that would hide
+    /// being opened, and Varde never edits the `.gitignore` that would hide
     /// them.
     #[test]
-    fn crime_s_own_directory_is_not_uncommitted_work() {
+    fn varde_s_own_directory_is_not_uncommitted_work() {
         let file = |path: &str| crate::review::GitFile {
             path: path.to_string(),
             status: crate::review::GitStatus::Untracked,
         };
         assert!(!uncommitted(&[]));
         assert!(!uncommitted(&[
-            file(".crime/state.json"),
-            file(".crime/risk.json")
+            file(".varde/state.json"),
+            file(".varde/risk.json")
         ]));
         assert!(uncommitted(&[
-            file(".crime/state.json"),
+            file(".varde/state.json"),
             file("src/keys.rs")
         ]));
         // Not a prefix match on the string: a project's own folder whose name
-        // begins with CRIME's is the project's.
-        assert!(uncommitted(&[file(".crimean-war/notes.md")]));
+        // begins with Varde's is the project's.
+        assert!(uncommitted(&[file(".varden/notes.md")]));
     }
 
     /// Typing narrows the same list rather than a second one: the order the
@@ -2592,7 +2592,7 @@ mod tests {
 
     #[test]
     fn worktree_needs_no_commit_to_resolve() {
-        let file = Path::new(".crime/stories/aaaaaaaaaaaa-worktree.json");
+        let file = Path::new(".varde/stories/aaaaaaaaaaaa-worktree.json");
         // The base still has to resolve; only "worktree" is exempt.
         assert_eq!(
             range_status(file, |revision| revision == "aaaaaaaaaaaa"),
@@ -2602,36 +2602,36 @@ mod tests {
 
     #[test]
     fn a_base_git_cannot_resolve_is_gone() {
-        let file = Path::new(".crime/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.json");
+        let file = Path::new(".varde/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.json");
         assert_eq!(range_status(file, |_| false), RangeStatus::Gone);
     }
 
     #[test]
-    fn a_filename_crime_did_not_write_is_gone() {
-        let file = Path::new(".crime/stories/manifest.json");
+    fn a_filename_varde_did_not_write_is_gone() {
+        let file = Path::new(".varde/stories/manifest.json");
         assert_eq!(range_status(file, |_| true), RangeStatus::Gone);
     }
 
-    /// Absolute, under whichever directory is CRIME's own: the AI is handed
-    /// this path and its working directory is not CRIME's to set, so a
+    /// Absolute, under whichever directory is Varde's own: the AI is handed
+    /// this path and its working directory is not Varde's to set, so a
     /// relative one names a file somewhere nobody agreed on.
     #[test]
     fn artifact_path_names_a_commit_range() {
         assert_eq!(
-            artifact_path(Path::new("/w/.crime"), "aaaaaaaaaaaa", "bbbbbbbbbbbb"),
-            "/w/.crime/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.json"
+            artifact_path(Path::new("/w/.varde"), "aaaaaaaaaaaa", "bbbbbbbbbbbb"),
+            "/w/.varde/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.json"
         );
         assert_eq!(
-            artifact_path(Path::new("/home/me/.crime/paths/%w-9"), "aaaaaaaaaaaa", "b"),
-            "/home/me/.crime/paths/%w-9/stories/aaaaaaaaaaaa-b.json"
+            artifact_path(Path::new("/home/me/.varde/paths/%w-9"), "aaaaaaaaaaaa", "b"),
+            "/home/me/.varde/paths/%w-9/stories/aaaaaaaaaaaa-b.json"
         );
     }
 
     #[test]
     fn artifact_path_names_a_dirty_range_distinctly() {
         assert_eq!(
-            artifact_path(Path::new("/w/.crime"), "aaaaaaaaaaaa", "worktree"),
-            "/w/.crime/stories/aaaaaaaaaaaa-worktree.json"
+            artifact_path(Path::new("/w/.varde"), "aaaaaaaaaaaa", "worktree"),
+            "/w/.varde/stories/aaaaaaaaaaaa-worktree.json"
         );
     }
 
@@ -2640,11 +2640,11 @@ mod tests {
     /// leaving a stale one to be read against a fresh Story.
     #[test]
     fn the_companion_file_is_named_for_the_range_the_story_set_is() {
-        let set = artifact_path(Path::new("/w/.crime"), "aaaaaaaaaaaa", "bbbbbbbbbbbb");
+        let set = artifact_path(Path::new("/w/.varde"), "aaaaaaaaaaaa", "bbbbbbbbbbbb");
         let companion = context_path(&set);
         assert_eq!(
             companion,
-            "/w/.crime/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.context.md"
+            "/w/.varde/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.context.md"
         );
         assert_eq!(
             companion.strip_suffix(".context.md"),
@@ -2652,11 +2652,11 @@ mod tests {
         );
         assert_eq!(
             context_path(&artifact_path(
-                Path::new("/w/.crime"),
+                Path::new("/w/.varde"),
                 "aaaaaaaaaaaa",
                 WORKTREE
             )),
-            "/w/.crime/stories/aaaaaaaaaaaa-worktree.context.md"
+            "/w/.varde/stories/aaaaaaaaaaaa-worktree.context.md"
         );
     }
 
@@ -2774,8 +2774,8 @@ mod tests {
 
     #[test]
     fn the_authoring_prompt_points_at_the_companion_file() {
-        let text = prompt("main..HEAD", "out.json", ".crime/stories/a-b.context.md");
-        assert!(text.contains(".crime/stories/a-b.context.md"));
+        let text = prompt("main..HEAD", "out.json", ".varde/stories/a-b.context.md");
+        assert!(text.contains(".varde/stories/a-b.context.md"));
         assert!(text.contains("changes only"));
     }
 
@@ -2801,8 +2801,8 @@ mod tests {
     #[test]
     fn the_authoring_prompt_names_the_output_file() {
         assert!(
-            prompt("main..HEAD", ".crime/stories/a-b.json", "context.md")
-                .contains(".crime/stories/a-b.json")
+            prompt("main..HEAD", ".varde/stories/a-b.json", "context.md")
+                .contains(".varde/stories/a-b.json")
         );
     }
 
@@ -2927,7 +2927,7 @@ mod tests {
         }
     }
 
-    /// The transcription is CRIME's job now, so the two instructions that
+    /// The transcription is Varde's job now, so the two instructions that
     /// asked for it are gone: extracting the text with a command, and
     /// re-reading every site to confirm it still matches.
     #[test]
@@ -2944,7 +2944,7 @@ mod tests {
         assert!(text.contains("Do not write the lines themselves"));
     }
 
-    /// The one judgement CRIME cannot make, and so the one self-check that
+    /// The one judgement Varde cannot make, and so the one self-check that
     /// stays with the author.
     #[test]
     fn the_authoring_prompt_still_asks_for_execution_order() {
@@ -3127,7 +3127,7 @@ from b
         assert_eq!(artifact.stories[1].steps[0].site.text, "from b");
     }
 
-    /// The three sets already in `.crime/stories/` transcribed their own text,
+    /// The three sets already in `.varde/stories/` transcribed their own text,
     /// and that transcription is the baseline their stale check has always
     /// compared against — overwriting it with the file as it reads now would
     /// report every one of their Steps fresh.
@@ -3397,7 +3397,7 @@ from b
     #[test]
     fn a_fix_request_names_the_failing_step_and_no_other() {
         let (artifact, problems) = one_failing_step();
-        let text = fix_prompt(Path::new("/w/.crime"), &artifact, &problems);
+        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
         assert!(text.contains("`s2`: claims-no-change"), "{text}");
         assert!(!text.contains("`s1`"), "{text}");
     }
@@ -3418,7 +3418,7 @@ from b
                 fault: Fault::RangeOutOfBounds,
             },
         ];
-        let text = fix_prompt(Path::new("/w/.crime"), &artifact, &problems);
+        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
         assert!(text.contains("`s1`: file-missing"), "{text}");
         assert!(text.contains("`s2`: range-out-of-bounds"), "{text}");
     }
@@ -3428,14 +3428,14 @@ from b
     #[test]
     fn a_fix_request_asks_for_the_path_the_artifact_came_from() {
         let (artifact, problems) = one_failing_step();
-        let text = fix_prompt(Path::new("/w/.crime"), &artifact, &problems);
+        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
         assert!(
-            text.contains(&artifact_path(Path::new("/w/.crime"), "a", "b")),
+            text.contains(&artifact_path(Path::new("/w/.varde"), "a", "b")),
             "{text}"
         );
         assert!(
             text.contains(&context_path(&artifact_path(
-                Path::new("/w/.crime"),
+                Path::new("/w/.varde"),
                 "a",
                 "b"
             ))),
@@ -3457,8 +3457,8 @@ from b
             fault: Fault::FileMissing,
         }];
         assert!(
-            fix_prompt(Path::new("/w/.crime"), &artifact, &problems).contains(&artifact_path(
-                Path::new("/w/.crime"),
+            fix_prompt(Path::new("/w/.varde"), &artifact, &problems).contains(&artifact_path(
+                Path::new("/w/.varde"),
                 "a",
                 WORKTREE
             )),
@@ -3481,8 +3481,8 @@ from b
             fault: Fault::FileMissing,
         }];
         assert!(
-            fix_prompt(Path::new("/w/.crime"), &artifact, &problems).contains(&artifact_path(
-                Path::new("/w/.crime"),
+            fix_prompt(Path::new("/w/.varde"), &artifact, &problems).contains(&artifact_path(
+                Path::new("/w/.varde"),
                 "ab",
                 "cd"
             )),
@@ -3493,7 +3493,7 @@ from b
     #[test]
     fn a_fix_request_leaves_no_substitution_unfilled() {
         let (artifact, problems) = one_failing_step();
-        let text = fix_prompt(Path::new("/w/.crime"), &artifact, &problems);
+        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
         assert!(!text.contains("{OUT}"));
         assert!(!text.contains("{PROBLEMS}"));
         assert!(!text.contains("{CONTEXT}"));
@@ -3514,7 +3514,7 @@ from b
                 step: "s2".to_string(),
                 fault,
             }];
-            let text = fix_prompt(Path::new("/w/.crime"), &artifact, &problems);
+            let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
             assert!(text.contains(fault.complaint()), "{fault:?}");
         }
     }
@@ -4490,7 +4490,7 @@ from b
             shown_file(&showing("src/keys.rs", Vec::new())),
             "src/keys.rs"
         );
-        let guest = std::path::PathBuf::from("/work/.crime/guest/theirs");
+        let guest = std::path::PathBuf::from("/work/.varde/guest/theirs");
         let state = State {
             current_buffer: Some(guest.join("src/theirs.rs")),
             guest: Some(guest),
@@ -4524,16 +4524,16 @@ from b
         let command = download_command(
             Download::Clone,
             "git@github.com:them/theirs.git",
-            Path::new("/home/me/.crime/paths/x-1/theirs"),
-            Path::new("/home/me/.crime/paths/x-1/clone-done"),
+            Path::new("/home/me/.varde/paths/x-1/theirs"),
+            Path::new("/home/me/.varde/paths/x-1/clone-done"),
         );
         assert_eq!(
             command,
-            "rm -f /home/me/.crime/paths/x-1/clone-done; \
-             git clone git@github.com:them/theirs.git /home/me/.crime/paths/x-1/theirs; \
-             echo $? > /home/me/.crime/paths/x-1/clone-done.writing; \
-             mv /home/me/.crime/paths/x-1/clone-done.writing \
-             /home/me/.crime/paths/x-1/clone-done"
+            "rm -f /home/me/.varde/paths/x-1/clone-done; \
+             git clone git@github.com:them/theirs.git /home/me/.varde/paths/x-1/theirs; \
+             echo $? > /home/me/.varde/paths/x-1/clone-done.writing; \
+             mv /home/me/.varde/paths/x-1/clone-done.writing \
+             /home/me/.varde/paths/x-1/clone-done"
         );
     }
 
@@ -4545,16 +4545,16 @@ from b
         let command = download_command(
             Download::Fetch,
             "git@github.com:them/theirs.git",
-            Path::new("/home/me/.crime/paths/x-1/theirs"),
-            Path::new("/home/me/.crime/paths/x-1/download-done"),
+            Path::new("/home/me/.varde/paths/x-1/theirs"),
+            Path::new("/home/me/.varde/paths/x-1/download-done"),
         );
         assert_eq!(
             command,
-            "rm -f /home/me/.crime/paths/x-1/download-done; \
-             git -C /home/me/.crime/paths/x-1/theirs fetch; \
-             echo $? > /home/me/.crime/paths/x-1/download-done.writing; \
-             mv /home/me/.crime/paths/x-1/download-done.writing \
-             /home/me/.crime/paths/x-1/download-done"
+            "rm -f /home/me/.varde/paths/x-1/download-done; \
+             git -C /home/me/.varde/paths/x-1/theirs fetch; \
+             echo $? > /home/me/.varde/paths/x-1/download-done.writing; \
+             mv /home/me/.varde/paths/x-1/download-done.writing \
+             /home/me/.varde/paths/x-1/download-done"
         );
     }
 

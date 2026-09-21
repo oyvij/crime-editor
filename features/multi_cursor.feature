@@ -16,7 +16,7 @@ Feature: Editing every occurrence of a word at once
   there is no key to press first there that would not type a letter.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
 
   Scenario: The next occurrence of the picked word joins it
     Given "src/tree.js" is open in the editor holding:

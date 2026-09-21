@@ -27,7 +27,7 @@ Feature: Searching file contents
   selection.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project holds:
       | path        | contents                          |
       | src/main.rs | fn update(state)\nlet Update = 1  |
@@ -161,7 +161,7 @@ Feature: Searching file contents
     Given I open search
     And I search for "update"
     When I open the selected hit
-    Then "/home/me/projects/crime/README.md" is open in the editor
+    Then "/home/me/projects/varde/README.md" is open in the editor
     And the cursor is at line 1 column 1
     And the search is not open
 
@@ -172,7 +172,7 @@ Feature: Searching file contents
     And I move down in the search
     And I move down in the search
     When I open the selected hit
-    Then "/home/me/projects/crime/src/main.rs" is open in the editor
+    Then "/home/me/projects/varde/src/main.rs" is open in the editor
     And the cursor is at line 2 column 5
 
   Scenario: Opening a hit leaves the word selected
@@ -336,7 +336,7 @@ Feature: Searching file contents
       Given I scroll down 3 times with the pointer over the editor pane
       And I click result row 3
       When I open the selected hit
-      Then "/home/me/projects/crime/c.rs" is open in the editor
+      Then "/home/me/projects/varde/c.rs" is open in the editor
 
     Scenario: A click on a file heading marks nothing
       Given I scroll down with the pointer over the editor pane

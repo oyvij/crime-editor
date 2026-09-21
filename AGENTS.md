@@ -88,13 +88,13 @@ suite stays green? That pass is not optional and it is not a refactor — it is 
 
 `src/main.rs`, `src/ui.rs` and `src/pty.rs` are the binary — the only code that touches the
 terminal, the pty, the filesystem, git or the clipboard. They make no decisions: input is
-translated into an `Event`, `crime::update` decides, and the returned `Effect`s are executed.
+translated into an `Event`, `varde::update` decides, and the returned `Effect`s are executed.
 
 **The edge runs both ways.** It is not only "execute effects, render the screen": a terminal is
-two-way, and CRIME *is* the terminal for the children in its hosted panes. Programs print escape
+two-way, and Varde *is* the terminal for the children in its hosted panes. Programs print escape
 sequences to ask where the cursor is, what the terminal is, and whether advanced modifier reporting
 is available, then read the reply on their own stdin. Reading that as an output-only rule is why
-CRIME answered nothing for its whole life, and a child that hears silence picks the dumbest
+Varde answered nothing for its whole life, and a child that hears silence picks the dumbest
 fallback it has and never says so. Anything the edge learns from a child — its output, its queries,
 its modes — comes back in as an `Event` or is answered as data the library decided.
 
@@ -103,7 +103,7 @@ its modes — comes back in as an `Event` or is answered as data the library dec
   `terminput::KeyEvent` or a mouse `Input` into events and are unit tested; `main.rs` only converts
   crossterm into those types. If you find yourself deciding what a key or click *means* in
   `main.rs`, it belongs in the library with a test. The key type is the terminal library's lossless
-  one on purpose: CRIME had a narrow enum of the shapes the editor was bound to, and its catch-all
+  one on purpose: Varde had a narrow enum of the shapes the editor was bound to, and its catch-all
   variant silently dropped every key nobody had named yet. Widen the type or add a test; never add
   a shape and a fallback.
 - **Every motion is reachable without a modifier.** Modifier bindings are aliases, never the only
@@ -198,10 +198,10 @@ its modes — comes back in as an `Event` or is answered as data the library dec
   callback reads off the screen, which the cursor-position reply cannot be built without — to the
   reply bytes or nothing; `pty.rs` receives the parser's unhandled-sequence callback, queues it, and
   writes it after the batch — the pty writer is not reachable from inside a parse. Every channel
-  must say the same thing: the device-attributes reply names a deliberately low VT220 because CRIME
+  must say the same thing: the device-attributes reply names a deliberately low VT220 because Varde
   refuses modifier reporting, and claiming a recent xterm would invite a program to enable
-  `modifyOtherKeys` and then read CRIME's legacy key bytes under the wrong rules — which is also why
-  the version query answers `CRIME(x.y.z)` rather than an xterm build. Refuse a query out loud;
+  `modifyOtherKeys` and then read Varde's legacy key bytes under the wrong rules — which is also why
+  the version query answers `VARDE(x.y.z)` rather than an xterm build. Refuse a query out loud;
   never by silence.
 - Drag-to-select is the one thing the library cannot finish: reading characters needs the pty, so
   `mouse::on_mouse` returns a `Selection` request and the edge fulfils it. The request is a span in
@@ -216,9 +216,9 @@ its modes — comes back in as an `Event` or is answered as data the library dec
   column. Reading a grid without it is why a drag over an AI CLI's indented, emoji-laden output
   picked nothing while a drag over its unpadded prompt line looked like it worked.
 - To verify it without a terminal, drive it through a pty and replay the bytes:
-  `script -q /dev/null bash -c 'stty rows 26 columns 100; ./crime .' > out` while feeding keys on
+  `script -q /dev/null bash -c 'stty rows 26 columns 100; ./varde .' > out` while feeding keys on
   stdin, then `cargo run --example replay -- out` renders the final frame. Hold stdin open with a
-  trailing `sleep` — closing the pipe sends EOF to the shell, which exits and takes CRIME with it.
+  trailing `sleep` — closing the pipe sends EOF to the shell, which exits and takes Varde with it.
 - If you find yourself writing an `if` in `main.rs` that decides *product behaviour*, it belongs in
   `update` with a scenario instead.
 - vt100 panics on a zero-sized grid, and a terminal that has not reported its size yet gives zero.
@@ -227,7 +227,7 @@ its modes — comes back in as an `Event` or is answered as data the library dec
   subtracts the scroll off the row it came from and underflows — so a one-row clamp is not a clamp,
   it is the same panic on the second character the child prints. An eight-row window leaves the shell
   one row, and an occupied Corner squeezes it to one *column*, where every character wraps; that
-  combination is how "clamp to at least 1" read as safe for CRIME's whole life.
+  combination is how "clamp to at least 1" read as safe for Varde's whole life.
 - **Draw only when something changed.** Input polling stays at 16ms so latency is unchanged, but the
   frame — and the syntax parse behind it — happens only after a key, a mouse event, pty output, a
   watcher event, or a git status that actually differs. Idle CPU is 0%. **Work in flight is the one
@@ -262,12 +262,12 @@ its modes — comes back in as an `Event` or is answered as data the library dec
   start and slow on a fast one. Once it has spoken the text goes in one write, Enter included — bracketed as a paste
   when the child asked to be told a paste from typing, which is what stops a newline mid-text from
   being read as a submit.
-- **A child's environment is CRIME's, not the host's.** `queries::CHILD_ENV` is the whole terminal
+- **A child's environment is Varde's, not the host's.** `queries::CHILD_ENV` is the whole terminal
   identity a hosted pane hands its child, and `Pane::spawn` walks it: `TERM` alone was not enough,
   because a CLI that sniffs `TERM_PROGRAM`, `KITTY_*`, `TMUX` or any other marker got an answer about
   the user's machine. It lives beside the escape-sequence replies, so a change to one identity is
   read next to the other. Read the constant before adding to it — why it may name emulators when
-  nothing in CRIME may name a CLI provider is argued there, and it is not licence for the branching
+  nothing in Varde may name a CLI provider is argued there, and it is not licence for the branching
   this file forbids.
 
 ## Working philosophy: simplicity first
@@ -317,7 +317,7 @@ cheap. Do not offer to start implementing early.
   purpose and confirm the scenario goes red.
 - Step definitions contain glue only: pull values off the table/params, call a `src/` function,
   assert. Logic belongs in `src/`.
-- State moves between steps through the `CrimeWorld` struct in `tests/cucumber.rs`. Cucumber builds
+- State moves between steps through the `VardeWorld` struct in `tests/cucumber.rs`. Cucumber builds
   a fresh one per scenario, so scenarios cannot leak into each other — keep it that way, and never
   reach for a global or a `static`.
 
@@ -328,7 +328,7 @@ cheap. Do not offer to start implementing early.
   suite that fails on rewording teaches people to ignore it. Pin exact strings in a unit test if it
   ever matters.
 - **Assert absences deliberately.** `no command has been executed`, `the project ".gitignore" is
-  unchanged`, `no file was opened in the editor` are load-bearing. They encode what CRIME promises
+  unchanged`, `no file was opened in the editor` are load-bearing. They encode what Varde promises
   *not* to do, and they are the assertions a plausible-looking implementation quietly breaks.
 - **Inject the clock.** `view_mode.feature` specifies a 300 ms double-tap window and a 450 ms
   non-tap. Drive these from a fake clock behind a trait — never `sleep` or real waiting. Real time is
@@ -377,10 +377,10 @@ traces or internal details in user-facing output.
 - Lint: `cargo clippy -- -D warnings` · Format: `cargo fmt`
 - Comments: default to none — only edge cases, workarounds, cross-cutting contracts, surprising invariants
 - Git: agents may commit — push or branch only when explicitly asked
-- **A program CRIME shells out to is installable, or the feature is not done.** A configured one
+- **A program Varde shells out to is installable, or the feature is not done.** A configured one
   is a template row in `startup::PROGRAMS` with an `install.<os>` key, taken from Tools inside
-  CRIME; `install.sh` learns the package manager that key starts with by asking the installed binary
-  for `crime --deps`, and needs no edit for it. An unconfigured one (the toolchain, git, the default
+  Varde; `install.sh` learns the package manager that key starts with by asking the installed binary
+  for `varde --deps`, and needs no edit for it. An unconfigured one (the toolchain, git, the default
   AI CLI, the player, the URL opener) is a line in the script. `./install.sh --list` shows what it sees. A feature that
   works on the machine that wrote it and nowhere else is the failure this closes: `docs/install.md`.
 - Version bump: an agent asked to commit bumps the `version` in `Cargo.toml` in that same commit —

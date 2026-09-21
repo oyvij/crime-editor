@@ -11,7 +11,7 @@ Feature: Folding a block away
   never the glyph drawn for it — a glyph is a theme's business.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
 
   Scenario: The block the cursor is in folds away
     Given "src/main.rs" is open in the editor holding:

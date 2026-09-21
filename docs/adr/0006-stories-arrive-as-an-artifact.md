@@ -1,17 +1,17 @@
 # Stories arrive as an artifact, never as parsed output
 
-CRIME asks a hosted AI CLI to write a Story by pasting a prompt into its pane and then waiting for a
-file to appear at `.crime/stories/<base12>-<head12>.json`. The existing file watcher picks it up.
-CRIME does not read one character of what the CLI printed.
+Varde asks a hosted AI CLI to write a Story by pasting a prompt into its pane and then waiting for a
+file to appear at `.varde/stories/<base12>-<head12>.json`. The existing file watcher picks it up.
+Varde does not read one character of what the CLI printed.
 
-ADR 0004 established that a hosted pane is a terminal CRIME hosts, not a pane CRIME interprets, and
-that no branch anywhere may test which CLI is running. It settled what CRIME must not do to a child's
-*output*. It did not say how CRIME gets structured data *out* of one, and this feature is the first
+ADR 0004 established that a hosted pane is a terminal Varde hosts, not a pane Varde interprets, and
+that no branch anywhere may test which CLI is running. It settled what Varde must not do to a child's
+*output*. It did not say how Varde gets structured data *out* of one, and this feature is the first
 that needs to — so the obvious reading of 0004 ("just don't") would have left the question to whoever
 implemented it first.
 
 The alternative was to read the pane. It is superficially cheaper — the text is right there, already
-in a vt100 grid CRIME owns — and it is the reason to write this down, because it will look cheaper
+in a vt100 grid Varde owns — and it is the reason to write this down, because it will look cheaper
 again to the next person. It fails on three counts. A CLI's output format is its own and changes
 without notice, so parsing it is a branch per provider by another name, which 0004 forbids outright.
 The grid is a *rendering*: it wraps, it is repainted, it scrolls away, and a story set runs to 30–70KB
@@ -29,10 +29,10 @@ a plea — and the prompt must say so, because that is the property being relied
 
 ## Consequences
 
-CRIME verifies the artifact's shape and nothing else. A malformed file is refused whole, with a
+Varde verifies the artifact's shape and nothing else. A malformed file is refused whole, with a
 notice, never salvaged in part: a spine that silently omits one story of three is indistinguishable
 from a story the AI never wrote. A cited value is rendered as a jumpable pointer and an uncited one is
-displayed as invented, but CRIME never proves the value is really a literal — that would need a parser
+displayed as invented, but Varde never proves the value is really a literal — that would need a parser
 per language, and it is out of scope for good.
 
 The wait is unbounded, and deliberately so. Authoring takes five to eleven minutes, a guessed timeout

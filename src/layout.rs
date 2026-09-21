@@ -205,7 +205,7 @@ pub fn viewport(offset: usize, focus: usize, rows: usize, fits: usize) -> usize 
 const CONTEXT: usize = 2;
 
 /// The first content row a pane shows so that a whole *range* is on screen —
-/// what [`viewport`] is for a cursor. `crime::frame_site` argues why the two
+/// what [`viewport`] is for a cursor. `varde::frame_site` argues why the two
 /// are different questions; here, `first` and `last` are 0-based rows and
 /// `fits` is how many rows the pane shows. A range taller than the pane is
 /// framed from its top: it cannot be shown whole, and it is read downward from

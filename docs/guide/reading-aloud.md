@@ -98,7 +98,7 @@ than staying silent — silence is also what success sounds like before the firs
 piece refuses by name (`no-voice`, `no-synthesizer`, `no-player`), and the install command for your
 operating system is **typed onto the terminal's input line and not run**. Read it, edit it if your
 package manager differs, then press Enter yourself. Nothing is executed, downloaded or written by
-CRIME; a row with no install command for this OS refuses and offers nothing.
+Varde; a row with no install command for this OS refuses and offers nothing.
 
 The order of the checks is the order you fix things in: the voice first, because a synthesizer with
 no model to load never starts.
@@ -109,13 +109,13 @@ A voice is two things: the **synthesizer binary** and a **model file** it loads.
 synthesizer row in Tools (or press `i` when a Reading is refused for a missing piece): the shipped
 install command runs in the shell pane, installs `piper` with `uv`, and fetches the
 `en_US-bryce-medium` model — an `.onnx` file and its `.onnx.json` beside it, about 61 MB, public
-domain — into `~/.crime/voices/`. When it exits 0, CRIME writes the row's `configures.voice` into
-`~/.crime/config.toml`:
+domain — into `~/.varde/voices/`. When it exits 0, Varde writes the row's `configures.voice` into
+`~/.varde/config.toml`:
 
 ```toml
-# ~/.crime/config.toml
+# ~/.varde/config.toml
 [speech]
-voice = "~/.crime/voices/en_US-bryce-medium.onnx"
+voice = "~/.varde/voices/en_US-bryce-medium.onnx"
 ```
 
 `voice` ships blank on purpose. It is a path on your disk, and an invented one would be a row that
@@ -125,7 +125,7 @@ is not there reads `no-voice`, exactly as a blank one does.
 
 Any other piper voice works the same way: download its `.onnx` and `.onnx.json` and point `voice`
 at the `.onnx`. Any other synthesizer that reads text on stdin and writes its audio where `${dir}` says can be
-named in `speech.command` and `speech.args` — CRIME never checks which one it is.
+named in `speech.command` and `speech.args` — Varde never checks which one it is.
 
 The synthesizer stays resident once started (it is started when the first markdown buffer opens,
 because loading a voice takes long enough to miss the first word otherwise) and holds a couple of
@@ -133,7 +133,7 @@ hundred megabytes while it lives.
 
 ## The `[speech]` table
 
-All of these live in `~/.crime/config.toml` or the project's `.crime/config.toml`; see
+All of these live in `~/.varde/config.toml` or the project's `.varde/config.toml`; see
 [configuration.md](configuration.md) for how the two layer. The seeded project file lists
 `command`, `args`, `voice` and `speed` commented out.
 
@@ -146,19 +146,19 @@ All of these live in `~/.crime/config.toml` or the project's `.crime/config.toml
 | `player.macos` | `"afplay"` | What plays the stream on macOS. |
 | `player.linux` | `"aplay"` | What plays it on Linux (`alsa-utils`). |
 | `player.windows` | — | None shipped: nothing there plays a wav from a command line without a shell of its own. |
-| `install.macos`, `install.linux` | `uv tool install piper-tts && mkdir -p ~/.crime/voices && curl …` | Run in the shell pane when the speech row is taken in Tools. |
-| `configures.voice` | `"~/.crime/voices/en_US-bryce-medium.onnx"` | Written into `voice` once the install exits 0, if `voice` is blank or absent in `~/.crime/config.toml`. |
+| `install.macos`, `install.linux` | `uv tool install piper-tts && mkdir -p ~/.varde/voices && curl …` | Run in the shell pane when the speech row is taken in Tools. |
+| `configures.voice` | `"~/.varde/voices/en_US-bryce-medium.onnx"` | Written into `voice` once the install exits 0, if `voice` is blank or absent in `~/.varde/config.toml`. |
 | `install.windows` | — | None shipped. |
 
 ## Where the audio goes
 
-A Reading writes its stream to `~/.crime/tmp/` — outside every workspace — plays it, and deletes
+A Reading writes its stream to `~/.varde/tmp/` — outside every workspace — plays it, and deletes
 it. Nothing appears in the file tree, `git status` is unchanged and a project search finds nothing
-new. The file is removed when the player exits and again when CRIME exits, and the directory is
-swept on the next start in case a crash escaped both; everything under it is CRIME's, so all of it
-can go. It is the one thing CRIME writes to `~/.crime/` that is not configuration or a review.
+new. The file is removed when the player exits and again when Varde exits, and the directory is
+swept on the next start in case a crash escaped both; everything under it is Varde's, so all of it
+can go. It is the one thing Varde writes to `~/.varde/` that is not configuration or a review.
 
 The reasoning, if you want it: `docs/adr/0013-a-voice-is-an-installed-binary.md` for why the voice
-is a program you install rather than a library CRIME links, and
+is a program you install rather than a library Varde links, and
 `docs/adr/0014-scratch-audio-lives-outside-the-workspace.md` for why the stream is not in the
-project's `.crime/` or the OS temp directory.
+project's `.varde/` or the OS temp directory.

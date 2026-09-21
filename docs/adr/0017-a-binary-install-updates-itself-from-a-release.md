@@ -1,12 +1,12 @@
 # A binary install updates itself from a Release; a checkout install still does not touch the network
 
-ADR 0003 settled how CRIME notices it is out of date: compare the Version its checkout claims with
+ADR 0003 settled how Varde notices it is out of date: compare the Version its checkout claims with
 the Running version, one file read, no git, no network. `features/self_update.feature` states the
-same in its preamble — *no network, no git, no watcher and no timer* — and ADR 0011 says CRIME
-never downloads a language server. Three sentences that read as one rule: CRIME does not fetch.
+same in its preamble — *no network, no git, no watcher and no timer* — and ADR 0011 says Varde
+never downloads a language server. Three sentences that read as one rule: Varde does not fetch.
 
 This decision adds a second install kind without touching that rule for the first. A **checkout
-install** — the binary is `target/release/crime` under a manifest naming crime — keeps every word
+install** — the binary is `target/release/varde` under a manifest naming varde — keeps every word
 of ADR 0003. A **binary install** — anything else, which today offers nothing and is described by
 the feature file as "a copied binary with nothing above it" — asks this repository for its latest
 Release once at startup, compares that Release's Version to the Running version by
@@ -24,7 +24,7 @@ that the binary install lacks is a second source of truth on disk. Without one, 
 newer Version can be read is where the Releases are.
 
 ADR 0011's argument was different again: a bootstrapper for *servers* needs a table of where each
-one comes from, and that table is the provider-specific branch this repo forbids. CRIME fetching
+one comes from, and that table is the provider-specific branch this repo forbids. Varde fetching
 *itself* needs no table — one URL, one asset name built from the OS and CPU it already knows — and
 names no third party's product.
 
@@ -38,7 +38,7 @@ typing.
 
 ## Why the relaunch is the quit
 
-CRIME already has a Restart event, offered after a server install that only edits the shell
+Varde already has a Restart event, offered after a server install that only edits the shell
 profile, and it *is* Quit: an unsaved buffer refuses it with `unsaved-changes`. A relaunch after an
 update is held to the same refusal for the same reason — an update that could discard work is a way
 around the one refusal quitting makes. The only difference is the last effect: the edge replaces its

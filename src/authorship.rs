@@ -82,7 +82,7 @@ pub fn at_cursor(state: &State) -> Option<Authorship> {
 /// Which line of the file as the commit holds it each buffer line came from,
 /// one entry per line of `shown` and `None` for a line the commit does not hold.
 ///
-/// The one diff of the two sides. Both things CRIME says about a changed file
+/// The one diff of the two sides. Both things Varde says about a changed file
 /// read it: the Authorship indexes the commit's blame through it, and the
 /// Change bar bars exactly the lines it answers `None` for. Two derivations
 /// would be two answers to which lines the commit holds, and the disagreement

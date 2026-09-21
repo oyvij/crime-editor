@@ -4,7 +4,7 @@
 //! terminal sent into a lossless [`KeyEvent`] and this decides what it means.
 //! For a hosted pane the only decision is whether the key is reserved —
 //! everything else is encoded for the child, because sending a key to a child
-//! is byte transport rather than a decision. The panes CRIME interprets read
+//! is byte transport rather than a decision. The panes Varde interprets read
 //! the code and the modifiers off the same event; there is no narrower key
 //! type, because a type with a name for every key the editor cares about has a
 //! catch-all for the rest, and a key that reached it was silently dropped.
@@ -130,7 +130,7 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
     ("K", "what is this", &[View::Edit]),
     ("gd", "definition", &[View::Edit]),
     // The fifteenth and sixteenth Edit rows, which is the last two a 26-row
-    // terminal has room for, and the two on this table CRIME says nowhere else.
+    // terminal has room for, and the two on this table Varde says nowhere else.
     // The palette is the way to eighteen more commands and to every pane;
     // `:format` is in no palette, has no completion on the `:` line and is
     // spelled in no notice, so a reader who cannot see it here cannot find it
@@ -153,7 +153,7 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
     // Not an omission instead: [`UNLISTED`] excuses a *key*, and Tab is listed.
     ("Tab", "indent / next blank", &[View::Edit]),
     // Below the fold for the reason the two rows above `:format` are above it:
-    // a short window's rows go to what nothing else in CRIME teaches, and this
+    // a short window's rows go to what nothing else in Varde teaches, and this
     // one is taught by every editor that has the gesture.
     ("C-d gm", "same word again", &[View::Edit]),
     ("j k V c", "select comment", &[View::Review]),
@@ -230,7 +230,7 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
 /// the box the cheatsheet draws sits over the code being read — the gesture
 /// that opens the list is what earns a row there. The arrows are deliberately
 /// absent for the reason `UNLISTED` gives for them everywhere else: every list
-/// in CRIME moves on them, and the box already cannot spell one label twice.
+/// in Varde moves on them, and the box already cannot spell one label twice.
 pub const TOOL_LIST_KEYS: [(&str, &str); 3] =
     [("i", "install"), ("r", "re-check"), ("Esc", "close")];
 
@@ -241,8 +241,8 @@ pub const TOOL_LIST_KEYS: [(&str, &str); 3] =
 /// draws sits over the code being read.
 ///
 /// The arrows are deliberately absent, as they are for Tools: every
-/// list in CRIME moves on them, and the box cannot spell one label twice. Enter
-/// is what a picker is for, and Escape is how every box in CRIME is left — both
+/// list in Varde moves on them, and the box cannot spell one label twice. Enter
+/// is what a picker is for, and Escape is how every box in Varde is left — both
 /// reachable with no modifier (R31.11).
 pub const BRANCH_LIST_KEYS: [(&str, &str); 2] = [("Enter", "story this branch"), ("Esc", "close")];
 
@@ -264,7 +264,7 @@ pub const BRANCH_FILTER_HINT: &str = "type to filter";
 /// files.
 ///
 /// Least guessable first: Enter is a newline in a text box and Escape discards
-/// in every box CRIME has, and `C-z` is the undo of every editor outside vim,
+/// in every box Varde has, and `C-z` is the undo of every editor outside vim,
 /// so filing is the one key a reviewer cannot guess. Both Ctrl keys carry a
 /// modifier for the same reason — every letter in the body is text, so there is
 /// no unmodified key left to give them, and `u` is a letter of the comment
@@ -285,7 +285,7 @@ pub const COMMENT_BOX_KEYS: [(&str, &str); 3] =
 /// Movement first, because the row truncates from the right on a narrow
 /// terminal and the keys that get somebody through a long list are the ones
 /// nothing else teaches. The arrows are named here — unlike every other list
-/// in CRIME, where they are the motion too obvious to spend a row on — because
+/// in Varde, where they are the motion too obvious to spend a row on — because
 /// they and `C-n C-p` move by different things, and the box is where that
 /// difference has to be readable.
 pub const SEARCH_KEYS: [(&str, &str); 6] = [
@@ -307,9 +307,9 @@ pub fn applies_to(views: &[View], view: View) -> bool {
 /// What a key means, given what is on screen and what has focus. The one way in
 /// from the edge, and the only place a keypress is interpreted.
 ///
-/// A hosted pane — the AI pane and the terminal pane — is a terminal CRIME
+/// A hosted pane — the AI pane and the terminal pane — is a terminal Varde
 /// hosts rather than a pane it interprets: its child owns the keyboard, so
-/// CRIME claims the reserved keys and encodes everything else for the child.
+/// Varde claims the reserved keys and encodes everything else for the child.
 /// Every other pane routes against what is on screen. `at_ms` stamps the
 /// double-tap; the edge supplies its clock.
 pub fn on_key_event(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) -> Vec<Event> {
@@ -355,7 +355,7 @@ fn reserved(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) -> 
     None
 }
 
-/// The keys CRIME answers whatever is on screen, once the child has not taken
+/// The keys Varde answers whatever is on screen, once the child has not taken
 /// them.
 fn claimed_everywhere(state: &State, event: KeyEvent) -> Option<Vec<Event>> {
     if event.modifiers.contains(KeyModifiers::CTRL) {
@@ -382,7 +382,7 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
         },
         // A list, so it swallows what it does not recognise — the same as
         // every modal but the candidate list, which is offered while typing.
-        // The arrows move the selection, as they do in every list in CRIME, and
+        // The arrows move the selection, as they do in every list in Varde, and
         // `i` acts on the row they left it on. Both are reachable with no
         // modifier (R31.11), and the box draws its own footer row naming them,
         // which is where a key that only exists inside this list is
@@ -458,7 +458,7 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
 /// modifier-only binding is a binding that silently does not exist. Enter and
 /// Escape are the row [`CHEATSHEET`] spends on the list; the arrows are on the
 /// omissions list beside it, because the box already cannot spell one label
-/// twice and every list in CRIME answers them.
+/// twice and every list in Varde answers them.
 fn candidate_list(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
     // Modifiers are left to the buffer: Shift+Down extends a selection and
     // Alt+Down is a word motion, and neither is a choice in this list.
@@ -570,7 +570,7 @@ pub enum Paste {
 /// Where a paste goes. Nothing here is per-character: a hosted pane's child
 /// takes the whole paste as one event, which is the point — one send rather
 /// than one keystroke per character, and nothing that can be re-interpreted
-/// halfway through. CRIME's own panes never saw a paste as anything but typing,
+/// halfway through. Varde's own panes never saw a paste as anything but typing,
 /// so the paste is replayed as the keystrokes the host terminal sent before it
 /// was told to bracket them, and the edge runs each one through `update` in
 /// turn because what a key means depends on the state the key before it left.
@@ -613,7 +613,7 @@ pub fn on_paste(state: &State, drafts: &Drafts, text: String) -> Pasted {
 }
 
 /// Whether the focused pane's child owns the keyboard. A hosted pane's keys
-/// belong to its child — but only while nothing of CRIME's own is collecting
+/// belong to its child — but only while nothing of Varde's own is collecting
 /// them: a modal, either search, and the `:` and filter lines all claim the
 /// keys wherever focus happens to be, and focus can move while one is open.
 fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
@@ -627,7 +627,7 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
         }
 }
 
-/// Whether one of CRIME's own boxes has the keys — a modal, either search, the
+/// Whether one of Varde's own boxes has the keys — a modal, either search, the
 /// command line or the tree filter. Read by both destinations a paste can have
 /// besides the buffer, so it is one list rather than two spellings of it.
 fn a_box_has_the_keys(state: &State, drafts: &Drafts) -> bool {
@@ -687,7 +687,7 @@ fn typing_into_the_buffer(state: &State) -> bool {
 }
 
 /// The reserved keys, then bytes. These two arms and the bare Ctrl claimed by
-/// the caller are the complete list of what CRIME takes from a child;
+/// the caller are the complete list of what Varde takes from a child;
 /// everything else is transport, which is what makes a key nobody has thought
 /// of arrive anyway. Escape is not one of them: it is counted *and* forwarded,
 /// so a double-tap opens the palette without the child losing the key.
@@ -702,7 +702,7 @@ fn to_child(state: &State, event: KeyEvent, at_ms: u64) -> Vec<Event> {
             })];
         }
     }
-    // The selection was made with the mouse in CRIME's own UI, so the child
+    // The selection was made with the mouse in Varde's own UI, so the child
     // cannot be mid-anything that wanted the byte. With nothing picked it
     // interrupts, which is what stops a running command. Only a selection in
     // *this* pane counts: one left in the editor, or in the other hosted pane,
@@ -738,7 +738,7 @@ fn to_child(state: &State, event: KeyEvent, at_ms: u64) -> Vec<Event> {
 /// nothing for it either, so nothing is being withheld here.
 fn encode(event: KeyEvent) -> Option<Vec<u8>> {
     // Legacy xterm has no notion of a repeat: a held key sends the press again.
-    // Terminals speaking the Kitty protocol report repeats, which CRIME asks
+    // Terminals speaking the Kitty protocol report repeats, which Varde asks
     // for, so without this every repeat would encode as unsupported.
     let mut event = KeyEvent {
         kind: KeyEventKind::Press,
@@ -747,7 +747,7 @@ fn encode(event: KeyEvent) -> Option<Vec<u8>> {
     // A control code carries no case and no Shift: a real terminal sends 0x03
     // for Ctrl+C, Ctrl+Shift+c and Ctrl+Shift+C alike. The encoder refuses all
     // but the lowercase form, so without this the shifted ones arrive as
-    // nothing — and which of the three a terminal reports is not CRIME's
+    // nothing — and which of the three a terminal reports is not Varde's
     // choice.
     if let (true, KeyCode::Char(c)) = (event.modifiers.contains(KeyModifiers::CTRL), event.code) {
         event.modifiers.remove(KeyModifiers::SHIFT);
@@ -927,7 +927,7 @@ fn comment_body(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
         return vec![Event::EditorUndo];
     }
     // What Option+arrow actually sends on macOS — `^[b` and `^[f` — for the
-    // reason [`word_motion_alias`] gives: CRIME cannot ask for Option to be
+    // reason [`word_motion_alias`] gives: Varde cannot ask for Option to be
     // reported as Alt without costing every character Option composes, so the
     // gesture is met in the shape the terminal chose for it. Without this the
     // body's word motion is unreachable for exactly the people the editor
@@ -1034,7 +1034,7 @@ fn routed(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
 
 /// `Ctrl+p` and `Ctrl+n`, once nothing ahead of them has claimed them: one step
 /// back through the places the cursor has been, and one step forward. In
-/// CRIME's own panes only — a hosted pane's child has had them long since,
+/// Varde's own panes only — a hosted pane's child has had them long since,
 /// where they are readline's own history keys, and the `RESERVED` list is what
 /// holds that true. Behind [`collecting`], so the results box keeps them for
 /// `MoveHitFile` and the `:` line, the find box and the tree filter all keep
@@ -1185,7 +1185,7 @@ fn word_motion_alias(state: &State, event: KeyEvent, alt: bool, shift: bool) -> 
         _ => {}
     }
     // What Option+arrow actually sends on macOS: `^[b` and `^[f`, the readline
-    // word escapes, rather than a modified arrow. CRIME cannot ask for Option
+    // word escapes, rather than a modified arrow. Varde cannot ask for Option
     // to be reported as Alt — that costs every character Option composes, `[]`
     // and `{}` among them (see `main.rs`) — so the gesture has to be met in the
     // shape the terminal chose for it.
@@ -1219,7 +1219,7 @@ fn focus_alias(event: KeyEvent, alt: bool) -> Option<Vec<Event>> {
     })])
 }
 
-/// Whatever of CRIME's own is already collecting characters, and the keys that
+/// Whatever of Varde's own is already collecting characters, and the keys that
 /// open one. A line that is collecting claims the printable keys while it is
 /// open and gives them straight back when it closes, which is why `/` costs no
 /// motion.
@@ -1260,7 +1260,7 @@ fn claims_colon(state: &State) -> bool {
     match state.focus {
         Pane::Tree => true,
         Pane::Editor => !crate::editor_inserting(state),
-        // CRIME's own panes, so the colon is CRIME's.
+        // Varde's own panes, so the colon is Varde's.
         Pane::Risk | Pane::Buffers | Pane::History => true,
         Pane::Ai | Pane::Terminal => false,
     }
@@ -1319,7 +1319,7 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         // edge for the reason every other pane's does: what a key means is a
         // decision, and `main.rs` has no test.
         Pane::Risk | Pane::Buffers | Pane::History => list_pane_key(event),
-        // A hosted pane never arrives here: with nothing of CRIME's own
+        // A hosted pane never arrives here: with nothing of Varde's own
         // collecting, `child_owns_keys` sent the key to `to_child`, and with
         // something collecting one of the returns above took it. Every pane is
         // named rather than caught by a `_`, so a new one is a compiler
@@ -1404,7 +1404,7 @@ fn command_line(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
     }
 }
 
-/// `:` commands. `:q` closes the file, `:qa` closes them all. Leaving CRIME is
+/// `:` commands. `:q` closes the file, `:qa` closes them all. Leaving Varde is
 /// not on this line at all: Ctrl+Q and the palette's `q` are the gestures for
 /// it, so a mistyped clear-up cannot take the session with it.
 fn command(line: &str) -> Vec<Event> {
@@ -1586,7 +1586,7 @@ mod tests {
     }
 
     #[test]
-    fn a_paste_reaches_a_child_whole_and_crime_s_own_panes_as_keystrokes() {
+    fn a_paste_reaches_a_child_whole_and_varde_s_own_panes_as_keystrokes() {
         let hosted = State {
             ai_running: true,
             ..focused(Pane::Ai)
@@ -1596,13 +1596,13 @@ mod tests {
             Pasted::ToChild(Event::Pasted(text)) if text == "one\ntwo"
         ));
         // The tree, rather than the editor: the open buffer takes a paste as
-        // one edit, and every other pane of CRIME's own interprets the keys.
+        // one edit, and every other pane of Varde's own interprets the keys.
         let Pasted::AsKeys(keys) = on_paste(
             &focused(Pane::Tree),
             &Drafts::default(),
             "a\r\nb\t".to_string(),
         ) else {
-            panic!("CRIME's own panes interpret their keys");
+            panic!("Varde's own panes interpret their keys");
         };
         assert_eq!(
             keys.iter().map(|key| key.code).collect::<Vec<_>>(),
@@ -1761,7 +1761,7 @@ mod tests {
         ] {
             assert_eq!(press(&claimed, alt_backspace), vec![Event::EditorBackspace]);
         }
-        // A line CRIME is collecting claims the key wherever focus is, so
+        // A line Varde is collecting claims the key wherever focus is, so
         // Alt+Backspace shortens the command rather than the buffer behind it.
         let mut typing_a_command = Drafts {
             command: Some(":wq".to_string()),
@@ -1825,10 +1825,10 @@ mod tests {
         ));
     }
 
-    // A line CRIME is collecting claims a paste wherever focus happens to be —
+    // A line Varde is collecting claims a paste wherever focus happens to be —
     // otherwise pasting a path into the filter box types it into the shell.
     #[test]
-    fn a_paste_into_a_line_crime_is_collecting_never_reaches_the_child() {
+    fn a_paste_into_a_line_varde_is_collecting_never_reaches_the_child() {
         let drafts = Drafts {
             filter: Some(String::new()),
             ..Drafts::default()
@@ -1955,7 +1955,7 @@ mod tests {
         );
     }
 
-    // Shift is not a mode key: the editor extends, and no other pane CRIME
+    // Shift is not a mode key: the editor extends, and no other pane Varde
     // interprets claims it. A hosted pane is not in here because its child gets
     // the arrow like any other key, which the sweep below holds it to.
     #[test]
@@ -2178,7 +2178,7 @@ mod tests {
         let state = State {
             modal: Modal::ConfirmStory {
                 spelling: "main..HEAD".to_string(),
-                out: ".crime/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.json".to_string(),
+                out: ".varde/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.json".to_string(),
             },
             ..State::default()
         };
@@ -2206,7 +2206,7 @@ mod tests {
     }
 
     #[test]
-    fn colon_opens_the_command_line_only_in_panes_crime_owns() {
+    fn colon_opens_the_command_line_only_in_panes_varde_owns() {
         for pane in [
             Pane::Tree,
             Pane::Editor,
@@ -2532,7 +2532,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_f_opens_search_from_the_panes_crime_owns() {
+    fn ctrl_f_opens_search_from_the_panes_varde_owns() {
         for pane in [Pane::Editor, Pane::Tree] {
             assert_eq!(press(&focused(pane), ctrl('f')), vec![Event::OpenSearch]);
             // `C-S-f` is not `C-f`. The shift a terminal reports separately is
@@ -2547,9 +2547,9 @@ mod tests {
         }
     }
 
-    /// The reserved list is exhaustive, so CRIME's other global keys are not on
+    /// The reserved list is exhaustive, so Varde's other global keys are not on
     /// it: in a hosted pane they belong to the child, which may well bind them,
-    /// and CRIME's own copy of each is reachable from the panes it owns.
+    /// and Varde's own copy of each is reachable from the panes it owns.
     #[test]
     fn a_global_key_that_is_not_reserved_reaches_the_child() {
         let state = hosting(Pane::Terminal);
@@ -2621,7 +2621,7 @@ mod tests {
         }
     }
 
-    /// Everywhere else Escape is CRIME's own — it leaves insert mode and
+    /// Everywhere else Escape is Varde's own — it leaves insert mode and
     /// dismisses a modal — so the vim reflex of two quick escapes must not open
     /// the palette. Those panes have the fallback binding instead, and they are
     /// not a pane anything can trap you in.
@@ -2705,7 +2705,7 @@ mod tests {
 
     /// Every key the lossless input type can express, across every combination
     /// of the six modifiers it can carry. Modifiers are enumerated as a bit set
-    /// rather than a hand-picked handful because a modifier CRIME has no use for
+    /// rather than a hand-picked handful because a modifier Varde has no use for
     /// is exactly the kind that used to be discarded on the way in.
     fn every_key() -> Vec<KeyEvent> {
         let mut codes = vec![
@@ -2734,7 +2734,7 @@ mod tests {
         codes.extend((1..=35).map(KeyCode::F));
         codes.extend((0x20u8..0x7f).map(|c| KeyCode::Char(c as char)));
         // A keyboard is not ASCII. These stand in for the rest of Unicode: a
-        // letter with a diaeresis, one CRIME's own author types daily, a
+        // letter with a diaeresis, one Varde's own author types daily, a
         // character outside the basic plane, and one outside every plane a
         // single UTF-16 unit can hold.
         codes.extend(['é', 'ø', '漢', '🙂'].map(KeyCode::Char));
@@ -2784,7 +2784,7 @@ mod tests {
         keys
     }
 
-    /// The **reserved** keys: the complete list of what CRIME claims from a
+    /// The **reserved** keys: the complete list of what Varde claims from a
     /// child, and the only keys it withholds by choice. Each one costs the child
     /// nothing.
     const RESERVED: [(&str, &str); 7] = [
@@ -2806,15 +2806,15 @@ mod tests {
         ("M-l", "moves pane focus"),
         (
             "C-c with a selection",
-            "copies what the mouse picked in CRIME's own UI. With nothing \
+            "copies what the mouse picked in Varde's own UI. With nothing \
              picked it interrupts the child, which the sweep below drives and \
              this list therefore does not excuse",
         ),
     ];
 
     /// Keys no legacy xterm sequence can express, so a real terminal sends
-    /// nothing for them either and CRIME is taking nothing away. Kept apart from
-    /// [`RESERVED`] on purpose: conflating the two is how a key CRIME really
+    /// nothing for them either and Varde is taking nothing away. Kept apart from
+    /// [`RESERVED`] on purpose: conflating the two is how a key Varde really
     /// does drop could hide among the keys that were never expressible.
     const UNENCODABLE: [(&str, &str); 11] = [
         ("Shift alone", "a bare modifier has no sequence"),
@@ -2893,7 +2893,7 @@ mod tests {
             .any(|(withheld, _)| withheld == &label)
     }
 
-    /// A hosted pane with a child running and nothing of CRIME's own on screen.
+    /// A hosted pane with a child running and nothing of Varde's own on screen.
     fn hosting(pane: Pane) -> State {
         State {
             focus: pane,
@@ -3017,7 +3017,7 @@ mod tests {
 
     /// A control code carries no case and no Shift: a real terminal sends the
     /// same interrupt for all four shapes, and which one it reports is not
-    /// CRIME's choice. Left to the encoder, the three shifted ones arrive as
+    /// Varde's choice. Left to the encoder, the three shifted ones arrive as
     /// nothing at all.
     #[test]
     fn a_shifted_control_key_still_reaches_the_child() {
@@ -3050,11 +3050,11 @@ mod tests {
         assert!(press(&state, KeyEvent::new(KeyCode::F(13))).is_empty());
     }
 
-    /// The keys CRIME's own UI is collecting belong to it wherever focus is:
+    /// The keys Varde's own UI is collecting belong to it wherever focus is:
     /// a modal, either search, and the `:` and filter lines all outrank the
     /// child, and focus can move while one of them is open.
     #[test]
-    fn what_crime_is_collecting_outranks_the_child() {
+    fn what_varde_is_collecting_outranks_the_child() {
         let showing = State {
             modal: Modal::Palette,
             ..hosting(Pane::Terminal)
@@ -3116,7 +3116,7 @@ mod tests {
         }
     }
 
-    /// The Risk list is one of CRIME's own panes, so its keys are decided here
+    /// The Risk list is one of Varde's own panes, so its keys are decided here
     /// and not at the edge: the arrows and the letters both reach the pane's
     /// selection, and Enter is the go-to-the-code gesture. Its letters arrive as
     /// `Event::Key` because what they mean is `update`'s — the same division the
@@ -3283,7 +3283,7 @@ mod tests {
         ),
         (
             "C-q",
-            "quits CRIME, from wherever you are",
+            "quits Varde, from wherever you are",
             &[View::Edit, View::Review, View::Story],
         ),
         (
@@ -3829,7 +3829,7 @@ mod tests {
 
     /// Whether a row's token names a label, either on its own or — for a
     /// single key — inside a chord like `gt`. A chord names each of the keys
-    /// it is made of, and every chord CRIME has is two keys long: any longer
+    /// it is made of, and every chord Varde has is two keys long: any longer
     /// token is one binding naming only itself, which is what stops `a` from
     /// matching the `a` in `S-arr` and `l` from matching the `l` in `Ctrl`.
     fn names(token: &str, label: &str) -> bool {
@@ -3934,7 +3934,7 @@ mod tests {
             .map(label)
             .filter(|label| {
                 !super::TOOL_LIST_KEYS.iter().any(|(key, _)| key == label)
-                    // Every list in CRIME moves on the arrows, however they are
+                    // Every list in Varde moves on the arrows, however they are
                     // modified: the router does not inspect a modifier here, so
                     // a modified arrow names no gesture of its own.
                     && !label.contains("arr")
@@ -4008,7 +4008,7 @@ mod tests {
             .map(label)
             .filter(|label| {
                 !super::BRANCH_LIST_KEYS.iter().any(|(key, _)| key == label)
-                    // Every list in CRIME moves on the arrows, however they are
+                    // Every list in Varde moves on the arrows, however they are
                     // modified: the router does not inspect a modifier here, so
                     // a modified arrow names no gesture of its own.
                     && !label.contains("arr")
@@ -4111,7 +4111,7 @@ mod tests {
             }
         }
         // The two ways through a long list, asserted by name: the arrows are
-        // excused everywhere in CRIME by the omissions list below — cursor
+        // excused everywhere in Varde by the omissions list below — cursor
         // motion nobody needs reminding of — so nothing else here would notice
         // this box dropping the one row that says how to get through it.
         for key in ["arr", "C-n", "C-p"] {

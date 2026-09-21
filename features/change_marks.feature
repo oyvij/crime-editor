@@ -9,7 +9,7 @@ Feature: Change marks
   compared against, and carries no mark rather than a bar down every line.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the last commit holds "src/main.rs" as:
       """
       fn main() {

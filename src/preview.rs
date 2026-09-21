@@ -137,13 +137,13 @@ pub enum Refusal {
     NoFileOpen,
     ReadOnlyPreview,
     /// An edit to a buffer on a Guest repo's file. The clone goes with the
-    /// Sidecar when CRIME exits, so an edit there is work nobody can keep.
+    /// Sidecar when Varde exits, so an edit there is work nobody can keep.
     GuestReadOnly,
     /// The install key on a row whose command this machine already has. Said
     /// out loud rather than passed over: the row reads `installed`, so a key
     /// that quietly did nothing would read as a key that failed.
     ToolAlreadyInstalled,
-    /// A Tools row taken while the global config is one CRIME would refuse
+    /// A Tools row taken while the global config is one Varde would refuse
     /// to start on. Nothing is written and nothing runs, and the fault is
     /// named, since the reader has to fix the file before anything is taken.
     BrokenConfig(crate::startup::ConfigError),
@@ -168,7 +168,7 @@ impl Refusal {
 
 /// Why a mermaid fence's source did not become a diagram — ticket 07's own
 /// `Refusal`. `mermaid_text::Error` names the same three shapes with its own
-/// wording, which is the crate's to change; this is the word CRIME promises
+/// wording, which is the crate's to change; this is the word Varde promises
 /// to keep saying regardless. `EmptyInput` folds into `MalformedDiagram`: an
 /// empty fence is not a distinct failure mode either ticket names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1566,7 +1566,7 @@ mod tests {
         ("indented code", "    let x = 1;\n", RowKind::Code),
         (
             "link",
-            "See [CRIME](https://example.com).\n",
+            "See [Varde](https://example.com).\n",
             RowKind::Paragraph,
         ),
         ("image", "![a cat](cat.png)\n", RowKind::Paragraph),
@@ -1577,7 +1577,7 @@ mod tests {
         ),
         (
             "yaml frontmatter",
-            "---\ntitle: CRIME\n---\n\nProse.\n",
+            "---\ntitle: Varde\n---\n\nProse.\n",
             RowKind::Metadata,
         ),
         (
@@ -1607,7 +1607,7 @@ mod tests {
         ),
         (
             "toml frontmatter",
-            "+++\ntitle = \"CRIME\"\n+++\n\nProse.\n",
+            "+++\ntitle = \"Varde\"\n+++\n\nProse.\n",
             RowKind::Metadata,
         ),
         ("wikilink", "See [[Setup]] for more.\n", RowKind::Paragraph),

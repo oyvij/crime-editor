@@ -11,7 +11,7 @@ use terminput::KeyModifiers;
 /// Which mouse-report encoding the program in a hosted pane asked for, as the
 /// terminal model in front of its pty reports it. A report in any other
 /// encoding is text the child cannot parse, and it lands in its prompt as
-/// literal characters — which is the phantom text CRIME used to leave behind by
+/// literal characters — which is the phantom text Varde used to leave behind by
 /// sending SGR to every child that asked for the mouse at all.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Encoding {
@@ -405,7 +405,7 @@ fn in_pane(
         }]),
         Kind::LeftUp => {
             // A press and a release with nothing in between is a click, and a
-            // click is the only thing a child gets: CRIME owns drags in its
+            // click is the only thing a child gets: Varde owns drags in its
             // panes, so forwarding the press as it happened would activate
             // whatever a text selection started on.
             let tapped = !pointer.dragged;

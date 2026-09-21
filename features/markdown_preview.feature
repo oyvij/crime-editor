@@ -15,7 +15,7 @@ Feature: Markdown preview
   `docs/adr/0007-a-preview-row-is-not-a-line.md`.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
 
   Scenario Outline: Markdown opens as a preview and everything else as source
     Given "<file>" contains:

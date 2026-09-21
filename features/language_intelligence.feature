@@ -5,13 +5,13 @@ Feature: Language intelligence
   it is defined, or what may follow a dot. In a workspace whose whole premise is reviewing code an AI
   wrote, "does this compile" is the first question a reviewer has and the last one a diff answers.
 
-  So CRIME hosts a Language server: a second kind of hosted child, spawned from configuration, spoken
+  So Varde hosts a Language server: a second kind of hosted child, spawned from configuration, spoken
   to in JSON-RPC over its stdio, and never named in a branch —
   `docs/adr/0011-a-language-server-is-a-second-hosted-child.md` argues why the rule ADR-0004 states
   for a CLI in a Hosted pane transfers to a server, and why shipping defaults as TOML data in the
   bottom layer of the config merge is not the naming it forbids.
 
-  The division of labour is the one the rest of CRIME already draws. The edge spawns the process,
+  The division of labour is the one the rest of Varde already draws. The edge spawns the process,
   frames the protocol, and reports what arrives; the core decides what to say, what a reply means, and
   what goes on screen. Whether a server exists at all is a fact only the edge can observe, so it is
   told to the core and never remembered by it — the failure `ai_running` demonstrated, in a second
@@ -27,7 +27,7 @@ Feature: Language intelligence
   dismissing the Candidate list the text is exactly what was typed.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project is a git repository
 
   Rule: A server is a row in a config file, and nowhere else
@@ -37,14 +37,14 @@ Feature: Language intelligence
     Scenario: A common language has a server on a fresh install with nothing configured
       Given there is no global config
       And the project has no config file
-      When CRIME starts in the project
+      When Varde starts in the project
       Then a language server is configured for "rust"
       And a language server is configured for "typescript"
 
     Scenario: A global config naming no server starts no server for any language
       Given the global config is empty
       And the project has no config file
-      When CRIME starts in the project
+      When Varde starts in the project
       Then there is no language server configured for "rust"
       And there is no language server configured for "typescript"
 
@@ -58,7 +58,7 @@ Feature: Language intelligence
         [lsp.cobol]
         command = "cobol-language-server"
         """
-      When CRIME starts in the project
+      When Varde starts in the project
       Then the configured languages include "ada"
       And the configured languages include "cobol"
 
@@ -76,7 +76,7 @@ Feature: Language intelligence
         [lsp.rust]
         command = "from-project-rust"
         """
-      When CRIME starts in the project
+      When Varde starts in the project
       Then the configured server command for "rust" is "from-project-rust"
       And the configured server command for "python" is "from-global-python"
 
@@ -93,7 +93,7 @@ Feature: Language intelligence
         [lsp.rust]
         args = ["--from-project"]
         """
-      When CRIME starts in the project
+      When Varde starts in the project
       Then the configured server command for "rust" is "from-global"
       And the configured server arguments for "rust" are:
         | arg            |
@@ -106,7 +106,7 @@ Feature: Language intelligence
         command = "from-global"
         """
       And the project has no config file
-      When CRIME starts in the project
+      When Varde starts in the project
       Then the configured server command for "rust" is "from-global"
 
     Scenario: Arguments travel with the command
@@ -116,7 +116,7 @@ Feature: Language intelligence
         command = "rust-analyzer"
         args = ["--log-file", "/tmp/ra.log"]
         """
-      When CRIME starts in the project
+      When Varde starts in the project
       Then the configured server arguments for "rust" are:
         | arg         |
         | --log-file  |
@@ -129,7 +129,7 @@ Feature: Language intelligence
         [lsp.brainfuck]
         command = "bfls"
         """
-      When CRIME starts in the project
+      When Varde starts in the project
       Then the configured languages include "brainfuck"
       And the configured languages do not include "sanskrit"
       And there is no language server configured for "sanskrit"
@@ -137,42 +137,42 @@ Feature: Language intelligence
     # A language is a row, not a match arm (ADR 0018): the row's `extensions`
     # are what sends a file to it, and its table name is the language id the
     # server is told.
-    Scenario: A row for a language CRIME never named serves the files it claims
+    Scenario: A row for a language Varde never named serves the files it claims
       Given the project config is:
         """
         [lsp.ruby]
         command = "ruby-lsp"
         extensions = ["rb"]
         """
-      And CRIME started in the project
+      And Varde started in the project
       And a language server for "ruby" is ready
       When I open "lib/app.rb"
       Then a language server was started with "ruby-lsp"
       And the language server for "ruby" was told "lib/app.rb" is a "ruby" document
 
-    Scenario: Two rows claiming one extension stop CRIME from starting
+    Scenario: Two rows claiming one extension stop Varde from starting
       Given the project config is:
         """
         [lsp.rustier]
         command = "rustier-ls"
         extensions = ["rs"]
         """
-      When CRIME starts in the project
-      Then CRIME refuses to start
-      And the error names the file ".crime/config.toml"
+      When Varde starts in the project
+      Then Varde refuses to start
+      And the error names the file ".varde/config.toml"
       And the error names line 1
       And the fault is "extension-claimed-twice"
       And the error names the rows "lsp.rust" and "lsp.rustier"
 
-    Scenario: A malformed server entry stops CRIME from starting
+    Scenario: A malformed server entry stops Varde from starting
       Given the project config is:
         """
         [lsp.rust]
         command = "rust-analyzer
         """
-      When CRIME starts in the project
-      Then CRIME refuses to start
-      And the error names the file ".crime/config.toml"
+      When Varde starts in the project
+      Then Varde refuses to start
+      And the error names the file ".varde/config.toml"
       And the error names line 2
       And the fault is "not-toml"
 
@@ -183,7 +183,7 @@ Feature: Language intelligence
         [lsp.rust]
         args = ["--log-file", "/tmp/ra.log"]
         """
-      When CRIME starts in the project
+      When Varde starts in the project
       Then the configured server command for "rust" is "rust-analyzer"
       And the configured server arguments for "rust" are:
         | arg         |
@@ -202,22 +202,22 @@ Feature: Language intelligence
         [lsp.brainfuck]
         args = ["--from-project"]
         """
-      When CRIME starts in the project
+      When Varde starts in the project
       Then the configured server command for "brainfuck" is "bfls"
       And the configured server arguments for "brainfuck" are:
         | arg            |
         | --from-project |
 
-    Scenario: A language no layer ever gave a command stops CRIME from starting
+    Scenario: A language no layer ever gave a command stops Varde from starting
       Given the global config is empty
       And the project config is:
         """
         [lsp.brainfuck]
         args = ["--stdio"]
         """
-      When CRIME starts in the project
-      Then CRIME refuses to start
-      And the error names the file ".crime/config.toml"
+      When Varde starts in the project
+      Then Varde refuses to start
+      And the error names the file ".varde/config.toml"
       And the error names line 1
       And the fault is "incomplete"
 
@@ -228,7 +228,7 @@ Feature: Language intelligence
         command = "rust-analyzer"
         initialization_options = { cargo = { features = ["all"] }, procMacro = true }
         """
-      And CRIME started in the project
+      And Varde started in the project
       When I open "src/lib.rs"
       Then the initialize request for "rust" carried initialization options:
         """
@@ -238,7 +238,7 @@ Feature: Language intelligence
     Scenario: A language with no initialization options says nothing about them
       Given there is no global config
       And the project has no config file
-      And CRIME started in the project
+      And Varde started in the project
       When I open "src/lib.rs"
       Then the initialize request for "rust" carried no initialization options
 
@@ -256,30 +256,30 @@ Feature: Language intelligence
         command = "rust-analyzer"
         initialization_options = { cargo = { features = ["from-project"] } }
         """
-      And CRIME started in the project
+      And Varde started in the project
       When I open "src/lib.rs"
       Then the initialize request for "rust" carried initialization options:
         """
         {"cargo": {"features": ["from-project"]}}
         """
 
-    Scenario: A malformed initialization options entry stops CRIME from starting
+    Scenario: A malformed initialization options entry stops Varde from starting
       Given the project config is:
         """
         [lsp.rust]
         command = "rust-analyzer"
         initialization_options = 12
         """
-      When CRIME starts in the project
-      Then CRIME refuses to start
-      And the error names the file ".crime/config.toml"
+      When Varde starts in the project
+      Then Varde refuses to start
+      And the error names the file ".varde/config.toml"
       And the error names line 3
       And the fault is "wrong-type"
 
     Scenario: Naming a server configures nothing else and spawns nothing
       Given the global config is empty
       And the project has no config file
-      When CRIME starts in the project
+      When Varde starts in the project
       Then no language server was started
 
   Rule: The handshake happens once per language, and nothing is asked before it completes
@@ -426,15 +426,15 @@ Feature: Language intelligence
     kept per file alone made the second publisher erase the first, and the mark a reader was shown
     then depended on which server happened to speak last.
 
-    Scenario: CRIME says it can be told diagnostics, because it draws them
+    Scenario: Varde says it can be told diagnostics, because it draws them
       Given the project config is:
         """
         [lsp.rust]
         command = "rust-analyzer"
         """
-      And CRIME started in the project
+      And Varde started in the project
       When I open "src/lib.rs"
-      Then the initialize request for "rust" said CRIME can be told diagnostics
+      Then the initialize request for "rust" said Varde can be told diagnostics
 
     Scenario: A diagnostic marks its line in the gutter
       Given a language server for "rust" is ready
@@ -620,7 +620,7 @@ Feature: Language intelligence
     a fence in a hover is highlighted as its language rather than left as one flat colour.
 
     A reply the server labelled plain text is not read as markdown. `plaintext` is the server saying
-    the `*` in it is an asterisk, and rendering it anyway is CRIME inventing formatting the server
+    the `*` in it is an asterisk, and rendering it anyway is Varde inventing formatting the server
     denied having.
 
     Scenario: The binding asks the server about the symbol under the cursor
@@ -813,15 +813,15 @@ Feature: Language intelligence
       And the last hover row says it was cut short
       And the hover does not cover line 6
 
-    Scenario: CRIME says it can read markdown hovers, because it renders them
+    Scenario: Varde says it can read markdown hovers, because it renders them
       Given the project config is:
         """
         [lsp.rust]
         command = "rust-analyzer"
         """
-      And CRIME started in the project
+      And Varde started in the project
       When I open "src/lib.rs"
-      Then the initialize request for "rust" said CRIME can read markdown
+      Then the initialize request for "rust" said Varde can read markdown
 
     Scenario: Dismissing the hover leaves the buffer alone
       Given a language server for "rust" is ready
@@ -1023,7 +1023,7 @@ Feature: Language intelligence
 
     Scenario: A file whose only server relays the question says so rather than blaming it
       Given a language server for "vue" is ready
-      And the language server for "vue" relays "tsserver/request" to a companion CRIME does not run
+      And the language server for "vue" relays "tsserver/request" to a companion Varde does not run
       And "src/App.vue" on disk is 10 lines long
       And "src/App.vue" is open in the editor
       And the cursor is moved to line 4 column 15
@@ -1039,7 +1039,7 @@ Feature: Language intelligence
 
     Scenario: A server that could have relayed and did not is a server that knows nothing
       Given a language server for "vue" is ready
-      And the language server for "vue" relays "tsserver/request" to a companion CRIME does not run
+      And the language server for "vue" relays "tsserver/request" to a companion Varde does not run
       And "src/App.vue" on disk is 10 lines long
       And "src/App.vue" is open in the editor
       And the cursor is moved to line 4 column 15
@@ -1349,7 +1349,7 @@ Feature: Language intelligence
 
   Rule: A completion fills in its own blanks
 
-    CRIME declares `completionItem.snippetSupport`, and that declaration is a claim about what CRIME
+    Varde declares `completionItem.snippetSupport`, and that declaration is a claim about what Varde
     can *do* with a reply rather than a request to be sent one. Made any earlier than the code that
     honours it, every server starts answering with `${1:…}` and the placeholders reach the buffer as
     the characters they are spelled with — a defect that looks like the server's and is not.
@@ -1360,15 +1360,15 @@ Feature: Language intelligence
     server that offers no snippet is untouched by all of it: its text goes in, the cursor lands
     after it, and there is no sequence to be in.
 
-    Scenario: CRIME says it can receive snippets, because it honours them
+    Scenario: Varde says it can receive snippets, because it honours them
       Given the project config is:
         """
         [lsp.rust]
         command = "rust-analyzer"
         """
-      And CRIME started in the project
+      And Varde started in the project
       When I open "src/lib.rs"
-      Then the initialize request for "rust" said CRIME can receive snippets
+      Then the initialize request for "rust" said Varde can receive snippets
 
     Scenario: Accepting a snippet inserts the text with the placeholders gone
       Given a language server for "rust" is ready
@@ -1478,7 +1478,7 @@ Feature: Language intelligence
     Where a server offers `onTypeFormatting` it names the characters it wants to be told about, and
     that list is the server's own: measured, rust-analyzer asks about `.` and `=`, jdtls about `;`,
     `}` and a newline, and clangd about a newline alone. No two agree and none of it is guessable
-    from the language, so nothing in CRIME spells a trigger character.
+    from the language, so nothing in Varde spells a trigger character.
 
     Nobody pressed a key for this — they typed a brace. So it is silent both ways: a server that
     offers no formatter, one that names other characters and one that errors all leave the text
@@ -1808,19 +1808,19 @@ Feature: Language intelligence
         """
       Then no hover is shown
 
-  Rule: A server that is not installed can be installed from the palette, and CRIME composes nothing
+  Rule: A server that is not installed can be installed from the palette, and Varde composes nothing
 
     The gap this closes is the one the rule above leaves open: configuration names a command, the
     command is not on this machine, and the reader is told once and left with a plain editor. The
-    list of what could serve this workspace is already data CRIME holds — the languages
+    list of what could serve this workspace is already data Varde holds — the languages
     configuration names — so the palette can show it, and a key on a row can offer to install one.
 
     Where the install command comes from is the whole of the design.
     `docs/adr/0012-an-install-command-is-configuration.md` argues why it is one more key in the
     `[lsp.<language>]` table, shipped as TOML data exactly as the server names are: a match on
     language and OS inside the library is ADR 0011's forbidden arm with a package manager's name in
-    it as well as a server's. So the assertion throughout is on the command CRIME *ran*, which is
-    the string configuration carried and nothing CRIME composed.
+    it as well as a server's. So the assertion throughout is on the command Varde *ran*, which is
+    the string configuration carried and nothing Varde composed.
 
     The command runs in the shell pane, visibly, where a `sudo` prompt can be answered and a default
     that is wrong for this machine fails on screen with its exit status recorded
@@ -1867,7 +1867,7 @@ Feature: Language intelligence
       Then the row for "rust" names the command "/opt/ra/rust-analyzer"
 
     Scenario: Installing a row runs its configured command for this OS in the shell pane
-      Given CRIME was built for "macos"
+      Given Varde was built for "macos"
       And the command "zls" is not on PATH
       And the command "brew" is on PATH
       And the project config is:
@@ -1883,7 +1883,7 @@ Feature: Language intelligence
       And the focus is the terminal
 
     Scenario: The same row on another OS runs that OS's command
-      Given CRIME was built for "linux"
+      Given Varde was built for "linux"
       And the command "zls" is not on PATH
       And the command "zig" is on PATH
       And the project config is:
@@ -1898,7 +1898,7 @@ Feature: Language intelligence
       Then the shell pane runs "zig build -Doptimize=ReleaseSafe" reporting its exit status
 
     Scenario: A template install command needs no row written by hand
-      Given CRIME was built for "macos"
+      Given Varde was built for "macos"
       And there is no global config
       And the project has no config file
       And the command "gopls" is not on PATH
@@ -1908,7 +1908,7 @@ Feature: Language intelligence
       Then the shell pane runs a command mentioning "gopls"
 
     Scenario: A global config overrides a shipped install command
-      Given CRIME was built for "macos"
+      Given Varde was built for "macos"
       And the command "gopls" is not on PATH
       And the command "my-own-installer" is on PATH
       And the global config is:
@@ -1922,7 +1922,7 @@ Feature: Language intelligence
       Then the shell pane runs "my-own-installer gopls" reporting its exit status
 
     Scenario: A language with no install command for this OS says so and offers nothing
-      Given CRIME was built for "linux"
+      Given Varde was built for "linux"
       And the command "zls" is not on PATH
       And the project config is:
         """
@@ -1936,8 +1936,8 @@ Feature: Language intelligence
       Then the terminal is offered nothing
       And no command has been executed
 
-    Scenario: A server CRIME watched die reads as stopped, not as installed
-      Given CRIME started in the project
+    Scenario: A server Varde watched die reads as stopped, not as installed
+      Given Varde started in the project
       And "src/lib.rs" is open in the editor
       And the command "rust-analyzer" is on PATH
       When the language server for "rust" exits
@@ -1959,14 +1959,14 @@ Feature: Language intelligence
       And the editor refuses with "tool-already-installed"
 
     Scenario: A row that reads stopped runs its install command rather than refusing
-      Given CRIME was built for "macos"
+      Given Varde was built for "macos"
       And the project config is:
         """
         [lsp.rust]
         command = "rust-analyzer"
         install.macos = "install-the-rust-server"
         """
-      And CRIME started in the project
+      And Varde started in the project
       And "src/lib.rs" is open in the editor
       And the command "rust-analyzer" is on PATH
       And the language server for "rust" exits
@@ -1974,8 +1974,8 @@ Feature: Language intelligence
       Then the shell pane runs "install-the-rust-server" reporting its exit status
 
     Scenario: A stopped row with no install command for this OS offers nothing
-      Given CRIME was built for "linux"
-      And CRIME started in the project
+      Given Varde was built for "linux"
+      And Varde started in the project
       And "src/main.zig" is open in the editor
       And the command "zls" is on PATH
       And the language server for "zig" exits
@@ -2002,10 +2002,10 @@ Feature: Language intelligence
       And I asked to install the row for "zig"
       When I re-check the row for "zig"
       And the command "zls" is not on PATH
-      Then CRIME asks whether to restart
+      Then Varde asks whether to restart
 
     Scenario: Declining the restart leaves the workspace exactly as it was
-      Given CRIME is asking whether to restart
+      Given Varde is asking whether to restart
       And "src/lib.rs" is open in the editor holding:
         """
         fn main() {}
@@ -2022,7 +2022,7 @@ Feature: Language intelligence
       When I re-check the row for "zig"
       And the command "zls" is on PATH
       Then the row for "zig" is "installed"
-      And CRIME is not asking whether to restart
+      And Varde is not asking whether to restart
 
     Scenario: The list is left without installing anything
       Given the command "zls" is not on PATH
@@ -2074,7 +2074,7 @@ Feature: Language intelligence
     Scenario: A shipped default names the SDK, and the edge's answer reaches the spawn
       Given there is no global config
       And the project has no config file
-      And CRIME started in the project
+      And Varde started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
       When I open "src/App.vue"
       Then a language server was started with "vue-language-server"
@@ -2086,7 +2086,7 @@ Feature: Language intelligence
     Scenario: An SDK the edge could not find starts no server at all
       Given there is no global config
       And the project has no config file
-      And CRIME started in the project
+      And Varde started in the project
       And the command "vue-language-server" is on PATH
       And the edge resolved no "typescript_sdk"
       When I open "src/App.vue"
@@ -2096,7 +2096,7 @@ Feature: Language intelligence
     Scenario: The SDK appearing starts the server on the next pass, with no restart
       Given there is no global config
       And the project has no config file
-      And CRIME started in the project
+      And Varde started in the project
       And the edge resolved no "typescript_sdk"
       And I open "src/App.vue"
       When the edge resolves "typescript_sdk" to "/home/me/project/components/frontend/node_modules/typescript/lib"
@@ -2105,7 +2105,7 @@ Feature: Language intelligence
         | arg                                                                       |
         | --stdio                                                                   |
         | --tsdk=/home/me/project/components/frontend/node_modules/typescript/lib   |
-      And CRIME is not asking whether to restart
+      And Varde is not asking whether to restart
 
     Scenario: A project declares a fact of its own, and the edge's answer reaches the spawn
       Given the project config is:
@@ -2117,7 +2117,7 @@ Feature: Language intelligence
         command = "pyright-langserver"
         args = ["--stdio", "--pythonpath=${python_env}"]
         """
-      And CRIME started in the project
+      And Varde started in the project
       And the edge resolved "python_env" to "/home/me/project/services/api/.venv/bin/python"
       When I open "src/app.py"
       Then the language server for "python" was started with arguments:
@@ -2135,7 +2135,7 @@ Feature: Language intelligence
         command = "pyright-langserver"
         args = ["--stdio", "--pythonpath=${python_env}"]
         """
-      And CRIME started in the project
+      And Varde started in the project
       And the edge resolved no "python_env"
       When I open "src/app.py"
       Then no language server was started
@@ -2147,7 +2147,7 @@ Feature: Language intelligence
         command = "typescript-language-server"
         initialization_options = { tsserver = { path = "${typescript_sdk}" } }
         """
-      And CRIME started in the project
+      And Varde started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
       When I open "src/app.ts"
       Then the initialize request for "typescript" carried initialization options:
@@ -2162,7 +2162,7 @@ Feature: Language intelligence
         command = "typescript-language-server"
         initialization_options = { tsserver = { path = "${typescript_sdk}" }, maxTsServerMemory = 3072 }
         """
-      And CRIME started in the project
+      And Varde started in the project
       And the edge resolved no "typescript_sdk"
       When I open "src/app.ts"
       Then no language server was started
@@ -2178,7 +2178,7 @@ Feature: Language intelligence
         command = "zls"
         initialization_options = { plugin = "${zig_plugin}", memory = 3072 }
         """
-      And CRIME started in the project
+      And Varde started in the project
       And the edge resolved no "zig_plugin"
       When I open "src/main.zig"
       Then a language server was started with "zls"
@@ -2198,7 +2198,7 @@ Feature: Language intelligence
         command = "zls"
         initialization_options = { plugin = "${zig_plugin}", memory = 3072 }
         """
-      And CRIME started in the project
+      And Varde started in the project
       And the edge resolved "zig_plugin" to "/home/me/project/node_modules/zig-plugin"
       When I open "src/main.zig"
       Then the initialize request for "zig" carried initialization options:
@@ -2217,7 +2217,7 @@ Feature: Language intelligence
         command = "zls"
         args = ["--stdio", "--plugin=${zig_plugin}"]
         """
-      And CRIME started in the project
+      And Varde started in the project
       And the edge resolved no "zig_plugin"
       When I open "src/main.zig"
       Then the language server for "zig" was started with arguments:
@@ -2235,7 +2235,7 @@ Feature: Language intelligence
         command = "zls"
         initialization_options = { plugin = "${zig_plugin}" }
         """
-      And CRIME started in the project
+      And Varde started in the project
       And the command "zls" is on PATH
       And the edge resolved no "zig_plugin"
       When I open Tools
@@ -2251,7 +2251,7 @@ Feature: Language intelligence
         command = "zls"
         initialization_options = { plugin = "${zig_plugin}" }
         """
-      And CRIME started in the project
+      And Varde started in the project
       And the command "zls" is on PATH
       And the edge resolved no "zig_plugin"
       When I open "src/main.zig"
@@ -2261,7 +2261,7 @@ Feature: Language intelligence
     Scenario Outline: A shipped default names the SDK the TypeScript server will not start without
       Given there is no global config
       And the project has no config file
-      And CRIME started in the project
+      And Varde started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
       When I open "src/app.<extension>"
       Then a language server was started with "typescript-language-server"
@@ -2278,7 +2278,7 @@ Feature: Language intelligence
     Scenario: A workspace with no TypeScript of its own starts no TypeScript server
       Given there is no global config
       And the project has no config file
-      And CRIME started in the project
+      And Varde started in the project
       And the command "typescript-language-server" is on PATH
       And the edge resolved no "typescript_sdk"
       When I open "src/app.ts"
@@ -2292,7 +2292,7 @@ Feature: Language intelligence
         command = "rust-analyzer"
         args = ["--shell=${HOME}"]
         """
-      And CRIME started in the project
+      And Varde started in the project
       When I open "src/lib.rs"
       Then the language server for "rust" was started with arguments:
         | arg              |
@@ -2334,7 +2334,7 @@ Feature: Language intelligence
         partial = "type errors"
         install.macos = "npm install -g @elm-tooling/elm-language-server"
         """
-      And CRIME was built for "macos"
+      And Varde was built for "macos"
       And the command "npm" is on PATH
       When I open Tools
       Then the row for "elm" is "missing"
@@ -2345,7 +2345,7 @@ Feature: Language intelligence
       When I open Tools
       Then the row for "vue" is "installed"
 
-  Rule: A question CRIME cannot answer is refused out loud, never met with silence
+  Rule: A question Varde cannot answer is refused out loud, never met with silence
 
     A server may ask the *client* for something only another program can answer, and wait. Volar's
     servers do exactly that: `@vue/language-server` asks its client to put a question to a TypeScript
@@ -2370,7 +2370,7 @@ Feature: Language intelligence
         unanswerable.request = "elsewhere/request"
         unanswerable.response = "elsewhere/response"
         """
-      And CRIME started in the project
+      And Varde started in the project
       And a language server for "rust" is ready
       When the language server for "rust" asks "elsewhere/request" with:
         """
@@ -2389,7 +2389,7 @@ Feature: Language intelligence
         unanswerable.request = "elsewhere/request"
         unanswerable.response = "elsewhere/response"
         """
-      And CRIME started in the project
+      And Varde started in the project
       And a language server for "rust" is ready
       When the language server for "rust" asks "elsewhere/request" with:
         """
@@ -2408,7 +2408,7 @@ Feature: Language intelligence
         unanswerable.request = "elsewhere/request"
         unanswerable.response = "elsewhere/response"
         """
-      And CRIME started in the project
+      And Varde started in the project
       And a language server for "rust" is ready
       When the language server for "rust" asks "window/logMessage" with:
         """
@@ -2422,7 +2422,7 @@ Feature: Language intelligence
         [lsp.rust]
         command = "rust-analyzer"
         """
-      And CRIME started in the project
+      And Varde started in the project
       And a language server for "rust" is ready
       When the language server for "rust" asks "elsewhere/request" with:
         """
@@ -2433,7 +2433,7 @@ Feature: Language intelligence
     Scenario: A fresh install serves a Vue file with the TypeScript server too
       Given there is no global config
       And the project has no config file
-      And CRIME started in the project
+      And Varde started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
       When I open "src/App.vue"
       Then a language server was started with "vue-language-server"
@@ -2442,7 +2442,7 @@ Feature: Language intelligence
     Scenario: A fresh install tells the TypeScript server where the Vue plugin is
       Given there is no global config
       And the project has no config file
-      And CRIME started in the project
+      And Varde started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
       And the edge resolved "vue_typescript_plugin" to "/opt/node/lib/node_modules/@vue/typescript-plugin"
       When I open "src/App.vue"
@@ -2454,7 +2454,7 @@ Feature: Language intelligence
     Scenario: A machine with no Vue server still starts TypeScript for a TypeScript project
       Given there is no global config
       And the project has no config file
-      And CRIME started in the project
+      And Varde started in the project
       And the edge resolved "typescript_sdk" to "/home/me/project/node_modules/typescript/lib"
       And the edge resolved no "vue_typescript_plugin"
       When I open "src/app.ts"
@@ -2467,7 +2467,7 @@ Feature: Language intelligence
     Scenario: A fresh install refuses the question the shipped Vue server asks
       Given there is no global config
       And the project has no config file
-      And CRIME started in the project
+      And Varde started in the project
       And a language server for "vue" is ready
       When the language server for "vue" asks "tsserver/request" with:
         """

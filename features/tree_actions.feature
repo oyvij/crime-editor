@@ -28,13 +28,13 @@ Feature: File tree actions run commands in the terminal
   and waits for the row.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the terminal input is empty
 
   Scenario: Going to a folder
     Given the file tree shows the folder "src/tree"
     When I trigger "go here" on that folder
-    Then the terminal input is "cd /home/me/projects/crime/src/tree"
+    Then the terminal input is "cd /home/me/projects/varde/src/tree"
     And no command has been executed
 
   Scenario: Creating a new file asks for a name first
@@ -48,20 +48,20 @@ Feature: File tree actions run commands in the terminal
     And I trigger "new file" on that folder
     When I enter the name "tree.js"
     Then the name box is not shown
-    And the terminal has executed "touch /home/me/projects/crime/src/tree.js"
+    And the terminal has executed "touch /home/me/projects/varde/src/tree.js"
     And the terminal input is empty
 
   Scenario: A nested name creates the missing parent folders
     Given the file tree shows the folder "src"
     And I trigger "new file" on that folder
     When I enter the name "tree/index.js"
-    Then the terminal has executed "mkdir -p /home/me/projects/crime/src/tree && touch /home/me/projects/crime/src/tree/index.js"
+    Then the terminal has executed "mkdir -p /home/me/projects/varde/src/tree && touch /home/me/projects/varde/src/tree/index.js"
 
   Scenario: Creating a new directory
     Given the file tree shows the folder "src"
     And I trigger "new directory" on that folder
     When I enter the name "tree"
-    Then the terminal has executed "mkdir -p /home/me/projects/crime/src/tree"
+    Then the terminal has executed "mkdir -p /home/me/projects/varde/src/tree"
 
   Scenario: Cancelling the name box runs nothing
     Given the file tree shows the folder "src"
@@ -74,24 +74,24 @@ Feature: File tree actions run commands in the terminal
     Given the file tree shows the folder "src"
     And I trigger "new file" on that folder
     When I enter the name "my notes.md"
-    Then the terminal has executed "touch '/home/me/projects/crime/src/my notes.md'"
+    Then the terminal has executed "touch '/home/me/projects/varde/src/my notes.md'"
 
   Scenario: Deleting a file
     Given the file tree shows the file "src/landing.js"
     When I trigger "delete" on that file
-    Then the terminal has executed "rm /home/me/projects/crime/src/landing.js"
+    Then the terminal has executed "rm /home/me/projects/varde/src/landing.js"
     And the terminal input is empty
 
   Scenario: Deleting a directory uses the recursive form
     Given the file tree shows the folder "src/tree"
     When I trigger "delete" on that folder
-    Then the terminal has executed "rm -r /home/me/projects/crime/src/tree"
+    Then the terminal has executed "rm -r /home/me/projects/varde/src/tree"
 
   Scenario: Copying a path puts the absolute path on the clipboard
     Given a system clipboard is available
     And the file tree shows the file "src/landing.js"
     When I trigger "copy path" on that file
-    Then the clipboard holds "/home/me/projects/crime/src/landing.js"
+    Then the clipboard holds "/home/me/projects/varde/src/landing.js"
     And the terminal input is empty
     And no command has been executed
 
@@ -99,13 +99,13 @@ Feature: File tree actions run commands in the terminal
     Given a system clipboard is available
     And the file tree shows the folder "src/tree"
     When I trigger "copy path" on that folder
-    Then the clipboard holds "/home/me/projects/crime/src/tree"
+    Then the clipboard holds "/home/me/projects/varde/src/tree"
 
   Scenario: Injecting replaces text the user had already typed
     Given the terminal input is "git stat"
     And the file tree shows the folder "src"
     When I trigger "go here" on that folder
-    Then the terminal input is "cd /home/me/projects/crime/src"
+    Then the terminal input is "cd /home/me/projects/varde/src"
     And no command has been executed
 
   Scenario Outline: Paths are quoted only when they need it
@@ -118,15 +118,15 @@ Feature: File tree actions run commands in the terminal
 
     Examples:
       | path     | command                               |
-      | src      | cd /home/me/projects/crime/src         |
-      | my notes | cd '/home/me/projects/crime/my notes'  |
-      | don't    | cd "/home/me/projects/crime/don't"     |
-      | a;b      | cd '/home/me/projects/crime/a;b'       |
+      | src      | cd /home/me/projects/varde/src         |
+      | my notes | cd '/home/me/projects/varde/my notes'  |
+      | don't    | cd "/home/me/projects/varde/don't"     |
+      | a;b      | cd '/home/me/projects/varde/a;b'       |
 
   Scenario: Returning to the project root is the one action that runs
-    Given the terminal is in "/home/me/projects/crime/src/tree"
+    Given the terminal is in "/home/me/projects/varde/src/tree"
     When I trigger "back to project root"
-    Then the terminal has executed "cd /home/me/projects/crime"
+    Then the terminal has executed "cd /home/me/projects/varde"
     And the terminal input is empty
 
   Scenario: Injecting a command focuses the terminal

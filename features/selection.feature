@@ -1,6 +1,6 @@
 Feature: Selecting and copying
 
-  CRIME owns selection because enabling mouse capture disables the terminal's
+  Varde owns selection because enabling mouse capture disables the terminal's
   own drag-to-select. Each pane selects what it actually holds: characters in
   the editor, scrollback in the terminal, the visible screen in the AI pane, and
   in the tree a drag just moves the row selection — a filename is not text you
@@ -10,10 +10,10 @@ Feature: Selecting and copying
   there is no history behind it to select from; ADR-0002 records why.
 
   Copying uses the system clipboard, and falls back to OSC 52 so that copying
-  still reaches your real machine when CRIME is running over SSH.
+  still reaches your real machine when Varde is running over SSH.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
 
   Scenario: Dragging in the editor selects text
     Given "src/tree.js" is open in the editor holding:

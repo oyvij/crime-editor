@@ -26,7 +26,7 @@ Feature: Walking a story step by step
   rewrite points at a different claim while claiming to be where you left off.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project is a git repository
     And "src/keys.rs" holds:
       """

@@ -1,8 +1,8 @@
 Feature: Authoring a story set for a change
 
   A Story is not written by hand. `:story` resolves a revision range, confirms it, and pastes a
-  prompt into the hosted AI session asking it to write a story file into `.crime/stories/`. The
-  existing file watcher picks it up. CRIME never reads what the CLI prints — the artifact is the
+  prompt into the hosted AI session asking it to write a story file into `.varde/stories/`. The
+  existing file watcher picks it up. Varde never reads what the CLI prints — the artifact is the
   whole channel, which is what keeps this working with a provider nobody has tried
   (`docs/adr/0006-stories-arrive-as-an-artifact.md`).
 
@@ -12,14 +12,14 @@ Feature: Authoring a story set for a change
 
   Resolving the range is offline and deterministic, because authoring costs the reviewer five to
   eleven minutes and a cleared AI prompt: a wrong guess is expensive twice. When nothing resolves,
-  CRIME refuses out loud rather than picking something plausible.
+  Varde refuses out loud rather than picking something plausible.
 
   A Story dies with its range. It is named for the revisions it describes, replaced by naming when
   re-authored, and never updated to follow the code — see
   `docs/adr/0005-a-story-dies-with-its-range.md`.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the project is a git repository
 
   Scenario: A bare story command on a dirty tree offers uncommitted against HEAD
@@ -139,11 +139,11 @@ Feature: Authoring a story set for a change
     And no keys were sent to the AI pane
     And no AI session was started
 
-  Rule: CRIME fills in the code the AI no longer writes
+  Rule: Varde fills in the code the AI no longer writes
 
     A Step names its file, its side, its kind and its line range, and nothing else. The literal copy
     of the code it used to carry was the largest single field in every measured artifact and pure
-    transcription, so CRIME reads it off its own copy instead — once, when the Story arrives, which
+    transcription, so Varde reads it off its own copy instead — once, when the Story arrives, which
     is what leaves the stale check a baseline to compare against. Filling on every load would
     compare each file against itself and report every Step fresh for good.
 
@@ -234,13 +234,13 @@ Feature: Authoring a story set for a change
       When I open Story view
       Then the site text of step 1 is "the second line"
 
-    Scenario: A story set is not walkable until CRIME has read what its sites hold
+    Scenario: A story set is not walkable until Varde has read what its sites hold
       Given "src/keys.rs" holds:
         """
         the first line
         the second line
         """
-      And CRIME has not yet read what the sites hold
+      And Varde has not yet read what the sites hold
       And authoring has begun for "main..HEAD"
       And a story set for this change claims:
         | story    | file        | side | kind    | from | to |
@@ -329,22 +329,22 @@ Feature: Authoring a story set for a change
     And I ran ":story"
     When I confirm the story range
     And the AI session is ready for input
-    Then the AI pane was sent a prompt naming the file ".crime/stories/aaaaaaaaaaaa-worktree.json"
+    Then the AI pane was sent a prompt naming the file ".varde/stories/aaaaaaaaaaaa-worktree.json"
 
   Scenario: A story set for a committed range is named for both commits
     Given "main..HEAD" resolves to base "aaaaaaaaaaaa" and head "bbbbbbbbbbbb"
     And I ran ":story main..HEAD"
     When I confirm the story range
     And the AI session is ready for input
-    Then the AI pane was sent a prompt naming the file ".crime/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.json"
+    Then the AI pane was sent a prompt naming the file ".varde/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.json"
 
   Scenario: Confirming a range hands the change over beside the story set
     Given "main..HEAD" resolves to base "aaaaaaaaaaaa" and head "bbbbbbbbbbbb"
     And I ran ":story main..HEAD"
     When I confirm the story range
     And the AI session is ready for input
-    Then the file ".crime/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.context.md" was written
-    And the AI pane was sent a prompt naming the file ".crime/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.context.md"
+    Then the file ".varde/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.context.md" was written
+    And the AI pane was sent a prompt naming the file ".varde/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.context.md"
 
   Scenario: Only the ten most recent story sets are kept, and their companion files with them
     Given the project holds 10 story sets
@@ -370,7 +370,7 @@ Feature: Authoring a story set for a change
     Then the modal is "confirm-story"
     And no keys were sent to the AI pane
 
-  Rule: CRIME checks the artifact, and says what failed
+  Rule: Varde checks the artifact, and says what failed
 
     Four questions need no judgement: the file a Step's Site names exists, its line range fits
     inside that file, a Site claiming a change really overlaps one, and a cited value really
@@ -459,7 +459,7 @@ Feature: Authoring a story set for a change
 
     Authoring costs ten to twenty minutes. Losing all of it over four bad line numbers is what this
     Rule exists to stop: a set that fails a check is handed back with a fix request naming only the
-    failing Steps, asking for those Steps rewritten to the same path, and CRIME keeps waiting.
+    failing Steps, asking for those Steps rewritten to the same path, and Varde keeps waiting.
 
     Bounded by rounds, never by a clock (`docs/adr/0006-stories-arrive-as-an-artifact.md`). Two
     attempts; if the second artifact still fails, the set is refused with what failed — the same
@@ -475,7 +475,7 @@ Feature: Authoring a story set for a change
       When a story set for this change claims:
         | story    | file          | side | kind    | from | to |
         | The keys | src/nowhere.rs| new  | changed | 1    | 1  |
-      Then the fix request names the file ".crime/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.json"
+      Then the fix request names the file ".varde/stories/aaaaaaaaaaaa-bbbbbbbbbbbb.json"
 
     Scenario: A corrected story set arriving after a fix request loads and walks
       Given a story set for this change claims:

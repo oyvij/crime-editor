@@ -23,7 +23,7 @@ Feature: The whole TUI is usable with the mouse
   no history for us to show: it scrolls itself.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the current view is Edit
 
   Scenario: Clicking a pane focuses it
@@ -35,7 +35,7 @@ Feature: The whole TUI is usable with the mouse
     Given the editor pane has focus
     And the file tree shows the file "src/tree.js"
     When I click the row "src/tree.js"
-    Then "/home/me/projects/crime/src/tree.js" is open in the editor
+    Then "/home/me/projects/varde/src/tree.js" is open in the editor
     And the file tree pane has focus
 
   Scenario: A click on an unfocused pane also acts
@@ -167,7 +167,7 @@ Feature: The whole TUI is usable with the mouse
     Then the terminal pane scrolled up
     And nothing reached the terminal program
 
-  Scenario: Clicks at a shell prompt are handled by CRIME
+  Scenario: Clicks at a shell prompt are handled by Varde
     Given the terminal pane has focus
     And the terminal program asked for "no" mouse reporting
     When I click in the terminal pane
@@ -211,7 +211,7 @@ Feature: The whole TUI is usable with the mouse
   Scenario: Pane sizes are remembered per project
     Given the divider between the file tree and the editor is at column 30
     And I drag that divider to column 40
-    When CRIME starts in the project
+    When Varde starts in the project
     Then the divider between the file tree and the editor is at column 40
 
   Scenario: Dragging the AI pane's edge resizes it
@@ -222,7 +222,7 @@ Feature: The whole TUI is usable with the mouse
   Scenario: The AI pane's width is remembered per project
     Given the screen is 26 rows by 120 columns
     And I drag the AI pane's edge to column 80
-    When CRIME starts in the project
+    When Varde starts in the project
     Then the AI pane is 40 columns wide
 
   Scenario: Dragging selects text and copying puts it on the clipboard

@@ -1,6 +1,6 @@
 Feature: Reading aloud
 
-  A passage is selected and CRIME reads it. The point is not to replace reading but
+  A passage is selected and Varde reads it. The point is not to replace reading but
   to sit alongside it: a long document is easy to zone out of, and a voice sets a
   pace the eye can follow.
 
@@ -11,14 +11,14 @@ Feature: Reading aloud
   the listener needs.
 
   What is asserted here is which text reaches the voice, which Utterance is current,
-  and what CRIME refuses. Never the audio, never the glyphs on the Transport, and
+  and what Varde refuses. Never the audio, never the glyphs on the Transport, and
   never a real synthesizer: the voice is an installed binary and the effect that runs
   it is a value. The arguments are in
   `docs/adr/0013-a-voice-is-an-installed-binary.md` and
   `docs/adr/0014-scratch-audio-lives-outside-the-workspace.md`.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And a voice is configured
 
   Scenario: A reading covers the selection

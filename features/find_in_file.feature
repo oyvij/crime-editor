@@ -14,7 +14,7 @@ Feature: Finding inside the buffer
   one rule, not two.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And "src/main.rs" is open in the editor holding:
       """
       fn update(state)

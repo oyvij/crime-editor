@@ -3,19 +3,19 @@
 AGENTS.md states the rule this file makes an exception to: **draw only when something changed**, and
 idle CPU is 0%. The rule is not a preference. A frame costs milliseconds, and drawing one per event
 rather than one per batch queued 2.3 seconds of stale frames behind a trackpad flick — 200 wheel
-events, 253 draws — which read as the TUI freezing. Every redraw in CRIME is caused by a key, a mouse
+events, 253 draws — which read as the TUI freezing. Every redraw in Varde is caused by a key, a mouse
 event, pty output, a watcher event, or a git status that actually differs.
 
-Risk analysis is the first work CRIME does that takes long enough for the user to wonder whether it
+Risk analysis is the first work Varde does that takes long enough for the user to wonder whether it
 is doing anything, and the first compute it runs off the main loop at all. Until now the only thing
 that arrived asynchronously was the `notify` watcher's channel, drained once per poll — OS-driven,
-never CRIME's own work. So both halves of this are new: a spawned thread that computes, and a screen
+never Varde's own work. So both halves of this are new: a spawned thread that computes, and a screen
 that has to say it is computing.
 
 **The decision: a job in flight is a redraw source, and nothing else about the rule changes.** While
 an analysis or a Refactor loop is running, the edge redraws on a tick so the spinner advances. When no
 job is in flight, redraws are input-driven exactly as before and idle CPU returns to 0%. The exception
-is bounded by construction rather than by discipline — there is no state in which CRIME spins with
+is bounded by construction rather than by discipline — there is no state in which Varde spins with
 nothing to spin for, because the tick exists only as long as the job does.
 
 **Static text was the honest alternative and it is the one worth naming.** `computing…` on the tree
@@ -44,7 +44,7 @@ only the edge can observe.
 that arrives alongside a hundred wheel events produces one frame, not a hundred and one.
 
 **A job that never finishes spins forever, and that is deliberate.** The Refactor loop waits for the
-AI session with no timeout (`docs/adr/0010-crime-owns-the-test-gate.md`), so an indefinite spin is a
+AI session with no timeout (`docs/adr/0010-varde-owns-the-test-gate.md`), so an indefinite spin is a
 reachable state. It is only survivable because the pane says what is being waited for: a spinner with
 no caption is indistinguishable from a hang, which is the failure this whole file is about.
 

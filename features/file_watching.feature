@@ -1,6 +1,6 @@
 Feature: The TUI follows what happens on disk
 
-  CRIME is used with an AI writing files in the right pane, so the disk changes constantly
+  Varde is used with an AI writing files in the right pane, so the disk changes constantly
   and without the user's involvement. The tree, the review list and the diff on screen follow
   those changes immediately — a diff the AI has just made stale is the one thing a reviewer
   must never be shown.
@@ -10,7 +10,7 @@ Feature: The TUI follows what happens on disk
   user's decision. A buffer with no unsaved edits simply follows the file.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
 
   Scenario: A file created in an expanded folder appears in the tree
     Given the folder "src" is expanded
@@ -35,7 +35,7 @@ Feature: The TUI follows what happens on disk
 
   Scenario: A file appearing on disk never takes over the editor
     Given the folder "src" is expanded
-    When the AI creates "/home/me/projects/crime/src/generated.js"
+    When the AI creates "/home/me/projects/varde/src/generated.js"
     Then no file was opened in the editor
     And the file tree shows "src/generated.js"
 

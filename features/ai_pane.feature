@@ -5,7 +5,7 @@ Feature: The AI pane
   able to just start it and talk to it.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
     And the effective setting "ai.command" is "claude"
 
   Scenario: With nothing running, the pane asks which CLI to start
@@ -201,5 +201,5 @@ Feature: The AI pane
     Scenario: A tall pane is remembered per project
       Given the screen is 26 rows by 120 columns
       And I make the AI pane tall from the command line
-      When CRIME starts in the project
+      When Varde starts in the project
       Then the AI pane spans the whole height

@@ -1,6 +1,6 @@
-# CRIME
+# Varde
 
-**C**ommand · **R**eview · **I**ntegrated · **M**odal · **E**ditor
+*A varde is a stone cairn somebody stacked to mark the way for whoever comes next.*
 
 A terminal IDE that opens on a folder and presents it as a workspace: a file tree, a modal editor, a
 real shell and an AI CLI, side by side in one terminal — plus a git review you can walk, comment on
@@ -13,7 +13,7 @@ The goal is to have features in the editor which solves code comprehension and s
 of code. It started with a simple review View, and evolved into a Story view, which has been really helpful
 in understanding the design and control-flow of any implemenation. You're welcome to use it, and if you want to contribute, open a PR — I'm happy to look.
 
-![CRIME in Edit view](docs/images/edit.svg)
+![Varde in Edit view](docs/images/edit.svg)
 
 ## Stack
 
@@ -41,51 +41,51 @@ essentially no equivalent elsewhere.
 One command, interactive, on macOS or Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/oyvij/crime-editor/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/oyvij/varde-editor/main/install.sh | bash
 ```
 
 By default it installs the prebuilt binary for your platform from the latest Release — checked
-against the Release's `SHA256SUMS` before anything is written — to `~/.local/bin/crime`. No Rust
+against the Release's `SHA256SUMS` before anything is written — to `~/.local/bin/varde`. No Rust
 toolchain, no compile, and `:update` inside the editor keeps it current.
 
 Answer "source" at its first prompt, or clone and run the same script from the clone, and it builds
 into a checkout instead:
 
 ```sh
-git clone https://github.com/oyvij/crime-editor.git && crime-editor/install.sh
+git clone https://github.com/oyvij/varde-editor.git && varde-editor/install.sh
 ```
 
-It writes `~/.crime/config.toml`, then asks the installed `crime` which package managers its rows'
-install commands need (`crime --deps`) and offers each one that is missing, naming the rows it is
-for. Language servers, formatters and the voice themselves are one key each in Tools inside CRIME.
+It writes `~/.varde/config.toml`, then asks the installed `varde` which package managers its rows'
+install commands need (`varde --deps`) and offers each one that is missing, naming the rows it is
+for. Language servers, formatters and the voice themselves are one key each in Tools inside Varde.
 Every missing program is a `y/N` prompt with the exact command it will run. Declining a required one
 aborts; declining an optional one skips it. Run the same command again later and it updates what it
-finds behind `crime` — replacing a binary with the latest Release, or pulling and rebuilding a
+finds behind `varde` — replacing a binary with the latest Release, or pulling and rebuilding a
 checkout — and offers whatever is still missing. `./install.sh --list`
-prints every program CRIME can be configured to run and whether it is installed, without touching
+prints every program Varde can be configured to run and whether it is installed, without touching
 anything.
 
-From source by hand, CRIME is a symlink on your PATH pointing at the release binary inside your
+From source by hand, Varde is a symlink on your PATH pointing at the release binary inside your
 checkout:
 
 ```sh
 cargo build --release
-ln -sfn "$(pwd)/target/release/crime" ~/.local/bin/crime
+ln -sfn "$(pwd)/target/release/varde" ~/.local/bin/varde
 ```
 
 Then, from any folder:
 
 ```sh
-crime .            # open the current folder as the workspace
-crime ~/some/repo  # open a folder somewhere else
+varde .            # open the current folder as the workspace
+varde ~/some/repo  # open a folder somewhere else
 ```
 
 On a source install the ordinary release build *is* the install — `cargo build --release` overwrites the file
 the symlink names. `docs/install.md` covers the consequences of that, and how to reclaim build space
 without uninstalling.
 
-The first run seeds `<project>/.crime/config.toml` with every key commented out, so the settings are
-discoverable in place. Global defaults live in `~/.crime/`.
+The first run seeds `<project>/.varde/config.toml` with every key commented out, so the settings are
+discoverable in place. Global defaults live in `~/.varde/`.
 
 Development:
 
@@ -101,7 +101,7 @@ The user guide lives in [`docs/guide/`](docs/guide/README.md), one file per area
 
 | Guide | What it covers |
 |---|---|
-| [Getting around](docs/guide/getting-around.md) | Starting CRIME, the panes and views, the palette, focus, the file tree, buffers, terminal, mouse, quitting, updating |
+| [Getting around](docs/guide/getting-around.md) | Starting Varde, the panes and views, the palette, focus, the file tree, buffers, terminal, mouse, quitting, updating |
 | [Editing](docs/guide/editing.md) | Modal editing, motions and operators, selection, search, multi-cursor, folding, minimap, preview, every `:` command |
 | [Language intelligence](docs/guide/language-intelligence.md) | Language servers, definition, hover, diagnostics, completion, formatting, the server list |
 | [Review](docs/guide/review.md) | Review view, annotating a diff, submitting to the AI |
@@ -109,7 +109,7 @@ The user guide lives in [`docs/guide/`](docs/guide/README.md), one file per area
 | [Risk](docs/guide/risk.md) | The Risk figure and list, the Refactor loop and its test Gate |
 | [AI pane](docs/guide/ai-pane.md) | Hosting an AI CLI, `:ai`, Tall layout, what reaches it and how |
 | [Reading aloud](docs/guide/reading-aloud.md) | `:read` a selection, pausing, speed, installing a voice |
-| [Configuration](docs/guide/configuration.md) | Every config key, the two config files, what lives in `.crime/` |
+| [Configuration](docs/guide/configuration.md) | Every config key, the two config files, what lives in `.varde/` |
 
 Installing and updating: [`docs/install.md`](docs/install.md). The specification behind all of it is
 [`docs/example-map.md`](docs/example-map.md), and `features/*.feature` is the executable form.
@@ -184,7 +184,7 @@ That is what keeps the behaviour suite fast and free of fixture folders and real
 
 ## About the pictures
 
-They are real frames, not mock-ups. CRIME is driven through a pty, the byte stream is captured, and
+They are real frames, not mock-ups. Varde is driven through a pty, the byte stream is captured, and
 `examples/shot.rs` replays it through the same `vt100` parser the editor uses and renders the final
 screen — colours included — to SVG:
 

@@ -3,7 +3,7 @@ Feature: Pasting from the clipboard
   Copying and pasting are one gesture with two keys, and each key has two
   spellings: Ctrl and Command are aliases on both, so whichever hand's habit
   copies also pastes. Command+V worked long before Ctrl+V did, because the host
-  terminal answers Command+V itself and sends CRIME the text as a paste — which
+  terminal answers Command+V itself and sends Varde the text as a paste — which
   made copying and pasting feel like two unrelated features.
 
   The clipboard is the edge's to read: the core asks for it and the text comes
@@ -11,7 +11,7 @@ Feature: Pasting from the clipboard
   separate world on purpose — `selection.feature` says why.
 
   Background:
-    Given the workspace root is "/home/me/projects/crime"
+    Given the workspace root is "/home/me/projects/varde"
 
   Scenario Outline: Either spelling of paste puts the clipboard in the buffer
     Given a system clipboard is available

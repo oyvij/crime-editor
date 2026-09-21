@@ -49,7 +49,7 @@ pub const DWELL_MS: u64 = 500;
 
 /// The formatting options a formatting request carries, because the protocol
 /// requires them. The width is the project's own — `editor.tab_width`, what Tab
-/// lays down and what opening a block falls back to — so the one place CRIME
+/// lays down and what opening a block falls back to — so the one place Varde
 /// has an answer about this workspace's indentation is the one place the answer
 /// comes from. Measuring the *file* was tried and is worse than either, because
 /// the shallowest indentation in a Java or C file is the single space of a
@@ -69,7 +69,7 @@ fn formatting(state: &State) -> FormattingOptions {
 /// Which language a file is: the `[lsp.*]` row claiming its extension, whose
 /// table name is the language id the protocol is sent (ADR 0018). The rows are
 /// the only mapping — start refuses two claiming one extension — so a language
-/// CRIME never named is served the moment a row claims its files, and a file
+/// Varde never named is served the moment a row claims its files, and a file
 /// no row claims has no server, which is a value the core holds rather than a
 /// silence it infers.
 ///
@@ -122,7 +122,7 @@ pub struct Conversation {
     /// The id the next request goes out under. Counted per conversation, since
     /// an id only has to be unique to the server it was sent to.
     next_id: i64,
-    /// Whether CRIME has refused a question this server asked — the
+    /// Whether Varde has refused a question this server asked — the
     /// `unanswerable` one its configuration names. A fact about the
     /// *conversation* rather than about one request, because that is how it
     /// happens: measured on the wire, `@vue/language-server` puts its
@@ -271,7 +271,7 @@ pub struct Question {
     /// once, and both are needed: it makes a reply a reply — one whose id is
     /// not here answers a question nobody asked — and it says *who* was asked,
     /// which is the difference between a server that knows nothing and a server
-    /// that relays the question somewhere CRIME will not follow.
+    /// that relays the question somewhere Varde will not follow.
     sent: BTreeMap<String, i64>,
     /// Which of them have not answered yet. A question with none left is over,
     /// however it ended.
@@ -1186,7 +1186,7 @@ pub struct Candidate {
     pub sort: Option<String>,
     /// Whether `insert` is a snippet — the reply's `insertTextFormat`, resolved
     /// where the reply's other defaults are. The protocol's own default is
-    /// plain text, and a server only ever sends the other because CRIME
+    /// plain text, and a server only ever sends the other because Varde
     /// declared it could receive it.
     pub snippet: bool,
 }
@@ -1205,7 +1205,7 @@ impl Candidates {
     ///
     /// Matched by [`crate::filter`], the same function the tree's filter box
     /// narrows with, because a completion list that matches differently from
-    /// every other list in CRIME is a difference nobody could predict.
+    /// every other list in Varde is a difference nobody could predict.
     ///
     /// **Ordered by the server where it gave an order.** A reply carrying
     /// `sortText` has already been put in the server's own order by
@@ -1486,7 +1486,7 @@ pub fn outstanding(state: &State, language: &str) -> usize {
 
 /// The protocol's own coordinates: lines from zero, and a column counted in
 /// UTF-16 code units rather than characters — what a server reads unless the
-/// client negotiates otherwise, and CRIME negotiates nothing. An emoji earlier
+/// client negotiates otherwise, and Varde negotiates nothing. An emoji earlier
 /// in the line is two units wide there and one character here, so counting
 /// characters would ask about the symbol next door.
 fn position(text: &str, place: Place) -> Position {
@@ -1502,7 +1502,7 @@ fn position(text: &str, place: Place) -> Position {
     }
 }
 
-/// A reply to something CRIME asked, matched three times over: to the question
+/// A reply to something Varde asked, matched three times over: to the question
 /// by the id its own server was asked under, to the present by the place that
 /// question was asked about, and to the other servers asked the same thing. A
 /// reply nobody asked for is dropped rather than trusted, one for a cursor the
@@ -1582,12 +1582,12 @@ fn answered(state: &mut State, language: &str, id: i64, message: &Value) -> Vec<
 /// its list instead: an empty box says "completion is broken", not "the server
 /// knows of nothing that starts like this".
 ///
-/// **Unless CRIME is what declined to answer.** A server whose configuration
+/// **Unless Varde is what declined to answer.** A server whose configuration
 /// names an `unanswerable` request has, by construction, questions it cannot
-/// answer without a companion CRIME does not run — so a file served only by
+/// answer without a companion Varde does not run — so a file served only by
 /// such servers gets said that, rather than being told the server knows
 /// nothing. Those two sentences were false in exactly the case that sent a
-/// reader looking at their Vue install instead of at CRIME (R31.25), and one
+/// reader looking at their Vue install instead of at Varde (R31.25), and one
 /// slug covers both keys because it is one refusal.
 fn empty_handed(state: &mut State, question: &Question) -> Vec<Effect> {
     let nobody_knew = match question.asked.about {
@@ -1609,7 +1609,7 @@ fn empty_handed(state: &mut State, question: &Question) -> Vec<Effect> {
         // are said out loud for, reaching the third.
         About::Document => "nothing-to-format",
     };
-    // Whose nothing it was, worst first. CRIME's own refusal beats a server's
+    // Whose nothing it was, worst first. Varde's own refusal beats a server's
     // error, which beats a server that simply knows nothing here — each is
     // true of strictly less than the one before it.
     if question.sent.keys().all(|language| {
@@ -1685,7 +1685,7 @@ fn offered(state: &mut State, ask: Ask, result: &Value) -> Told {
 }
 
 /// What the server says the text around the cursor should be, applied to the
-/// buffer. The first reply CRIME takes from a server that *changes* a file
+/// buffer. The first reply Varde takes from a server that *changes* a file
 /// rather than describing one, which is why everything careful about it —
 /// applying back to front, as one undo step, clamped to the text — is in
 /// [`crate::editor::Buffer::reformat`] under tests of its own.
@@ -1792,7 +1792,7 @@ fn candidates(result: &Value) -> Vec<Candidate> {
 /// Only `$1`, `${1:default}` and `$0` are understood. Every other form the
 /// grammar allows — choices, variables, transforms — is the literal characters
 /// it is made of: the reply is a string from a child process, so this is a
-/// trust boundary before it is a convenience, and a placeholder CRIME cannot
+/// trust boundary before it is a convenience, and a placeholder Varde cannot
 /// resolve must reach the buffer as text rather than as its own syntax. `\$`
 /// and `\\` are the protocol's escapes, and the second is not optional:
 /// without it no server can write a backslash before a stop.
@@ -1844,7 +1844,7 @@ pub fn snippet(text: &str) -> (String, Vec<usize>) {
 /// the text it is.
 ///
 /// The default is taken as text to the first `}`, so a placeholder nested
-/// inside one is text like every other form CRIME does not resolve.
+/// inside one is text like every other form Varde does not resolve.
 fn placeholder(rest: &[char]) -> Option<(u32, String, usize)> {
     let digits = |from: usize| {
         let taken: String = rest[from..]
@@ -2088,7 +2088,7 @@ fn says(result: &Value, measure: usize) -> Option<Vec<preview::Row>> {
     let rows = match hover.contents {
         // The one distinction the protocol draws and this used to flatten
         // away. `plaintext` is the server saying the `*` in its reply is an
-        // asterisk, so reading it as markdown would be CRIME inventing
+        // asterisk, so reading it as markdown would be Varde inventing
         // formatting the server denied having — which is why there are two
         // paths here rather than one reader for both.
         HoverContents::Markup(markup) => match markup.kind {
@@ -2207,7 +2207,7 @@ fn placed(tall: usize, line: usize, top: usize, visible: usize) -> usize {
     line - tall
 }
 
-/// One message from a server: a reply to something CRIME asked, a request CRIME
+/// One message from a server: a reply to something Varde asked, a request Varde
 /// refuses, or a push it recognises by its method.
 pub fn received(state: &mut State, language: &str, message: &str) -> Vec<Effect> {
     let Ok(mut message) = serde_json::from_str::<Value>(message) else {
@@ -2215,7 +2215,7 @@ pub fn received(state: &mut State, language: &str, message: &str) -> Vec<Effect>
     };
     let id = message.get("id").and_then(Value::as_i64);
     // A message carrying both an id and a method is a *request*: the server is
-    // waiting for an answer. CRIME implements none of them, and a question
+    // waiting for an answer. Varde implements none of them, and a question
     // refused by silence leaves its asker waiting — the rule `queries::reply`
     // follows for a child that asks the terminal something it will not answer.
     if let (Some(id), Some(method)) = (id, message.get("method")) {
@@ -2224,7 +2224,7 @@ pub fn received(state: &mut State, language: &str, message: &str) -> Vec<Effect>
             json: json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "error": {"code": -32601, "message": format!("CRIME does not implement {method}")},
+                "error": {"code": -32601, "message": format!("Varde does not implement {method}")},
             })
             .to_string(),
         }];
@@ -2240,7 +2240,7 @@ pub fn received(state: &mut State, language: &str, message: &str) -> Vec<Effect>
     // A question the server asks on a method of its own, as a notification: the
     // protocol has no reply for one, so an asker that is waiting waits forever
     // unless something is said back on the method its configuration names.
-    // Refused rather than answered — CRIME runs no second server to ask — and
+    // Refused rather than answered — Varde runs no second server to ask — and
     // out loud rather than by silence, which is the rule `queries::reply`
     // follows for a child's escape sequences and the arm above already follows
     // for a server's requests.
@@ -2271,7 +2271,7 @@ pub fn received(state: &mut State, language: &str, message: &str) -> Vec<Effect>
     answered(state, language, id, &message)
 }
 
-/// A question CRIME will not answer, answered anyway.
+/// A question Varde will not answer, answered anyway.
 ///
 /// The question is an array whose **first element is the tag its answer must
 /// carry** — the asker holds one callback per tag and matches the two by it,
@@ -2356,7 +2356,7 @@ fn declares(capabilities: &Value, capability: &str) -> bool {
 }
 
 /// The characters one server named as the ones it wants to be told about, read
-/// out of the capability it declared them in. Its own list and never CRIME's,
+/// out of the capability it declared them in. Its own list and never Varde's,
 /// which is the whole of this feature: measured, rust-analyzer asks about `.`,
 /// `=`, `<`, `>`, `{`, `(`, `|` and `+`, jdtls about `;`, `}` and a newline,
 /// and clangd about a newline alone. No two agree, and nothing in the table is
@@ -2804,12 +2804,12 @@ fn initialize(
         // protocol has for a client that does not say.
         process_id: None,
         root_uri: uri(root),
-        // One claim, and it is the one CRIME acts on: diagnostics are drawn in
+        // One claim, and it is the one Varde acts on: diagnostics are drawn in
         // the gutter (R31.8), and a server may hold them back from a client
         // that never said it could receive them —
         // `typescript-language-server` does exactly that, which reads as a
         // clean file rather than as a server saying nothing. Everything else
-        // CRIME asks for it asks for by name, so announcing it here would only
+        // Varde asks for it asks for by name, so announcing it here would only
         // invite a server to send what nobody reads.
         capabilities: ClientCapabilities {
             text_document: Some(TextDocumentClientCapabilities {
@@ -2817,7 +2817,7 @@ fn initialize(
                 // The second claim, and the one that is a promise rather than a
                 // request: without it the protocol requires a server to send
                 // plain text, so a `${1:…}` reaching the buffer as the
-                // characters it is spelled with is CRIME's defect and not the
+                // characters it is spelled with is Varde's defect and not the
                 // server's. Declared in the same commit as [`snippet`] and the
                 // stops it hands to `Modal::Stops`, never before.
                 completion: Some(CompletionClientCapabilities {
@@ -2846,9 +2846,9 @@ fn initialize(
         // Whatever configuration put there, with the edge's answers in place
         // of the facts it named and nothing else decided here: the table
         // arrives in the shape the message wants and is not read on the way,
-        // which is what keeps CRIME from holding an opinion about any key
+        // which is what keeps Varde from holding an opinion about any key
         // inside it (R31.26). Unlike a capability this is not a claim about what
-        // CRIME can do — it is how a server is told where its own toolchain
+        // Varde can do — it is how a server is told where its own toolchain
         // lives, and several will not run without it. A language that
         // configured none says nothing.
         initialization_options: options
@@ -3235,13 +3235,13 @@ mod tests {
         assert_eq!(pass(&mut state), Vec::new());
     }
 
-    /// A server asks CRIME things too — to register a capability, to put a
+    /// A server asks Varde things too — to register a capability, to put a
     /// progress bar up — and a request carries an id because its sender is
-    /// waiting for an answer. CRIME implements none of them, and says so: the
+    /// waiting for an answer. Varde implements none of them, and says so: the
     /// same rule `queries::reply` follows for a child that asks the terminal a
     /// question it will not answer.
     #[test]
-    fn a_request_crime_does_not_implement_is_refused_out_loud() {
+    fn a_request_varde_does_not_implement_is_refused_out_loud() {
         let mut state = workspace("rust", "rust-analyzer");
         open(&mut state, "src/lib.rs", "fn main() {}");
         pass(&mut state);
@@ -3258,7 +3258,7 @@ mod tests {
         assert_eq!(reply["error"]["code"], -32601);
     }
 
-    /// A question CRIME cannot answer carries no tag it could answer under, so
+    /// A question Varde cannot answer carries no tag it could answer under, so
     /// there is nothing to say back that the asker could match to anything. Both
     /// shapes of that are the same silence, and both are a question the server
     /// asked in a shape its own configuration does not describe — an answer
@@ -3346,7 +3346,7 @@ mod tests {
         assert!(!ready(&state, "rust"));
     }
 
-    /// A push names a file and CRIME may have no Buffer for it: Review view
+    /// A push names a file and Varde may have no Buffer for it: Review view
     /// tells a server about every changed file without opening one. There is no
     /// revision for the version to disagree with, so there is nothing stale
     /// about it — dropped, every count in the review would read as unmeasured.
@@ -3565,7 +3565,7 @@ mod tests {
         assert_eq!(
             (&row.availability, row.install.as_deref()),
             (&crate::tools::Availability::Stopped, Some("install-it")),
-            "the command is here and CRIME watched it go, so the row offers the fix"
+            "the command is here and Varde watched it go, so the row offers the fix"
         );
         state
             .servers
@@ -3664,7 +3664,7 @@ mod tests {
     }
 
     /// A server that dies is not allowed to die quietly: the reader is looking
-    /// at a file nothing is answering for, and a real run of CRIME against a
+    /// at a file nothing is answering for, and a real run of Varde against a
     /// `rust-analyzer` shim that exited a second after starting said nothing at
     /// all.
     #[test]
@@ -4422,7 +4422,7 @@ mod tests {
         assert!(state.lsp_asked.is_empty(), "the question is still waiting");
     }
 
-    /// One server, configured to relay a question CRIME will not answer, and a
+    /// One server, configured to relay a question Varde will not answer, and a
     /// buffer open at the cursor.
     fn relaying_server() -> State {
         let mut state = workspace("vue", "vue-language-server");
@@ -4449,9 +4449,9 @@ mod tests {
     /// The question the server needed answered, put and refused — which is why
     /// no answer of its own is coming. "The language server knows of no
     /// definition" is then false, and it is the sentence that sent a reader
-    /// looking at their own install instead of at CRIME (R31.25).
+    /// looking at their own install instead of at Varde (R31.25).
     #[test]
-    fn a_question_crime_declined_to_relay_says_so_rather_than_blaming_the_server() {
+    fn a_question_varde_declined_to_relay_says_so_rather_than_blaming_the_server() {
         for about in [About::Hover, About::Definition] {
             let mut state = relaying_server();
             // Where it happens: the server asks on `didOpen`, long before the
@@ -4472,7 +4472,7 @@ mod tests {
             assert_eq!(
                 received(&mut state, "vue", &reply(Value::Null)),
                 vec![Effect::Notify("needs-a-companion")],
-                "{about:?} blamed the server for CRIME's refusal"
+                "{about:?} blamed the server for Varde's refusal"
             );
         }
     }
@@ -4617,11 +4617,11 @@ mod tests {
     }
 
     /// The trust boundary: the reply is a string from a child process, and a
-    /// form CRIME cannot resolve is text rather than syntax. A choice and a
+    /// form Varde cannot resolve is text rather than syntax. A choice and a
     /// variable are both left exactly as they were written, and neither
     /// becomes a stop.
     #[test]
-    fn a_placeholder_form_crime_does_not_understand_is_text() {
+    fn a_placeholder_form_varde_does_not_understand_is_text() {
         assert_eq!(
             snippet("${1|a,b|} $TM_FILENAME"),
             ("${1|a,b|} $TM_FILENAME".to_string(), vec![22])
@@ -4656,7 +4656,7 @@ mod tests {
     /// A conversation with a server that named its own trigger characters, and
     /// the file open with them not yet typed. The capability is spelled here
     /// rather than in a helper because the characters *are* the subject: they
-    /// are the server's, and nothing in CRIME may know them.
+    /// are the server's, and nothing in Varde may know them.
     fn triggering(contents: &str, declared: &str) -> State {
         let mut state = workspace("rust", "rust-analyzer");
         open(&mut state, "src/lib.rs", contents);
@@ -4698,7 +4698,7 @@ mod tests {
     }
 
     /// Every character the server named, in the two places the protocol lets it
-    /// name them. A list CRIME could not have guessed: measured, rust-analyzer
+    /// name them. A list Varde could not have guessed: measured, rust-analyzer
     /// asks about `.` and `=`, jdtls about `;`, `}` and a newline, and clangd
     /// about a newline alone.
     #[test]

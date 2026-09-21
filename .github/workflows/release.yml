@@ -7,7 +7,7 @@
 #
 # No setup: the workflow's own token tags and releases (.scratch/binary-releases/issues/01-*.md).
 #
-# Asset names are `crime-<os>-<arch>`, and the four spellings below are the ones a unit test in
+# Asset names are `varde-<os>-<arch>`, and the four spellings below are the ones a unit test in
 # src/startup.rs pins (`asset_names_match_the_release_workflow`). Change them in both places or every binary install reports no asset.
 
 name: release
@@ -74,21 +74,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: macos-14,         asset: crime-macos-aarch64, optional: false }
-          - { runner: macos-15-intel,   asset: crime-macos-x86_64,  optional: false }
+          - { runner: macos-14,         asset: varde-macos-aarch64, optional: false }
+          - { runner: macos-15-intel,   asset: varde-macos-x86_64,  optional: false }
           # The oldest Ubuntu runner, so the glibc the binary asks for is a few years old.
-          - { runner: ubuntu-22.04,     asset: crime-linux-x86_64,  optional: false }
+          - { runner: ubuntu-22.04,     asset: varde-linux-x86_64,  optional: false }
           # A leg that starts and fails does not stop the other three. A runner label this
           # repository is not offered does not fail: it queues for a day and is cancelled, which
           # continue-on-error does not cover. If that happens, drop this leg (issue 01).
-          - { runner: ubuntu-22.04-arm, asset: crime-linux-aarch64, optional: true }
+          - { runner: ubuntu-22.04-arm, asset: varde-linux-aarch64, optional: true }
     runs-on: ${{ matrix.runner }}
     continue-on-error: ${{ matrix.optional }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --release --locked
-      - run: cp target/release/crime "${{ matrix.asset }}"
+      - run: cp target/release/varde "${{ matrix.asset }}"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
@@ -117,7 +117,7 @@ jobs:
           merge-multiple: true
       - name: Checksums
         working-directory: assets
-        run: sha256sum crime-* > SHA256SUMS && cat SHA256SUMS
+        run: sha256sum varde-* > SHA256SUMS && cat SHA256SUMS
       - name: Release notes from the commits since the last tag
         run: |
           last=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || true)
@@ -125,4 +125,4 @@ jobs:
       # gh creates the tag with the Release, so a failed upload cannot leave a tag behind that the
       # refusal above would then hold against every re-run.
       - name: Tag and create the Release
-        run: gh release create "v$VERSION" assets/* --target "$GITHUB_SHA" --title "CRIME $VERSION" --notes-file notes.md
+        run: gh release create "v$VERSION" assets/* --target "$GITHUB_SHA" --title "Varde $VERSION" --notes-file notes.md

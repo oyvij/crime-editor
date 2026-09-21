@@ -30,7 +30,7 @@ fallback: an HTML `<table>` under auto-layout wraps cell text at the column widt
 taller, scrolling sideways only when an unbreakable token makes wrapping useless; **glamour**, the
 closest comparison since it is a terminal renderer under the same constraint, has `WithTableWrap`
 **true by default** and offers ellipsis truncation as the explicit opt-out; **Rich** wraps to fit
-and makes `no_wrap` opt-in per column. CRIME went straight to the last rung, by default, with no way
+and makes `no_wrap` opt-in per column. Varde went straight to the last rung, by default, with no way
 out of it.
 
 So a cell wraps inside its column. One source row becomes N display rows, each column padded to its
