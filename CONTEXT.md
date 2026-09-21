@@ -674,8 +674,14 @@ the Variables and the Evaluator to that call.
 _Avoid_: stack entry, call, Step
 
 **Breakpoint**:
-A line the program pauses at when it reaches it, marked in the gutter.
+A line the program pauses at when it reaches it, marked in the gutter. It moves with its line as the
+Buffer is edited, and a project remembers it across runs along with the text the line held.
 _Avoid_: stop, marker
+
+**Stale breakpoint**:
+A remembered Breakpoint whose line no longer holds the text it was set on. It says so in the
+Breakpoint list; it is never quietly re-pointed at whatever line now has its number.
+_Avoid_: broken, invalid, orphaned, unverified (that is the Debug adapter's word for another thing)
 
 **Breakpoint list**:
 Every Breakpoint in the workspace, one row per line, as a Corner occupant — there with or without a
