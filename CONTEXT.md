@@ -53,10 +53,10 @@ _Avoid_: selected file, tree highlight
 
 **Corner**:
 The one pane-sized slot beneath the file tree, at the tree's width, taking its columns from the
-shell. It names its occupant — the Risk list, the Buffers pane or the Cursor history — or nothing at
-all, so "both on screen at once" is not a state it can hold and asking for one while another shows
-is a replacement. Every occupant is the same rectangle: which pane is in the Corner changes what a click
-means, never where the Corner is.
+shell. It names its occupant — the Risk list, the Buffers pane, the Cursor history, the Frames or
+the Breakpoint list — or nothing at all, so "both on screen at once" is not a state it can hold and
+asking for one while another shows is a replacement. Every occupant is the same rectangle: which
+pane is in the Corner changes what a click means, never where the Corner is.
 _Avoid_: the risk pane's slot, bottom-left pane, second sidebar
 
 **Strip**:
@@ -677,13 +677,20 @@ _Avoid_: stack entry, call, Step
 A line the program pauses at when it reaches it, marked in the gutter.
 _Avoid_: stop, marker
 
+**Breakpoint list**:
+Every Breakpoint in the workspace, one row per line, as a Corner occupant — there with or without a
+Debug session, since Breakpoints are set before one starts. A row goes to its line; its Transport
+removes one or clears them all.
+_Avoid_: breakpoints dialog, breakpoint view
+
 **Watch**:
 An expression kept at the top of the Variables and re-evaluated at every pause.
 _Avoid_: pinned expression
 
 **Debug group**:
 What the Strip shows while a Debug session exists: the Variables beside the Program output, with a
-border between them that can be dragged. The Strip switches to it at every pause.
+border between them that can be dragged. Every pause brings it forward, as it brings the Frames
+into the Corner; ending the session gives both slots back what they held before it.
 _Avoid_: debug panel, debug tool window, debug tab
 
 **Program output**:
