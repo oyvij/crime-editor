@@ -756,6 +756,13 @@ the width without ending it. New output while it is out of sight is marked where
 the `Debug` Group tab, and on the Chip that shows it again.
 _Avoid_: console, debug terminal, shell (a shell is the user's)
 
+**Pause snapshot**:
+What the AI session is handed about a Paused program when asked to be — the Paused line and its
+neighbours, the Frames, the Variables as shown, and the exception if one paused it. Pasted into the
+AI's prompt and never submitted: values can be real data, so what leaves the machine is the user's
+call, made by pressing Enter.
+_Avoid_: debug context, AI context, state dump
+
 **Evaluator**:
 The floating window that runs a Snippet inside the Paused program, in the chosen Frame. It can be
 moved and resized, and stays open while you step.
