@@ -53,11 +53,26 @@ _Avoid_: selected file, tree highlight
 
 **Corner**:
 The one pane-sized slot beneath the file tree, at the tree's width, taking its columns from the
-shell. It names its occupant — the Risk list, the Buffers pane or the Cursor history — or nothing at
-all, so "both on screen at once" is not a state it can hold and asking for one while another shows
-is a replacement. Every occupant is the same rectangle: which pane is in the Corner changes what a click
-means, never where the Corner is.
+shell. It names its occupant — the Risk list, the Buffers pane, the Cursor history, the Frames or
+the Breakpoint list — or nothing at all, so "both on screen at once" is not a state it can hold and
+asking for one while another shows is a replacement. Every occupant is the same rectangle: which
+pane is in the Corner changes what a click means, never where the Corner is.
 _Avoid_: the risk pane's slot, bottom-left pane, second sidebar
+
+**Strip**:
+The slot along the bottom of the screen, its height the user's to drag. Like the Corner it names one
+occupant at a time — the Shell group, or the Debug group while a Debug session exists — so showing
+one hides the other without stopping anything running in it.
+_Avoid_: terminal pane, bottom panel, dock, tool window
+
+**Shell group**:
+Every shell split in the Strip, shown and hidden as one.
+_Avoid_: terminals, terminal tab
+
+**Group tab**:
+One of the names on the Strip's top border — `Shells`, and `Debug` while a Debug session exists —
+lit for the group showing, and clicked to show another.
+_Avoid_: tab (a Buffer is not one either), switcher
 
 **Copying**:
 Putting the selection on the system clipboard, falling back to the terminal over SSH.
@@ -616,8 +631,178 @@ than one the listener needs, which is audible as staccato and is the reason this
 _Avoid_: chunk, clip, segment, phrase, sentence (the text is a sentence; this is the speech of one)
 
 **Transport**:
-The strip of controls on the editor's top border — play and pause, previous, next, stop, and the
-speed. Drawn only for a markdown buffer, right-aligned the way the Risk pane's action icons are, and
-clickable. It is an affordance and a reminder, never the only way in: everything it offers has a key
-binding, because a control you can only reach with a mouse is one the cheatsheet cannot promise.
-_Avoid_: play button, toolbar, controls, player bar, media bar
+A row of Chips on a pane's top border, driving something in flight: a Reading on the editor's —
+play and pause, previous, next, stop, and the speed, drawn only for a markdown buffer — and a Debug
+session on the Variables' — continue and pause, stepping over, into and out, and stop. Right-aligned
+the way the Risk pane's action icons are, and clickable. It is an affordance and a reminder, never
+the only way in: everything it offers has a key binding, because a control you can only reach with
+a mouse is one the cheatsheet cannot promise.
+_Avoid_: play button, toolbar, controls, player bar, media bar, debug toolbar
+
+**Chip**:
+One control in a Transport: a glyph and the keys that do the same, in the theme's own colours.
+Dimmed while what it does is unavailable, lit while it is the last one used. Where the Transport has
+no room for every Chip whole, all of them shed their keys together and none is cut or wrapped. One
+Chip says what pressing it does, so continue and pause, like play and pause, are one Chip.
+_Avoid_: button, icon, control
+
+### Debugging a running program
+
+**Debug session**:
+A program running under a Debug adapter, from launch or attach until it ends. It is laid over Edit
+view rather than being a View of its own, because what you do while one is Paused is write code.
+One per program, however many sessions the Debug adapter opens beneath it for workers and child
+processes: those show as more threads, never as sessions to manage.
+_Avoid_: debug mode, debug view, debugger (that is the Debug adapter)
+
+**Launch configuration**:
+A named way to start a Debug session — launching a program or attaching to one already running,
+such as a service listening on a debug port. Kept in configuration, globally or per project, with
+the project's winning by name.
+_Avoid_: run configuration, debug profile, target
+
+**Run mark**:
+The ▶ in the gutter beside something that can be started on its own — a `main`, a test — offering
+to run it or debug it without a Launch configuration. What counts as one is configuration, per
+language, never Varde's knowledge.
+_Avoid_: code lens, run icon, gutter play button
+
+**Debug adapter**:
+The child process Varde speaks the Debug Adapter Protocol to — one per language, named in
+configuration and never in Varde, the way a language server is.
+_Avoid_: debugger backend, debug server, debug engine
+
+**Paused**:
+The state of a Debug session whose program is stopped — at a Breakpoint, after stepping, or on an
+exception — and so can be inspected and evaluated in. The only state in which Frames, Variables and
+the Evaluator mean anything. Several threads can be Paused at once; the one being inspected stays
+put when another pauses, and the others are counted in the Frames and on the Transport.
+_Avoid_: halted, suspended, stopped (a stopped session has ended)
+
+**Running**:
+The state of a Debug session whose program is executing. What the last pause showed stays on
+screen, dimmed, so a fast step does not flicker and a long wait does not lose it — and nothing
+dimmed is ever mistaken for current.
+_Avoid_: continuing, resumed, live
+
+**Waiting**:
+The state of an attach Debug session whose program has gone away — restarted or crashed — and which
+is listening to attach again, sending its Breakpoints anew when the program answers. A Launch
+configuration can opt out; one that attaches does not by default. Ended only by stopping it.
+_Avoid_: reconnecting, detached, idle
+
+**Paused line**:
+The line the Paused program will run next, in the Frame being inspected.
+_Avoid_: current line, execution point, cursor
+
+**Stepping**:
+Running a Paused program on by one line, into a call or out of one — a verb only. There is no noun
+"a step" in debugging: a Step is a Story's.
+_Avoid_: a step, a debug step
+
+**Stepping mode**:
+The keyboard state a Space chord leaves behind while a Debug session exists: the debug keys act on
+their own, without Space, so a burst of stepping is one key a step. Any other key leaves it and then
+does what it always does, so it cannot trap anyone; the Variables' title says while it is on.
+_Avoid_: debug mode, hydra, sticky keys
+
+**Chord hint**:
+The box a tapped Space opens at once, naming every key that can follow it and what each does, each
+one clickable. Drawn from the same list the cheatsheet is, so the two cannot disagree; gone at the
+second key or Escape.
+_Avoid_: which-key, leader menu, popup
+
+**Frame**:
+One call on the Paused program's stack, listed in the Corner under the thread it belongs to.
+Choosing one moves the Paused line, the Variables and the Evaluator to that call.
+_Avoid_: stack entry, call, Step
+
+**Inline value**:
+A variable's value drawn faintly at the end of a line the Paused call has already run, in the Debug
+adapter's own words. One that changed since the last pause is drawn highlighted for that pause, so
+stepping shows what the line just did. Never drawn on a line the call has not reached.
+_Avoid_: inline hint, annotation, value overlay
+
+**Library frame**:
+A Frame whose source lies outside the workspace, or that the Debug adapter itself marks as not worth
+showing. A run of them is folded into one dimmed row that says how many, and unfolds on request —
+never hidden outright, since how much library sits between two of your calls is itself a clue.
+_Avoid_: external frame, framework frame, hidden frame
+
+**Breakpoint**:
+A line the program pauses at when it reaches it, marked in the gutter. It moves with its line as the
+Buffer is edited, and a project remembers it across runs along with the text the line held.
+Reaching it pauses only the thread that reached it, unless the Breakpoint says to pause them all.
+_Avoid_: stop, marker
+
+**Exception filter**:
+A kind of exception the program can be told to pause on — caught, uncaught, a Rust panic, one named
+class — offered by the Debug adapter and never invented by Varde. Switched at the top of the
+Breakpoint list and remembered per project. Pausing on one puts the exception first in the
+Variables.
+_Avoid_: exception breakpoint, catchpoint, break on throw
+
+**Unverified breakpoint**:
+A Breakpoint the Debug adapter could not bind in the running program — code not loaded, or not the
+code on screen — drawn hollow, with the adapter's reason on hover. One it bound to another line is
+drawn on that line for the session, and still listed on the line it was set on.
+_Avoid_: disabled, broken, Stale (that is Varde's own finding, before any session)
+
+**Conditional breakpoint**:
+A Breakpoint that pauses only when its condition holds or its hit count is reached. The condition is
+the program's own language, handed to the Debug adapter as written and never read by Varde.
+_Avoid_: filtered breakpoint, smart breakpoint
+
+**Logpoint**:
+A Breakpoint that prints a message into Program output instead of pausing.
+_Avoid_: tracepoint, print breakpoint
+
+**Stale breakpoint**:
+A remembered Breakpoint whose line no longer holds the text it was set on. It says so in the
+Breakpoint list; it is never quietly re-pointed at whatever line now has its number.
+_Avoid_: broken, invalid, orphaned, unverified (that is the Debug adapter's word for another thing)
+
+**Breakpoint list**:
+Every Breakpoint in the workspace, one row per line, as a Corner occupant — there with or without a
+Debug session, since Breakpoints are set before one starts. A row goes to its line; its Transport
+removes one or clears them all.
+_Avoid_: breakpoints dialog, breakpoint view
+
+**Watch**:
+An expression kept at the top of the Variables and re-evaluated at every pause. One that calls
+something is marked as calling, since it runs that call again at every pause; a Hover, by contrast,
+never calls anything.
+_Avoid_: pinned expression
+
+**Debug group**:
+What the Strip shows while a Debug session exists: the Variables beside the Program output, with a
+border between them that can be dragged. Every pause brings it forward, as it brings the Frames
+into the Corner; ending the session gives both slots back what they held before it.
+_Avoid_: debug panel, debug tool window, debug tab
+
+**Program output**:
+The debugged program's own terminal, inside the Debug group. It can be hidden to give the Variables
+the width without ending it. New output while it is out of sight is marked wherever that is — on
+the `Debug` Group tab, and on the Chip that shows it again.
+_Avoid_: console, debug terminal, shell (a shell is the user's)
+
+**Pause snapshot**:
+What the AI session is handed about a Paused program when asked to be — the Paused line and its
+neighbours, the Frames, the Variables as shown, and the exception if one paused it. Pasted into the
+AI's prompt and never submitted: values can be real data, so what leaves the machine is the user's
+call, made by pressing Enter.
+_Avoid_: debug context, AI context, state dump
+
+**Evaluator**:
+The floating window that runs a Snippet inside the Paused program, in the chosen Frame. It can be
+moved and resized, reopens where a project last left it, never covers the Paused line, and stays
+open while you step.
+_Avoid_: expression modal, evaluate expression, REPL, console
+
+**Snippet**:
+The text in the Evaluator — an expression or a whole block, however much the Debug adapter accepts.
+_Avoid_: expression (a Snippet can be many statements), code fragment
+
+**Evaluator output**:
+The box beneath the Snippet: what the program printed while the Snippet ran, then its value.
+_Avoid_: result pane, console
