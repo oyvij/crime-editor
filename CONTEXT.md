@@ -708,6 +708,12 @@ Buffer is edited, and a project remembers it across runs along with the text the
 Reaching it pauses only the thread that reached it, unless the Breakpoint says to pause them all.
 _Avoid_: stop, marker
 
+**Exception filter**:
+A kind of exception the program can be told to pause on — caught, uncaught, a Rust panic, one named
+class — offered by the Debug adapter and never invented by Varde. Switched at the top of the
+Breakpoint list and remembered per project. Pausing on one puts the exception first in the Variables.
+_Avoid_: exception breakpoint, catchpoint, break on throw
+
 **Unverified breakpoint**:
 A Breakpoint the Debug adapter could not bind in the running program — code not loaded, or not the
 code on screen — drawn hollow, with the adapter's reason on hover. One it bound to another line is
