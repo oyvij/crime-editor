@@ -177,6 +177,17 @@ Feature: Walking a story step by step
     Then the story view state is "spine"
     And no file was opened in the editor
 
+  Scenario Outline: Leaving Story view leaves the story
+    Given I am walking "Keys reach the child"
+    When I open <view> view
+    Then the step menu is empty
+    And the band has no claim
+
+    Examples:
+      | view   |
+      | Edit   |
+      | Review |
+
   Scenario: Backspace does not edit the code while walking
     Given I am walking "Keys reach the child"
     And I press the Right arrow in the editor
