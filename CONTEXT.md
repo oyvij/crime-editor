@@ -708,6 +708,15 @@ Buffer is edited, and a project remembers it across runs along with the text the
 Reaching it pauses only the thread that reached it, unless the Breakpoint says to pause them all.
 _Avoid_: stop, marker
 
+**Conditional breakpoint**:
+A Breakpoint that pauses only when its condition holds or its hit count is reached. The condition is
+the program's own language, handed to the Debug adapter as written and never read by Varde.
+_Avoid_: filtered breakpoint, smart breakpoint
+
+**Logpoint**:
+A Breakpoint that prints a message into Program output instead of pausing.
+_Avoid_: tracepoint, print breakpoint
+
 **Stale breakpoint**:
 A remembered Breakpoint whose line no longer holds the text it was set on. It says so in the
 Breakpoint list; it is never quietly re-pointed at whatever line now has its number.
