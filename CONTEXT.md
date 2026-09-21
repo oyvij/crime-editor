@@ -697,6 +697,12 @@ their own, without Space, so a burst of stepping is one key a step. Any other ke
 does what it always does, so it cannot trap anyone; the Variables' title says while it is on.
 _Avoid_: debug mode, hydra, sticky keys
 
+**Chord hint**:
+The box a tapped Space opens at once, naming every key that can follow it and what each does, each
+one clickable. Drawn from the same list the cheatsheet is, so the two cannot disagree; gone at the
+second key or Escape.
+_Avoid_: which-key, leader menu, popup
+
 **Frame**:
 One call on the Paused program's stack, listed in the Corner under the thread it belongs to. Choosing one moves the Paused line,
 the Variables and the Evaluator to that call.
