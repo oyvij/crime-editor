@@ -784,7 +784,8 @@ _Avoid_: debug context, AI context, state dump
 
 **Evaluator**:
 The floating window that runs a Snippet inside the Paused program, in the chosen Frame. It can be
-moved and resized, and stays open while you step.
+moved and resized, reopens where a project last left it, never covers the Paused line, and stays
+open while you step.
 _Avoid_: expression modal, evaluate expression, REPL, console
 
 **Snippet**:
