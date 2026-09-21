@@ -691,6 +691,12 @@ Running a Paused program on by one line, into a call or out of one — a verb on
 "a step" in debugging: a Step is a Story's.
 _Avoid_: a step, a debug step
 
+**Stepping mode**:
+The keyboard state a Space chord leaves behind while a Debug session exists: the debug keys act on
+their own, without Space, so a burst of stepping is one key a step. Any other key leaves it and then
+does what it always does, so it cannot trap anyone; the Variables' title says while it is on.
+_Avoid_: debug mode, hydra, sticky keys
+
 **Frame**:
 One call on the Paused program's stack, listed in the Corner under the thread it belongs to. Choosing one moves the Paused line,
 the Variables and the Evaluator to that call.
