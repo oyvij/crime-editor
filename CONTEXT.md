@@ -708,6 +708,12 @@ Buffer is edited, and a project remembers it across runs along with the text the
 Reaching it pauses only the thread that reached it, unless the Breakpoint says to pause them all.
 _Avoid_: stop, marker
 
+**Unverified breakpoint**:
+A Breakpoint the Debug adapter could not bind in the running program — code not loaded, or not the
+code on screen — drawn hollow, with the adapter's reason on hover. One it bound to another line is
+drawn on that line for the session, and still listed on the line it was set on.
+_Avoid_: disabled, broken, Stale (that is Varde's own finding, before any session)
+
 **Conditional breakpoint**:
 A Breakpoint that pauses only when its condition holds or its hit count is reached. The condition is
 the program's own language, handed to the Debug adapter as written and never read by Varde.
