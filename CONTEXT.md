@@ -651,6 +651,8 @@ _Avoid_: button, icon, control
 **Debug session**:
 A program running under a Debug adapter, from launch or attach until it ends. It is laid over Edit
 view rather than being a View of its own, because what you do while one is Paused is write code.
+One per program, however many sessions the Debug adapter opens beneath it for workers and child
+processes: those show as more threads, never as sessions to manage.
 _Avoid_: debug mode, debug view, debugger (that is the Debug adapter)
 
 **Launch configuration**:
