@@ -648,6 +648,18 @@ A program running under a Debug adapter, from launch or attach until it ends. It
 view rather than being a View of its own, because what you do while one is Paused is write code.
 _Avoid_: debug mode, debug view, debugger (that is the Debug adapter)
 
+**Launch configuration**:
+A named way to start a Debug session — launching a program or attaching to one already running,
+such as a service listening on a debug port. Kept in configuration, globally or per project, with
+the project's winning by name.
+_Avoid_: run configuration, debug profile, target
+
+**Run mark**:
+The ▶ in the gutter beside something that can be started on its own — a `main`, a test — offering
+to run it or debug it without a Launch configuration. What counts as one is configuration, per
+language, never Varde's knowledge.
+_Avoid_: code lens, run icon, gutter play button
+
 **Debug adapter**:
 The child process Varde speaks the Debug Adapter Protocol to — one per language, named in
 configuration and never in Varde, the way a language server is.
@@ -669,7 +681,7 @@ Running a Paused program on by one line, into a call or out of one — a verb on
 _Avoid_: a step, a debug step
 
 **Frame**:
-One call on the Paused program's stack, listed in the Corner. Choosing one moves the Paused line,
+One call on the Paused program's stack, listed in the Corner under the thread it belongs to. Choosing one moves the Paused line,
 the Variables and the Evaluator to that call.
 _Avoid_: stack entry, call, Step
 
@@ -682,6 +694,7 @@ _Avoid_: inline hint, annotation, value overlay
 **Breakpoint**:
 A line the program pauses at when it reaches it, marked in the gutter. It moves with its line as the
 Buffer is edited, and a project remembers it across runs along with the text the line held.
+Reaching it pauses only the thread that reached it, unless the Breakpoint says to pause them all.
 _Avoid_: stop, marker
 
 **Stale breakpoint**:
