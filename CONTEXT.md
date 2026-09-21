@@ -626,11 +626,20 @@ than one the listener needs, which is audible as staccato and is the reason this
 _Avoid_: chunk, clip, segment, phrase, sentence (the text is a sentence; this is the speech of one)
 
 **Transport**:
-The strip of controls on the editor's top border — play and pause, previous, next, stop, and the
-speed. Drawn only for a markdown buffer, right-aligned the way the Risk pane's action icons are, and
-clickable. It is an affordance and a reminder, never the only way in: everything it offers has a key
-binding, because a control you can only reach with a mouse is one the cheatsheet cannot promise.
-_Avoid_: play button, toolbar, controls, player bar, media bar
+A row of Chips on a pane's top border, driving something in flight: a Reading on the editor's —
+play and pause, previous, next, stop, and the speed, drawn only for a markdown buffer — and a Debug
+session on the Variables' — continue and pause, stepping over, into and out, and stop. Right-aligned
+the way the Risk pane's action icons are, and clickable. It is an affordance and a reminder, never
+the only way in: everything it offers has a key binding, because a control you can only reach with
+a mouse is one the cheatsheet cannot promise.
+_Avoid_: play button, toolbar, controls, player bar, media bar, debug toolbar
+
+**Chip**:
+One control in a Transport: a glyph and the keys that do the same, in the theme's own colours. Dimmed
+while what it does is unavailable, lit while it is the last one used. Where the Transport has no room
+for every Chip whole, all of them shed their keys together and none is cut or wrapped. One Chip says
+what pressing it does, so continue and pause, like play and pause, are one Chip.
+_Avoid_: button, icon, control
 
 ### Debugging a running program
 
