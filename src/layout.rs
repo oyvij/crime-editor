@@ -200,15 +200,51 @@ impl Corner {
     }
 }
 
+/// Which group the Strip is showing. One slot naming its occupant, for the
+/// reason [`Corner`] is one: the Debug group joins it, and "both at once" must
+/// stay a state nobody can write down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Group {
+    Shells,
+}
+
+impl Group {
+    /// Its Group tab, as the Strip's top border draws it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Group::Shells => "Shells",
+        }
+    }
+}
+
+/// The fewest rows the area above the Strip keeps, and the fewest the Strip
+/// does: its two borders and the two rows a pty needs, since vt100 underflows
+/// on a one-row grid.
+pub const TOP_LEAST: u16 = 5;
+pub const STRIP_LEAST: u16 = 4;
+
+/// A Strip height, bounded so that neither the Strip nor the area above it
+/// vanishes. The area above wins on a screen too short for both, as it always
+/// has: a Strip of fewer rows is one the edge clamps its pty against.
+pub fn strip_height(screen_height: u16, asked: u16) -> u16 {
+    asked
+        .max(STRIP_LEAST)
+        .min(screen_height.saturating_sub(TOP_LEAST))
+}
+
 /// The two panes that take their columns out of the shell, one from each side:
-/// the AI pane's shape from the right and the corner from the left. One value
-/// because they are one question — how much of the bottom row is the shell's —
-/// and because a rectangle chosen from a growing list of positional flags is a
-/// rectangle nobody can read at the call site.
+/// the AI pane's shape from the right and the corner from the left, and how
+/// tall the Strip they sit in is. One value because they are one question —
+/// how much of the bottom row is the shell's — and because a rectangle chosen
+/// from a growing list of positional flags is a rectangle nobody can read at
+/// the call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Shapes {
     pub ai: AiPane,
     pub corner: Corner,
+    /// `None` until the border above the Strip is dragged: a share of the
+    /// screen until somebody names a height, as the AI pane's width is.
+    pub strip: Option<u16>,
 }
 
 /// The first content row a pane shows: where the wheel left it, pulled back so
@@ -268,8 +304,9 @@ pub struct Layout {
 }
 
 /// Tree, editor and AI across the top; terminal beneath. The terminal takes 30%
-/// of the height and the AI pane 30% of the width, except that the editor keeps
-/// at least 20 columns and the top keeps at least 5 rows. `band_height` is 0
+/// of the height, or the Strip's dragged height, and the AI pane 30% of the
+/// width, except that the editor keeps at least 20 columns and the top keeps
+/// at least [`TOP_LEAST`] rows. `band_height` is 0
 /// outside Story view's walk; the editor comes back already shortened by it,
 /// so no caller has to remember to subtract it a second time.
 ///
@@ -287,8 +324,10 @@ pub fn panes(
     step_menu_width: u16,
     shapes: Shapes,
 ) -> Layout {
-    let terminal_height =
-        ((height as u32 * 3 + 5) / 10).min(height.saturating_sub(5) as u32) as u16;
+    let terminal_height = shapes
+        .strip
+        .unwrap_or(((height as u32 * 3 + 5) / 10) as u16)
+        .min(height.saturating_sub(TOP_LEAST));
     let top = height - terminal_height;
 
     let tree_width = tree_divider.min(width);
@@ -562,8 +601,8 @@ mod frame_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        editor_chip_labels, inset, pane_at, panes, strip_at, strip_width, AiPane, Area, Corner,
-        Shapes, STEP_MENU_WIDTH,
+        editor_chip_labels, inset, pane_at, panes, strip_at, strip_height, strip_width, AiPane,
+        Area, Corner, Shapes, STEP_MENU_WIDTH, STRIP_LEAST, TOP_LEAST,
     };
     use crate::Pane;
 
@@ -590,6 +629,29 @@ mod tests {
                 "heights for {width}x{height}"
             );
         }
+    }
+
+    /// A dragged Strip height is the Strip's height and the top gets the rest,
+    /// the bottom row still ending on the screen's.
+    #[test]
+    fn a_named_strip_height_is_kept_instead_of_the_share() {
+        let shapes = Shapes {
+            strip: Some(16),
+            ..Shapes::default()
+        };
+        let layout = panes(120, 40, 30, None, 0, 0, shapes);
+        assert_eq!((layout.terminal.y, layout.terminal.height), (24, 16));
+        assert_eq!((layout.corner.y, layout.corner.height), (24, 16));
+        assert_eq!(layout.tree.height, 24);
+    }
+
+    #[test]
+    fn a_strip_height_keeps_both_the_strip_and_the_top() {
+        assert_eq!(strip_height(40, 1), STRIP_LEAST);
+        assert_eq!(strip_height(40, 40), 40 - TOP_LEAST);
+        assert_eq!(strip_height(40, 16), 16);
+        // Too short for both: the top keeps its rows, as the share always did.
+        assert_eq!(strip_height(7, 1), 2);
     }
 
     /// A width the user dragged to is kept whatever the screen does — only the
@@ -888,6 +950,7 @@ mod tests {
             Shapes {
                 ai: AiPane::Tall,
                 corner: Corner::Risk,
+                strip: None,
             },
         );
         assert_eq!((layout.corner.x, layout.corner.width), (0, 30));
@@ -914,6 +977,7 @@ mod tests {
                 Shapes {
                     ai,
                     corner: Corner::Risk,
+                    strip: None,
                 },
             );
             assert_eq!(layout.terminal.width, 1, "{ai:?}");
@@ -1041,6 +1105,7 @@ mod tests {
                 (Shapes {
                     ai: AiPane::Tall,
                     corner: Corner::Risk,
+                    strip: None,
                 }),
             ] {
                 let layout = panes(width, height, 30, None, 6, 0, shapes);

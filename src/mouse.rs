@@ -146,6 +146,8 @@ pub enum Divider {
     Tree,
     /// The AI pane's left border, which moves the editor/AI boundary.
     Ai,
+    /// The border above the Strip, which moves the Strip/top boundary.
+    Strip,
 }
 
 /// Where a drag began, and which divider it grabbed. Edge state, but the
@@ -323,6 +325,11 @@ fn divider_drag(panes: &Layout, pointer: &mut Pointer, input: Input) -> Option<O
     // tall shape is past the terminal's first row.
     let beside_tree = input.row < panes.terminal.y;
     let beside_ai = input.row < panes.ai.bottom();
+    // The Strip's own top border across the shell's columns, and nothing
+    // else: the row above it is the editor's bottom border, where the buffer
+    // dots are, and the Corner's top border carries its icons.
+    let above_strip =
+        input.row == panes.terminal.y && panes.terminal.holds(input.column, input.row);
     match input.kind {
         Kind::LeftDown if beside_tree && input.column.abs_diff(tree_edge) <= 1 => {
             pointer.dragging = Some(Divider::Tree);
@@ -331,6 +338,17 @@ fn divider_drag(panes: &Layout, pointer: &mut Pointer, input: Input) -> Option<O
         Kind::LeftDown if beside_ai && input.column.abs_diff(ai_edge) <= 1 => {
             pointer.dragging = Some(Divider::Ai);
             Some(Outcome::default())
+        }
+        Kind::LeftDown if above_strip => {
+            pointer.dragging = Some(Divider::Strip);
+            Some(Outcome::default())
+        }
+        // Unclamped: the height is state, and `update` bounds it against the
+        // screen it was dragged on.
+        Kind::LeftDrag if pointer.dragging == Some(Divider::Strip) => {
+            Some(Outcome::of(vec![Event::DragStrip(u32::from(
+                panes.terminal.bottom().saturating_sub(input.row),
+            ))]))
         }
         Kind::LeftDrag if pointer.dragging == Some(Divider::Tree) => {
             let width = input.column.saturating_sub(panes.tree.x) + 1;
@@ -2127,6 +2145,103 @@ mod tests {
             },
         );
         assert_eq!(outcome.events, vec![Event::DragAiDivider(40)]);
+    }
+
+    /// The Strip's top border is the handle, and the height it names is the
+    /// rows from the pointer to the screen's bottom, left for `update` to
+    /// clamp. The row above it is the editor's, whose buffer dots stay
+    /// clickable.
+    #[test]
+    fn the_border_above_the_strip_is_grabbed_and_names_a_height() {
+        let state = workspace();
+        // 26 rows: the Strip is rows 18 to 25.
+        let panes = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        let mut pointer = Pointer::default();
+        on_mouse(
+            &state,
+            &panes,
+            &mut pointer,
+            Input {
+                kind: Kind::LeftDown,
+                column: 50,
+                row: 17,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert_eq!(pointer.dragging, None);
+        let mut pointer = Pointer::default();
+        let press = on_mouse(
+            &state,
+            &panes,
+            &mut pointer,
+            Input {
+                kind: Kind::LeftDown,
+                column: 50,
+                row: 18,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert!(press.events.is_empty(), "a press clicked through");
+        assert_eq!(pointer.dragging, Some(Divider::Strip));
+        let drag = on_mouse(
+            &state,
+            &panes,
+            &mut pointer,
+            Input {
+                kind: Kind::LeftDrag,
+                column: 50,
+                row: 10,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert_eq!(drag.events, vec![Event::DragStrip(16)]);
+    }
+
+    /// A tall AI pane runs past the Strip, so its columns on that row are the
+    /// AI pane's, not the handle.
+    #[test]
+    fn a_tall_ai_pane_is_not_the_border_above_the_strip() {
+        let tall = Shapes {
+            ai: AiPane::Tall,
+            ..Shapes::default()
+        };
+        let panes = panes(120, 26, 30, None, 0, 0, tall);
+        let mut pointer = Pointer::default();
+        on_mouse(
+            &workspace(),
+            &panes,
+            &mut pointer,
+            Input {
+                kind: Kind::LeftDown,
+                column: panes.ai.x + 2,
+                row: panes.terminal.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert_eq!(pointer.dragging, None);
+    }
+
+    /// The Corner's top border is the Strip's too, and its icons stay clickable.
+    #[test]
+    fn the_corners_border_is_not_the_border_above_the_strip() {
+        let shapes = Shapes {
+            corner: crate::layout::Corner::Risk,
+            ..Shapes::default()
+        };
+        let panes = panes(120, 26, 30, None, 0, 0, shapes);
+        let mut pointer = Pointer::default();
+        on_mouse(
+            &workspace(),
+            &panes,
+            &mut pointer,
+            Input {
+                kind: Kind::LeftDown,
+                column: 5,
+                row: panes.corner.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert_eq!(pointer.dragging, None);
     }
 
     /// The terminal runs the full width beneath, so its rows must reach the

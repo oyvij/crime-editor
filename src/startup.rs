@@ -1496,6 +1496,7 @@ fn initial_state(
         // Absent until the AI pane's edge has been dragged, which is what the
         // layout reads as its share of the screen.
         ai_width: saved_number(input.state_json.as_deref(), "ai_width"),
+        strip_height: saved_number(input.state_json.as_deref(), "strip_height"),
         // Beside the editor unless the project was last worked in the tall
         // shape — including state recorded before `:tall` existed, which names
         // no shape at all.

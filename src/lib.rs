@@ -582,6 +582,8 @@ pub enum Event {
     /// A width rather than a column, because the tree's divider moves either
     /// side of it and the pane is meant to keep the size it was given.
     DragAiDivider(u32),
+    /// The border above the Strip was dragged: how many rows tall it asks to be.
+    DragStrip(u32),
     Copy,
     /// Ctrl+V or Command+V: paste whatever the clipboard holds. The text is not
     /// here because only the edge can read it — the core answers with
@@ -1683,6 +1685,12 @@ pub struct State {
     pub ai_width: Option<u32>,
     /// Whether that column stops above the terminal or runs the whole height.
     pub ai_pane: layout::AiPane,
+    /// How tall the Strip is, once the border above it has been dragged, and
+    /// `None` until then. Clamped here on every drag and every resize rather
+    /// than only where it is drawn, so what is remembered is what was seen.
+    pub strip_height: Option<u32>,
+    /// Which group the Strip is showing.
+    pub strip: layout::Group,
     pub terminal_mouse: mouse::Encoding,
     /// The terminal strip's shells, side by side, and what each is doing.
     /// Told by the edge — it starts them, watches them exit and asks the OS
@@ -2163,6 +2171,8 @@ impl Default for State {
             tree_divider: 30,
             ai_width: None,
             ai_pane: layout::AiPane::Beside,
+            strip_height: None,
+            strip: layout::Group::Shells,
             corner: layout::Corner::Hidden,
             risk_all: false,
             risk_selection: 0,
@@ -4014,13 +4024,23 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
     Ok(settle(next, effects, wheeled))
 }
 
-/// Copy, DragAiDivider, DragDivider, Resized, RightClick
+/// Copy, DragAiDivider, DragDivider, DragStrip, Resized, RightClick
 fn on_resized(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::Resized { width, height } => {
             next.screen_width = width;
             next.screen_height = height;
+            next.strip_height = state
+                .strip_height
+                .map(|rows| u32::from(layout::strip_height(height, rows as u16)));
             vec![]
+        }
+
+        Event::DragStrip(rows) => {
+            let rows =
+                layout::strip_height(state.screen_height, rows.min(u32::from(u16::MAX)) as u16);
+            next.strip_height = Some(u32::from(rows));
+            vec![Effect::SaveState(state_json(&next))]
         }
 
         // No context menus: every action lives in the toolbar and the keyboard.
@@ -7967,6 +7987,7 @@ fn state_json(state: &State) -> String {
         "expanded": expanded,
         "tree_divider": state.tree_divider,
         "ai_width": state.ai_width,
+        "strip_height": state.strip_height,
         "ai_pane": format!("{:?}", state.ai_pane),
         "corner": format!("{:?}", state.corner),
         "cheatsheet": state.cheatsheet,
@@ -8249,6 +8270,15 @@ fn mouse_encoding(state: &State, pane: Pane) -> mouse::Encoding {
     }
 }
 
+/// The Group tabs on the Strip's top border, in the order they are drawn, and
+/// whether each is lit — the one lit being the group the Strip shows.
+pub fn group_tabs(state: &State) -> Vec<(layout::Group, bool)> {
+    [layout::Group::Shells]
+        .into_iter()
+        .map(|group| (group, group == state.strip))
+        .collect()
+}
+
 /// Where the panes are, for the two things the core measures against them: how
 /// many rows a list shows, and how many rows the Risk list shows. `ui` derives
 /// its own rectangles from the same function — one layout, so a clamp and a
@@ -8264,6 +8294,7 @@ fn panes_of(state: &State) -> layout::Layout {
         layout::Shapes {
             ai: state.ai_pane,
             corner: state.corner,
+            strip: state.strip_height.map(|height| height as u16),
         },
     )
 }
@@ -8550,6 +8581,7 @@ pub fn preview_columns(state: &State) -> usize {
         layout::Shapes {
             ai: state.ai_pane,
             corner: state.corner,
+            strip: state.strip_height.map(|height| height as u16),
         },
     );
     // Borders only. A Preview has no gutter at all — `layout::gutter` is where

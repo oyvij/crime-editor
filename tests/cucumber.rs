@@ -481,6 +481,7 @@ impl VardeWorld {
             layout::Shapes {
                 ai: self.state.ai_pane,
                 corner: self.state.corner,
+                strip: self.state.strip_height.map(|height| height as u16),
             },
         )
     }
@@ -3898,6 +3899,107 @@ fn ai_pane_width(world: &mut VardeWorld, columns: u16) {
 #[when(expr = "I make the AI pane tall from the command line")]
 fn make_ai_pane_tall(world: &mut VardeWorld) {
     world.send(Event::ToggleTallAi);
+}
+
+// ---- F45: the Strip ----
+
+/// A `[dap.<language>]` row in the programs template's layer, which is where
+/// ADR 0021 puts a Debug adapter.
+#[given(expr = "a Debug adapter for {string} is configured")]
+fn debug_adapter_configured(world: &mut VardeWorld, language: String) {
+    let row = format!("[dap.{language}]\ncommand = \"{language}-adapter\"");
+    world.startup.global_config = Some(match world.startup.global_config.take() {
+        Some(config) => format!("{config}\n{row}"),
+        None => row,
+    });
+}
+
+/// A World starts with none, and nothing in these steps starts one.
+#[given(expr = "no Debug session exists")]
+fn no_debug_session(_world: &mut VardeWorld) {}
+
+#[given(expr = "the screen is {int} columns by {int} rows")]
+#[when(expr = "the screen is resized to {int} columns by {int} rows")]
+fn screen_columns_by_rows(world: &mut VardeWorld, columns: u16, rows: u16) {
+    world.send(Event::Resized {
+        width: columns,
+        height: rows,
+    });
+}
+
+#[given(expr = "the Strip is {int} rows tall")]
+fn strip_is(world: &mut VardeWorld, rows: u32) {
+    world.state.strip_height = Some(rows);
+}
+
+/// Through the hit-test, from the Strip's own top border, so the handle is
+/// one a pointer can reach.
+#[when(expr = "I drag the border above the Strip {word} {int} rows")]
+fn drag_strip(world: &mut VardeWorld, way: String, rows: u16) {
+    let border = world.panes().terminal.y;
+    let to = match way.as_str() {
+        "up" => border.saturating_sub(rows),
+        "down" => border + rows,
+        other => panic!("no direction {other:?}"),
+    };
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, 2, border);
+    world.report(mouse::Kind::LeftDrag, 2, to);
+    world.report(mouse::Kind::LeftUp, 2, to);
+}
+
+/// The state and the rectangle both: what is remembered has to be what is
+/// drawn.
+#[then(expr = "the Strip is {int} rows tall")]
+fn strip_should_be(world: &mut VardeWorld, rows: u16) {
+    assert_eq!(world.state.strip_height, Some(u32::from(rows)));
+    assert_eq!(world.panes().terminal.height, rows);
+}
+
+#[then(expr = "the Strip is at its least height")]
+fn strip_is_least(world: &mut VardeWorld) {
+    strip_should_be(world, layout::STRIP_LEAST);
+}
+
+#[then(expr = "the area above the Strip is at its least height")]
+fn top_is_least(world: &mut VardeWorld) {
+    let (_, height) = world.screen();
+    strip_should_be(world, height - layout::TOP_LEAST);
+    assert_eq!(world.panes().terminal.y, layout::TOP_LEAST);
+}
+
+#[then(expr = "the project {string} records the Strip as {int} rows tall")]
+fn records_strip(world: &mut VardeWorld, _file: String, rows: u64) {
+    let saved: serde_json::Value =
+        serde_json::from_str(world.startup.state_json.as_deref().expect("state saved"))
+            .expect("json");
+    assert_eq!(saved["strip_height"].as_u64(), Some(rows));
+}
+
+#[then(expr = "the Group tabs are:")]
+fn group_tabs_are(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let tabs: Vec<String> = varde::group_tabs(&world.state)
+        .iter()
+        .map(|(group, _)| format!("{group:?}"))
+        .collect();
+    assert_eq!(tabs, expected);
+}
+
+#[then(expr = "the Strip shows the Shell group")]
+fn strip_shows_shells(world: &mut VardeWorld) {
+    assert_eq!(world.state.strip, layout::Group::Shells);
+    let lit: Vec<layout::Group> = varde::group_tabs(&world.state)
+        .into_iter()
+        .filter_map(|(group, lit)| lit.then_some(group))
+        .collect();
+    assert_eq!(lit, vec![layout::Group::Shells]);
 }
 
 // ---- F38: terminal splits ----
@@ -7889,6 +7991,7 @@ fn editor_pane_is_columns_wide(world: &mut VardeWorld, columns: u16) {
                 layout::Shapes {
                     ai: world.state.ai_pane,
                     corner: world.state.corner,
+                    strip: world.state.strip_height.map(|height| height as u16),
                 },
             )
             .editor

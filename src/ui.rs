@@ -134,6 +134,7 @@ pub fn areas(area: Rect, state: &State) -> Areas {
         layout::Shapes {
             ai: state.ai_pane,
             corner: state.corner,
+            strip: state.strip_height.map(|height| height as u16),
         },
     );
     Areas {
@@ -220,6 +221,7 @@ pub fn draw(
             *area,
         );
     }
+    group_tabs(frame, state, areas.panes.terminal);
     // Zero-width while the corner is empty, so there is nothing to draw and
     // nothing to clear: the shell already has the columns back. Exhaustive on
     // the occupant, so a new pane in that slot is a compiler error rather than
@@ -2283,6 +2285,34 @@ fn right_title(state: &State, room: usize, width: u16) -> Line<'static> {
         spans.push(Span::styled("\u{2500}", gap));
     }
     Line::from(spans).right_aligned()
+}
+
+fn group_tabs(frame: &mut Frame, state: &State, strip: Area) {
+    let tabs = varde::group_tabs(state);
+    let labels: Vec<String> = tabs
+        .iter()
+        .map(|(group, _)| format!(" {} ", group.label()))
+        .collect();
+    let width = layout::strip_width(&labels);
+    let Some(mut x) = strip.right().saturating_sub(1).checked_sub(width) else {
+        return;
+    };
+    // Each label on its own, so the column of border after it is left as the
+    // split drew it, in the split's own colour.
+    for ((_, lit), label) in tabs.iter().zip(labels) {
+        let style = match lit {
+            true => Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::REVERSED),
+            false => Style::default().fg(Color::DarkGray),
+        };
+        let columns = label.width() as u16;
+        frame.render_widget(
+            Span::styled(label, style),
+            Rect::new(x, strip.y, columns, 1),
+        );
+        x += columns + 1;
+    }
 }
 
 /// One Chip as drawn: its glyph in its hue and its keys dimmer, dimmed whole

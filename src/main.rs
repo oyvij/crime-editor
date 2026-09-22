@@ -2354,6 +2354,7 @@ fn route_mouse(state: &State, edge: &mut Edge, input: mouse::Input, queue: &mut 
         layout::Shapes {
             ai: state.ai_pane,
             corner: state.corner,
+            strip: state.strip_height.map(|height| height as u16),
         },
     );
     let outcome = mouse::on_mouse(state, &panes, &mut edge.pointer, input);
