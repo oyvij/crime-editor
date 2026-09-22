@@ -637,6 +637,10 @@ struct Edge {
     /// never remembers that a process exists — the failure `ai_running` was, in
     /// a second shape (`docs/adr/0011-a-language-server-is-a-second-hosted-child.md`).
     servers: BTreeMap<String, rpc::Server>,
+    /// The Debug adapter, held for as long as it is alive — the one fact about
+    /// a Debug session only the edge can observe, told to the core as
+    /// `Event::DapStarted` and `Event::DapGone`.
+    adapter: Option<rpc::Adapter>,
     /// Which of the configured commands a probe of this process's `PATH` found,
     /// and `None` for "not probed since Tools was last opened" —
     /// which is what makes reopening the list a fresh answer rather than a
@@ -799,6 +803,7 @@ fn run(
         candidates_due: None,
         hover_due: None,
         servers: BTreeMap::new(),
+        adapter: None,
         on_path: None,
         git: None,
         facts: None,
@@ -888,6 +893,7 @@ fn run(
         dirty |= queue_due_windows(&mut edge, &mut queue);
         dirty |= drain_panes(&state, &mut edge, &mut queue);
         dirty |= drain_servers(&mut edge, &mut queue);
+        dirty |= drain_adapter(&mut edge, &mut queue);
         start_voice(&state, &mut edge);
         reap_player(&mut edge, &mut queue);
         queue_position(&edge, &mut last_position, &mut queue);
@@ -1239,6 +1245,24 @@ fn drain_servers(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
         queue.push_back(Event::LspGone {
             language,
             why: varde::lsp::Gone::Exited,
+        });
+    }
+    dirty
+}
+
+/// Whatever the Debug adapter has said since the last pass, and whether it is
+/// still there — `drain_servers` for the one adapter a session holds.
+fn drain_adapter(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
+    let Some(adapter) = edge.adapter.as_mut() else {
+        return false;
+    };
+    let arrived = adapter.drain();
+    let dirty = !arrived.is_empty() || !adapter.alive;
+    queue.extend(arrived.into_iter().map(|json| Event::DapReceived { json }));
+    if !adapter.alive {
+        edge.adapter = None;
+        queue.push_back(Event::DapGone {
+            why: varde::debug::Gone::Exited,
         });
     }
     dirty
@@ -2399,7 +2423,8 @@ fn grid_lines(edge: &Edge, pane: Pane, split: usize, upto: usize) -> Option<Vec<
         | Pane::Risk
         | Pane::Buffers
         | Pane::History
-        | Pane::Breakpoints => return None,
+        | Pane::Breakpoints
+        | Pane::Frames => return None,
     };
     let (rows, columns) = screen.size();
     // Absolutely indexed from the grid's first row, because that is what the
@@ -2507,7 +2532,8 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
             | Pane::Risk
             | Pane::Buffers
             | Pane::History
-            | Pane::Breakpoints => {}
+            | Pane::Breakpoints
+            | Pane::Frames => {}
         },
         other => return Some(other),
     }
@@ -2600,6 +2626,55 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                     language,
                     why: varde::lsp::Gone::FailedToStart,
                 }),
+            }
+        }
+        Effect::StartDap { command, args } => {
+            // Truncated per spawn, for the reason a server's log is.
+            let log = varde_dir(&edge.root, edge.sidecar.as_deref()).join("dap.log");
+            let log = match std::fs::File::create(&log) {
+                Ok(file) => Some(file),
+                Err(error) => {
+                    edge.status = Status {
+                        text: format!("could not open {}: {error}", log.display()),
+                        tone: ui::Tone::Warning,
+                    };
+                    None
+                }
+            };
+            match rpc::Adapter::spawn(&command, &args, &edge.root, log) {
+                Ok(adapter) => {
+                    edge.adapter = Some(adapter);
+                    queue.push_back(Event::DapStarted);
+                }
+                // What the spawn said, which only the edge can see: a command
+                // that is not there is the one the reader fixes by installing.
+                Err(error) => queue.push_back(Event::DapGone {
+                    why: match error.kind() {
+                        std::io::ErrorKind::NotFound => varde::debug::Gone::Missing,
+                        _ => varde::debug::Gone::FailedToStart,
+                    },
+                }),
+            }
+        }
+        Effect::DapSend { json } => match edge.adapter.as_mut() {
+            Some(adapter) => {
+                adapter.send(&json);
+                if !adapter.alive {
+                    edge.adapter = None;
+                    queue.push_back(Event::DapGone {
+                        why: varde::debug::Gone::Exited,
+                    });
+                }
+            }
+            None => queue.push_back(Event::DapGone {
+                why: varde::debug::Gone::Exited,
+            }),
+        },
+        Effect::StopDap => {
+            if edge.adapter.take().is_some() {
+                queue.push_back(Event::DapGone {
+                    why: varde::debug::Gone::Exited,
+                });
             }
         }
         // Asked for, so the answer kept from the list opening is dropped and
@@ -3887,6 +3962,26 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
     (
         "language-server-stopped",
         "The language server stopped — see .varde/lsp-<language>.log; no diagnostics, hover or completion until it is restarted",
+        ui::Tone::Warning,
+    ),
+    (
+        "no-debug-adapter",
+        "No Debug adapter — install it from Tools (Ctrl+Space v)",
+        ui::Tone::Warning,
+    ),
+    (
+        "debug-adapter-failed",
+        "The Debug adapter could not be started — its log is .varde/dap.log",
+        ui::Tone::Warning,
+    ),
+    (
+        "debug-adapter-exited",
+        "The Debug adapter stopped, and the Debug session with it — its log is .varde/dap.log",
+        ui::Tone::Warning,
+    ),
+    (
+        "launch-failed",
+        "The Debug adapter would not start the program",
         ui::Tone::Warning,
     ),
     (

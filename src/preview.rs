@@ -150,6 +150,17 @@ pub enum Refusal {
     /// A Tools row taken whose install starts with a program this machine
     /// lacks. Nothing is written and nothing runs; the program is named.
     NeedsInstaller(String),
+    /// A Launch configuration started while a Debug session exists: there is
+    /// one session, and a second would be the session picker the spec declines.
+    SessionRunning,
+    /// No command runs the adapter a Launch configuration names — no
+    /// `[dap.*]` row, or a row whose command is not on this machine. Named.
+    NoDebugAdapter(String),
+    DebugAdapterFailed,
+    /// The adapter went away with a session still going.
+    DebugAdapterExited,
+    /// The adapter said no to starting the program, in its own words.
+    LaunchFailed(String),
 }
 
 impl Refusal {
@@ -162,6 +173,11 @@ impl Refusal {
             Refusal::ToolAlreadyInstalled => "tool-already-installed",
             Refusal::BrokenConfig(_) => "broken-config",
             Refusal::NeedsInstaller(_) => "needs-installer",
+            Refusal::SessionRunning => "debug-session-running",
+            Refusal::NoDebugAdapter(_) => "no-debug-adapter",
+            Refusal::DebugAdapterFailed => "debug-adapter-failed",
+            Refusal::DebugAdapterExited => "debug-adapter-exited",
+            Refusal::LaunchFailed(_) => "launch-failed",
         }
     }
 }

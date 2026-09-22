@@ -558,6 +558,16 @@ fn pressed(state: &State, panes: &Layout, pane: Pane, input: Input) -> Vec<Event
         (Pane::Buffers, _) => pressed_in_buffers(state, panes, input),
         (Pane::History, _) => pressed_in_history(state, panes, input),
         (Pane::Breakpoints, _) => pressed_in_breakpoints(state, panes, input),
+        (Pane::Frames, _) => {
+            let index = list_row(panes.corner, input.row, state.frames_scroll);
+            let on_a_row = input.row > panes.corner.y
+                && input.row < panes.corner.bottom().saturating_sub(1)
+                && index < crate::debug::frames(state).len();
+            match on_a_row {
+                true => vec![Event::ClickFrameRow(index)],
+                false => vec![Event::ClickPane(Pane::Frames)],
+            }
+        }
         // Which of the strip's shells was pressed, so a click in a split is
         // the keyboard moving to it — the one gesture that tells them apart.
         (Pane::Terminal, _) => vec![Event::FocusSplit(crate::layout::split_at(
@@ -701,7 +711,9 @@ fn dragged(
         // to rather than text somebody picked: there is nothing in them to
         // copy, and nothing to copy is not the same as copying whatever the
         // pane behind them holds.
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints => Outcome::default(),
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
+            Outcome::default()
+        }
         Pane::Editor => {
             // A drag that began in the mirror stays a travel however far the
             // pointer wanders, and a selection that wanders into the mirror
@@ -967,7 +979,8 @@ fn place_in(state: &State, panes: &Layout, pane: Pane, (column, row): (u16, u16)
         | Pane::Risk
         | Pane::Buffers
         | Pane::History
-        | Pane::Breakpoints => (0, 0),
+        | Pane::Breakpoints
+        | Pane::Frames => (0, 0),
     };
     Place {
         // Through `line_at_row`, not straight off the row: Story view draws
@@ -1023,7 +1036,9 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
             state.terminals.len(),
             state.split(),
         )),
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints => interior(panes.corner),
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
+            interior(panes.corner)
+        }
     }
 }
 

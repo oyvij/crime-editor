@@ -241,6 +241,9 @@ pub fn draw(
             layout::Corner::Breakpoints => {
                 frame.render_widget(breakpoints_widget(state, areas.corner.width), areas.corner)
             }
+            layout::Corner::Frames => {
+                frame.render_widget(frames_widget(state, areas.corner.width), areas.corner)
+            }
         }
     }
     let caret_is_free = state.modal == Modal::None && typing.is_none();
@@ -436,6 +439,7 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
             let height = frame.area().height;
             overlay(frame, "TOOLS", tool_lines(state, *row, height))
         }
+        Modal::Launches { row } => overlay(frame, "LAUNCH", launch_lines(state, *row)),
         Modal::Branches { refs, filter, row } => overlay(
             frame,
             "BRANCHES",
@@ -837,6 +841,51 @@ fn breakpoints_lines(state: &State, width: u16) -> Vec<Line<'static>> {
                 spans.push(Span::raw(" "));
             }
             Line::from(spans)
+        })
+        .collect()
+}
+
+/// One row per Frame of the Paused thread, the inspected one marked.
+fn frames_widget(state: &State, width: u16) -> Paragraph<'static> {
+    Paragraph::new(frames_lines(state, width))
+        .scroll((state.frames_scroll as u16, 0))
+        .block(pane_block("frames", state, Pane::Frames))
+}
+
+/// Split out of `frames_widget` for the reason `risk_lines` is: a `Paragraph`
+/// will not give its text back. The call's name first and its place after, the
+/// name cut before the place is: which call it is reads off the name, and the
+/// file and line are the Paused line the row would move to.
+fn frames_lines(state: &State, width: u16) -> Vec<Line<'static>> {
+    let inner = width.saturating_sub(2) as usize;
+    let chosen = varde::debug::paused_line(state);
+    varde::debug::frames(state)
+        .iter()
+        .enumerate()
+        .map(|(index, frame)| {
+            let mut style = match index == state.frames_selection {
+                true => Style::default().add_modifier(Modifier::REVERSED),
+                false => Style::default(),
+            };
+            let place = match &frame.file {
+                Some(file) => format!(
+                    " {}:{} ",
+                    file.file_name().unwrap_or_default().to_string_lossy(),
+                    frame.line
+                ),
+                None => " ".to_string(),
+            };
+            if chosen.is_some_and(|(file, line, _)| {
+                frame.file.as_deref() == Some(file) && frame.line == line
+            }) {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            let room = inner.saturating_sub(place.width() + 1);
+            let name = truncate(&frame.name, room);
+            Line::from(vec![
+                Span::styled(format!(" {name:<room$}"), style),
+                Span::styled(place, style.fg(Color::DarkGray)),
+            ])
         })
         .collect()
 }
@@ -1803,12 +1852,22 @@ fn editor_widget(
     // rows it leaves are numbered by the lines it did not hide.
     let hidden = varde::fold::hidden(state);
     let marks = varde::debug::marks(state);
+    let paused = varde::debug::paused_line(state)
+        .filter(|(file, _, _)| state.current_buffer.as_deref() == Some(*file));
     let lines: Vec<Line> = folded(lines, state)
         .into_iter()
         .zip((1..).filter(|number| !hidden.contains(number)))
-        .map(|(line, number)| match marks.get(&number) {
-            Some(mark) => with_breakpoint(line, *mark),
-            None => line,
+        .map(|(line, number)| {
+            let line = match marks.get(&number) {
+                Some(mark) => with_breakpoint(line, *mark),
+                None => line,
+            };
+            match paused {
+                Some((_, at, why)) if at == number => {
+                    on_paused_line(line, why, width, state.editor_theme != "light")
+                }
+                _ => line,
+            }
         })
         .collect();
     Paragraph::new(lines)
@@ -1982,6 +2041,43 @@ fn with_breakpoint(line: Line<'static>, mark: varde::debug::Mark) -> Line<'stati
     let mut drawn = vec![glyph, Span::styled(rest, first.style)];
     drawn.extend(spans);
     Line::from(drawn).style(style)
+}
+
+/// The line a Debug session is Paused on: its marker in the Breakpoint column,
+/// over any Breakpoint there, and its background across the pane's whole
+/// width rather than only under the text, so a short line reads as the line
+/// the program is on. An exception pause is the error colour's.
+fn on_paused_line(
+    line: Line<'static>,
+    why: varde::debug::Why,
+    width: u16,
+    dark: bool,
+) -> Line<'static> {
+    let tint = match (why, dark) {
+        (varde::debug::Why::Paused, true) => Color::Rgb(0x1e, 0x33, 0x4a),
+        (varde::debug::Why::Paused, false) => Color::Indexed(153),
+        (varde::debug::Why::Exception, true) => Color::Rgb(0x4a, 0x1e, 0x1e),
+        (varde::debug::Why::Exception, false) => Color::Indexed(224),
+    };
+    let marker = match why {
+        varde::debug::Why::Paused => Color::Yellow,
+        varde::debug::Why::Exception => Color::Red,
+    };
+    let mut spans = line.spans.into_iter();
+    let first = spans.next().unwrap_or_default();
+    let mut drawn = vec![
+        Span::styled("\u{2192}", Style::default().fg(marker)),
+        Span::styled(
+            first.content.chars().skip(1).collect::<String>(),
+            first.style,
+        ),
+    ];
+    drawn.extend(spans);
+    let used: usize = drawn.iter().map(|span| span.content.width()).sum();
+    drawn.push(Span::raw(
+        " ".repeat((width.saturating_sub(2) as usize).saturating_sub(used)),
+    ));
+    washed(&Line::from(drawn), tint)
 }
 
 /// What a folded block leaves at the end of the line that opens it: the one
@@ -2321,6 +2417,17 @@ fn refusal_spans(state: &State) -> Vec<Span<'static>> {
         varde::preview::Refusal::NeedsInstaller(installer) => {
             format!(" {installer} is not installed — install.sh installs package managers ")
         }
+        varde::preview::Refusal::SessionRunning => {
+            " a debug session is already running ".to_string()
+        }
+        varde::preview::Refusal::NoDebugAdapter(adapter) => {
+            format!(" no debug adapter: {adapter} — install it from Tools ")
+        }
+        varde::preview::Refusal::DebugAdapterFailed => {
+            " the debug adapter could not be started ".to_string()
+        }
+        varde::preview::Refusal::DebugAdapterExited => " the debug adapter stopped ".to_string(),
+        varde::preview::Refusal::LaunchFailed(why) => format!(" could not start: {why} "),
     };
     vec![Span::styled(wording, Style::default().fg(WARNING))]
 }
@@ -2933,7 +3040,7 @@ fn showing_cheatsheet(state: &State) -> bool {
 /// ones nothing else teaches you. Twenty-five Edit rows compete for sixteen on
 /// a 26-row screen, so the order is the whole of the answer.
 fn cheatsheet_rows(state: &State, height: u16) -> Vec<(String, Color)> {
-    let rows_for_view: Vec<(&str, &str)> = keys::cheatsheet()
+    let rows_for_view: Vec<(&str, &str)> = keys::cheatsheet(state)
         .filter(|(_, _, views)| state.cheatsheet && keys::applies_to(views, state.view))
         .map(|(keys, what, _)| (*keys, *what))
         .collect();
@@ -3951,6 +4058,7 @@ fn tool_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>>
                 match row.kind {
                     tools::Kind::Server => "Language servers",
                     tools::Kind::Formatter => "Formatters",
+                    tools::Kind::Adapter => "Debug adapters",
                     tools::Kind::Requirement => "Requirements",
                     tools::Kind::Speech => "Speech",
                 },
@@ -4009,6 +4117,36 @@ fn tool_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>>
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         keys::TOOL_LIST_KEYS
+            .iter()
+            .map(|(key, word)| format!("   {key}  {word}"))
+            .collect::<String>(),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines
+}
+
+/// The launch list: one row per Launch configuration, the branch picker's
+/// shape, and a list with none says where one is written.
+fn launch_lines(state: &State, selected: usize) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line> = varde::debug::launches(state)
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let cursor = match index == selected {
+                true => '>',
+                false => ' ',
+            };
+            Line::from(format!("{cursor} {name}"))
+        })
+        .collect();
+    if lines.is_empty() {
+        lines.push(Line::from(
+            "  No Launch configurations: name one as [launch.<name>] in a config file.",
+        ));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        keys::LAUNCH_LIST_KEYS
             .iter()
             .map(|(key, word)| format!("   {key}  {word}"))
             .collect::<String>(),
@@ -4746,6 +4884,22 @@ mod tests {
             .sum();
         // width - 2 for the borders, less two columns for the action.
         assert_eq!(before, (30 - 2) - 2);
+    }
+
+    /// The Paused line's marker takes the Breakpoint column and its wash runs
+    /// to the pane's right border, however short the line.
+    #[test]
+    fn the_paused_line_is_marked_and_washed_across_the_pane() {
+        let plain = Line::from(vec![Span::raw("   3 "), Span::raw("x")]);
+        let line = super::on_paused_line(plain, varde::debug::Why::Paused, 30, true);
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.starts_with("\u{2192}  3 x"), "{text:?}");
+        assert_eq!(text.width(), 30 - 2);
+        assert!(line.spans.iter().all(|span| span.style.bg.is_some()));
     }
 
     /// The Breakpoint list's row: its path and line, `stale` when it is, and

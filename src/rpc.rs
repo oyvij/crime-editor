@@ -1,4 +1,6 @@
-//! JSON-RPC over a child's stdio — the channel a language server speaks on.
+//! JSON-RPC over a child's stdio — the channel a language server speaks on —
+//! and the Debug Adapter Protocol over a Debug adapter's, which is a second
+//! channel rather than a reuse (ADR 0021).
 //!
 //! `pty.rs` is this pattern with the other framing: a child, a reader thread,
 //! and whatever arrived handed to the core as an event. The framing itself is
@@ -107,5 +109,129 @@ impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// A Debug adapter over its stdio: the same child, reader thread and drain as
+/// [`Server`], in the Debug Adapter Protocol's framing. That framing is LSP's
+/// `Content-Length` header, but a DAP message has no `jsonrpc` field, so
+/// `lsp_server` cannot read one and no crate frames it for a client
+/// (`docs/stack.md`).
+pub struct Adapter {
+    child: Child,
+    stdin: BufWriter<std::process::ChildStdin>,
+    incoming: Receiver<String>,
+    pub alive: bool,
+}
+
+impl Adapter {
+    pub fn spawn(
+        command: &str,
+        args: &[String],
+        cwd: &Path,
+        log: Option<File>,
+    ) -> std::io::Result<Self> {
+        let mut child = Command::new(command)
+            .args(args)
+            .current_dir(cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            // For the reason a server's does: this process's stderr is the
+            // screen.
+            .stderr(log.map_or_else(Stdio::null, Stdio::from))
+            .spawn()?;
+        let stdout = child.stdout.take().expect("a piped stdout");
+        let stdin = child.stdin.take().expect("a piped stdin");
+        let (sender, incoming) = channel();
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            // A stream that cannot be read as frames any more ends the
+            // conversation: every message after a desynchronised header is
+            // garbage, and the loss reaches the core as an adapter that is gone.
+            while let Some(json) = read_frame(&mut reader) {
+                if sender.send(json).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(Self {
+            child,
+            stdin: BufWriter::new(stdin),
+            incoming,
+            alive: true,
+        })
+    }
+
+    pub fn send(&mut self, json: &str) {
+        let written = write!(self.stdin, "Content-Length: {}\r\n\r\n{json}", json.len())
+            .and_then(|()| self.stdin.flush());
+        if written.is_err() {
+            self.alive = false;
+        }
+    }
+
+    pub fn drain(&mut self) -> Vec<String> {
+        let mut arrived = Vec::new();
+        loop {
+            match self.incoming.try_recv() {
+                Ok(json) => arrived.push(json),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.alive = false;
+                    break;
+                }
+            }
+        }
+        arrived
+    }
+}
+
+impl Drop for Adapter {
+    /// An adapter outliving its session holds a debugged program nobody can
+    /// see. `disconnect` has had its answer by the time a session lets it go.
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// One message off a `Content-Length` framed stream: headers to a blank line,
+/// then exactly that many bytes. `None` at the end of the stream or at
+/// anything that is not a frame.
+fn read_frame(reader: &mut impl std::io::BufRead) -> Option<String> {
+    let mut length = None;
+    loop {
+        let mut header = String::new();
+        if reader.read_line(&mut header).ok()? == 0 {
+            return None;
+        }
+        let header = header.trim_end();
+        if header.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                length = value.trim().parse::<usize>().ok();
+            }
+        }
+    }
+    let mut body = vec![0; length?];
+    reader.read_exact(&mut body).ok()?;
+    String::from_utf8(body).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_frame;
+
+    /// Two frames back to back, a header the framing does not know, and a
+    /// body holding a multi-byte character — the length counts bytes.
+    #[test]
+    fn frames_are_read_by_their_byte_length() {
+        let stream = "Content-Length: 12\r\n\r\n{\"seq\":\"é\"}Content-Type: x\r\ncontent-length: 2\r\n\r\n{}";
+        let mut reader = std::io::BufReader::new(stream.as_bytes());
+        assert_eq!(read_frame(&mut reader).as_deref(), Some("{\"seq\":\"é\"}"));
+        assert_eq!(read_frame(&mut reader).as_deref(), Some("{}"));
+        assert_eq!(read_frame(&mut reader), None);
     }
 }

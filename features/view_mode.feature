@@ -45,6 +45,7 @@ Feature: The command palette
       | Views   | s   | Story          |
       | Project | f   | Find           |
       | Project | v   | Tools          |
+      | Project | n   | Launch         |
       | Project | c   | Collapse       |
       | Help    | h   | Keys           |
       | Help    | u   | Update         |

@@ -206,6 +206,34 @@ Shipped rows:
 bytes do not say. A language with no row refuses `:format` out loud and names the table to write,
 e.g. `[formatter.txt] in .varde/config.toml`.
 
+### `[dap.<language>]`
+
+The Debug adapter a language is debugged with ([debugging.md](debugging.md)), spoken to over its
+standard input and output. The table name is the name a Launch configuration's `adapter` gives.
+
+| Key | Default | Type | Meaning |
+|---|---|---|---|
+| `command` | required after the merge | string | The adapter binary. |
+| `args` | `[]` | array of strings | Its arguments. |
+| `install.<os>` | per row | string | What puts `command` on this machine, run from Tools as on an `[lsp.*]` row. |
+
+Shipped rows:
+
+| Language | Command | Install |
+|---|---|---|
+| `rust` | `codelldb` | macOS/Linux: the latest release unpacked into `~/.varde/codelldb`, run by a script in `~/.local/bin` |
+
+### `[launch.<name>]`
+
+A named way to start a Debug session, allowed in the global file and the project's. A project entry
+beats a global one of the same name, key by key.
+
+| Key | Default | Type | Meaning |
+|---|---|---|---|
+| `adapter` | required after the merge | string | Which `[dap.*]` row runs the session. |
+| `request` | required after the merge | string | `launch` to start the program, `attach` to join one that is running. |
+| `args` | `{}` | table | Handed to the adapter as the request's arguments, untouched — each adapter documents its own. |
+
 ### `[speech]`
 
 What reads a Selection aloud. Explained in full in [reading-aloud.md](reading-aloud.md).

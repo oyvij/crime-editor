@@ -109,6 +109,9 @@ pub enum Pane {
     /// The Breakpoint list, in the same corner, for the same reason again: a
     /// row names a Breakpoint, which is a line to go to and a thing to remove.
     Breakpoints,
+    /// The Frames of a Paused Debug session, in the same corner: a row names a
+    /// call to inspect.
+    Frames,
 }
 
 /// One control in a Transport (`docs/adr/0022-every-action-has-a-chip.md`):
@@ -245,6 +248,9 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
             // "language" is already spent, and it must be reachable with no
             // modifier (R31.11).
             ('v', "Tools"),
+            // The palette's third face: the Launch configurations. `n` is the
+            // free letter in "launch".
+            ('n', "Launch"),
             ('c', "Collapse"),
         ],
     ),
@@ -290,15 +296,20 @@ pub fn palette_rows(screen: u16) -> Vec<(Option<char>, String)> {
     // The gaps between the groups carry nothing at all. The cancel line goes
     // next — Escape closes every box Varde has, so it is the one row a reader
     // can guess, which is the same argument that keeps it out of the
-    // cheatsheet. Only then is an entry dropped, and the last row says so: a
-    // command nobody can see is a command nobody uses, so losing one is
-    // announced rather than clipped in silence.
+    // cheatsheet. The headings after it. Only then is an entry dropped, and
+    // the last row says so: a command nobody can see is a command nobody uses,
+    // so losing one is announced rather than clipped in silence.
     let budget = screen.saturating_sub(2) as usize;
     if rows.len() > budget {
         rows.retain(|(key, row)| key.is_some() || !row.is_empty());
     }
     if rows.len() > budget {
         rows.pop();
+    }
+    // Then the headings: the letters still say what each entry is, and a
+    // heading is a label for rows rather than a thing to do.
+    if rows.len() > budget {
+        rows.retain(|(key, _)| key.is_some());
     }
     if rows.len() > budget {
         rows.truncate(budget);
@@ -373,6 +384,11 @@ pub enum Modal {
     /// beside the modal for the same reason: a selection that outlives the list
     /// is a selection in a list nobody can see.
     Tools {
+        row: usize,
+    },
+    /// The Launch configurations both config layers name, and which row Enter
+    /// starts — carried here for the reason [`Modal::Tools`] carries its row.
+    Launches {
         row: usize,
     },
     /// The branch picker `:story?` opens: the repository's branches, and which
@@ -587,6 +603,8 @@ pub enum Event {
     /// screen. Straight through the arm Enter takes, for the reason
     /// [`Event::ClickRiskRow`] is.
     ClickBreakpointRow(usize),
+    /// A click on a row of the Frames, the same shape again.
+    ClickFrameRow(usize),
     Scroll {
         pane: Pane,
         direction: Direction,
@@ -988,6 +1006,28 @@ pub enum Event {
         language: String,
         why: lsp::Gone,
     },
+    /// One message the Debug adapter sent, exactly as it arrived — the
+    /// language server's shape, for its reasons.
+    DapReceived {
+        json: String,
+    },
+    /// The edge holds the adapter a Debug session asked for, so the
+    /// conversation can begin against a process rather than against the
+    /// asking.
+    DapStarted,
+    /// The edge stopped holding the adapter — pushed from every site that
+    /// stops holding one, `AiExited`'s rule.
+    DapGone {
+        why: debug::Gone,
+    },
+    /// Start the named Launch configuration.
+    StartLaunch(String),
+    /// The launch list's arrows.
+    MoveLaunchRow(Direction),
+    /// F9: continue while Paused, pause while Running.
+    DebugResume,
+    /// Ctrl+F2: stop the Debug session.
+    DebugStop,
     /// Typing paused for as long as the window `Effect::DebounceCandidates`
     /// asked for, so what may follow what was typed is worth asking about.
     /// Sent by the edge, which holds the
@@ -1220,6 +1260,19 @@ pub enum Effect {
         command: String,
         args: Vec<String>,
     },
+    /// Start the Debug adapter a Launch configuration named. Whether it
+    /// started comes back as `Event::DapStarted` or `Event::DapGone`.
+    StartDap {
+        command: String,
+        args: Vec<String>,
+    },
+    /// One Debug Adapter Protocol message for the adapter, built here.
+    DapSend {
+        json: String,
+    },
+    /// Let the adapter go. The edge answers with `Event::DapGone`, as every
+    /// site that stops holding one does.
+    StopDap,
     /// Ask this process's `PATH` again, and say so when the answer has landed.
     /// The only producer is the Tools list's re-check: everywhere else the
     /// edge probes on its own, when the list opens. It answers with
@@ -1940,6 +1993,16 @@ pub struct State {
     /// The row the Breakpoint list highlights, and its first row on screen.
     pub breakpoints_selection: usize,
     pub breakpoints_scroll: usize,
+    /// The same two for the Frames.
+    pub frames_selection: usize,
+    pub frames_scroll: usize,
+    /// What runs each language's Debug adapter, and the Launch
+    /// configurations, as configuration named them — data for the reason
+    /// `servers` is (ADR 0021).
+    pub adapters: BTreeMap<String, startup::Adapter>,
+    pub launches: BTreeMap<String, startup::Launch>,
+    /// The Debug session, if one exists.
+    pub debug: Option<debug::Session>,
     /// How many ticks the edge has reported. The edge ticks only while it holds
     /// work, so this advances while a job runs and stands still otherwise —
     /// which is the whole of what the core knows about it
@@ -2218,6 +2281,11 @@ impl Default for State {
             history_scroll: 0,
             breakpoints_selection: 0,
             breakpoints_scroll: 0,
+            frames_selection: 0,
+            frames_scroll: 0,
+            adapters: BTreeMap::new(),
+            launches: BTreeMap::new(),
+            debug: None,
             terminal_mouse: mouse::Encoding::None,
             terminals: vec![Shell::Idle],
             terminal_split: 0,
@@ -2383,6 +2451,14 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
             next.history_scroll,
             next.history_selection.min(history_rows.saturating_sub(1)),
             history_rows,
+            corner_rows(&next),
+        );
+        let frame_rows = debug::frames(&next).len();
+        next.frames_selection = next.frames_selection.min(frame_rows.saturating_sub(1));
+        next.frames_scroll = layout::viewport(
+            next.frames_scroll,
+            next.frames_selection,
+            frame_rows,
             corner_rows(&next),
         );
         // Clamped here and not in the arms that remove one, so a Breakpoint
@@ -3025,6 +3101,10 @@ fn route_ai_spoke(state: &State, next: State, event: Event, wheeled: bool) -> An
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };
+    let declined = match on_debug(state, declined.0, declined.1, wheeled) {
+        Ok(answer) => return Ok(answer),
+        Err(declined) => declined,
+    };
     let declined = match on_reading(state, declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
@@ -3379,6 +3459,16 @@ fn on_key_3(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
             })
         }
 
+        // The Frames' `j` and `k`, as every list in the corner has.
+        Event::Key(key @ ('j' | 'k'))
+            if state.focus == Pane::Frames && state.modal == Modal::None =>
+        {
+            Ok(match key {
+                'j' => update(state, Event::MoveSelection(Direction::Down)),
+                _ => update(state, Event::MoveSelection(Direction::Up)),
+            })
+        }
+
         // The Breakpoint list's own keys: `j` and `k` as every list in the
         // corner has, and `d` and `D` for its two Chips — vim's delete, and
         // its shifted letter for the whole of it. Not in `CHEATSHEET`, for the
@@ -3446,6 +3536,10 @@ fn on_key_5(state: &State, mut next: State, event: Event, _wheeled: bool) -> Ans
             // exists is the edge's answer to the list being open (R31.23).
             if entry == "Tools" {
                 next.modal = Modal::Tools { row: 0 };
+                return Ok((next, vec![]));
+            }
+            if entry == "Launch" {
+                next.modal = Modal::Launches { row: 0 };
                 return Ok((next, vec![]));
             }
             next.modal = Modal::None;
@@ -3813,7 +3907,8 @@ fn on_submit_review(state: &State, mut next: State, event: Event, wheeled: bool)
             | Pane::Risk
             | Pane::Buffers
             | Pane::History
-            | Pane::Breakpoints => vec![],
+            | Pane::Breakpoints
+            | Pane::Frames => vec![],
         },
         Event::ClickLink { row, column } => editor::link_at(&row, column)
             .map(Effect::OpenUrl)
@@ -4018,7 +4113,12 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                         Some(bytes) => vec![Effect::SendKeys { pane, bytes }],
                         None => vec![],
                     },
-                    Pane::Tree | Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints => {
+                    Pane::Tree
+                    | Pane::Risk
+                    | Pane::Buffers
+                    | Pane::History
+                    | Pane::Breakpoints
+                    | Pane::Frames => {
                         vec![]
                     }
                 };
@@ -4074,6 +4174,15 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                         direction,
                         state.history_scroll,
                         state.visits.len(),
+                        corner_rows(state),
+                    );
+                    vec![]
+                }
+                Pane::Frames => {
+                    next.frames_scroll = wheeled_to(
+                        direction,
+                        state.frames_scroll,
+                        debug::frames(state).len(),
                         corner_rows(state),
                     );
                     vec![]
@@ -5992,6 +6101,43 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
     Ok(settle(next, effects, wheeled))
 }
 
+/// DapReceived, DapStarted, DapGone, StartLaunch, MoveLaunchRow, DebugResume,
+/// DebugStop
+fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
+    let effects = match event {
+        Event::DapReceived { json } => debug::received(&mut next, &json),
+        Event::DapStarted => debug::started(&mut next),
+        // An adapter let go after its session ended is the tail of whatever
+        // ended it, so the footer keeps saying why: a launch the adapter
+        // refused would otherwise be explained for exactly as long as it took
+        // the edge to report the process gone.
+        Event::DapGone { .. } if state.debug.is_none() => {
+            next.refusal = state.refusal.clone();
+            vec![]
+        }
+        Event::DapGone { why } => debug::gone(&mut next, why),
+        Event::StartLaunch(name) => {
+            next.modal = Modal::None;
+            debug::start(&mut next, &name)
+        }
+        Event::DebugResume => debug::resume(&mut next),
+        Event::DebugStop => debug::stop(&mut next),
+        Event::MoveLaunchRow(direction) => {
+            let last = state.launches.len().saturating_sub(1);
+            if let Modal::Launches { row } = &mut next.modal {
+                *row = match direction {
+                    Direction::Down => (*row + 1).min(last),
+                    Direction::Up => row.saturating_sub(1),
+                    _ => (*row).min(last),
+                };
+            }
+            vec![]
+        }
+        other => return Err((next, other)),
+    };
+    Ok(settle(next, effects, wheeled))
+}
+
 /// LspReceived, LspGone, CandidatesDue, PointerMoved, HoverDue, FormatBuffer, FormatterAnswered,
 /// MoveCandidate, AcceptCandidate, NextStop, MoveToolRow, InstallTool,
 /// GlobalConfigRead, InstallEnded, RecheckTool, PathProbed
@@ -7539,6 +7685,16 @@ fn on_move_selection(state: &State, mut next: State, event: Event, wheeled: bool
             vec![]
         }
 
+        Event::MoveSelection(direction) if state.focus == Pane::Frames => {
+            let last = debug::frames(state).len().saturating_sub(1);
+            next.frames_selection = match direction {
+                Direction::Down => (state.frames_selection + 1).min(last),
+                Direction::Up => state.frames_selection.saturating_sub(1),
+                _ => state.frames_selection.min(last),
+            };
+            vec![]
+        }
+
         Event::MoveSelection(direction) if state.focus == Pane::Breakpoints => {
             let last = state.breakpoints.len().saturating_sub(1);
             next.breakpoints_selection = match direction {
@@ -7727,6 +7883,10 @@ fn on_activate_2(state: &State, mut next: State, event: Event, wheeled: bool) ->
             return Ok((gone, effects));
         }
 
+        Event::Activate if state.focus == Pane::Frames => {
+            debug::choose(&mut next, state.frames_selection)
+        }
+
         // The file opened if it is not, and the cursor put on the
         // Breakpoint's line either way — the Risk list's Enter below, for a
         // line rather than a Function.
@@ -7783,6 +7943,12 @@ fn on_activate_2(state: &State, mut next: State, event: Event, wheeled: bool) ->
             let (mut opened, effects) = update(&next, Event::Activate);
             opened.focus = Pane::History;
             return Ok((opened, effects));
+        }
+
+        Event::ClickFrameRow(index) => {
+            next.focus = Pane::Frames;
+            next.frames_selection = index;
+            debug::choose(&mut next, index)
         }
 
         Event::ClickBreakpointRow(index) => {
@@ -7870,7 +8036,8 @@ fn on_bytes(state: &State, next: State, event: Event, wheeled: bool) -> Answered
             | Pane::Risk
             | Pane::Buffers
             | Pane::History
-            | Pane::Breakpoints => vec![],
+            | Pane::Breakpoints
+            | Pane::Frames => vec![],
         },
 
         other => return Err((next, other)),
@@ -7894,7 +8061,8 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 | Pane::Risk
                 | Pane::Buffers
                 | Pane::History
-                | Pane::Breakpoints => None,
+                | Pane::Breakpoints
+                | Pane::Frames => None,
             };
             match asked {
                 Some(paste) => vec![Effect::SendKeys {
@@ -8240,7 +8408,7 @@ fn state_json(state: &State) -> String {
         "ai_width": state.ai_width,
         "strip_height": state.strip_height,
         "ai_pane": format!("{:?}", state.ai_pane),
-        "corner": format!("{:?}", state.corner),
+        "corner": format!("{:?}", debug::resting_corner(state)),
         "cheatsheet": state.cheatsheet,
         "editor_field": state.editor_field,
         "minimap": state.minimap,
@@ -8534,7 +8702,8 @@ fn mouse_encoding(state: &State, pane: Pane) -> mouse::Encoding {
         | Pane::Risk
         | Pane::Buffers
         | Pane::History
-        | Pane::Breakpoints => mouse::Encoding::None,
+        | Pane::Breakpoints
+        | Pane::Frames => mouse::Encoding::None,
     }
 }
 

@@ -92,6 +92,7 @@ The palette is grouped. Press the letter, or click the row:
 | | `s` | Story | switch to Story view |
 | Project | `f` | Find | project-wide search, the same as `Ctrl+F` |
 | | `v` | Tools | everything Varde runs, and what is installed ([language-intelligence.md](language-intelligence.md)) |
+| | `n` | Launch | start a Launch configuration under the debugger ([debugging.md](debugging.md)) |
 | | `c` | Collapse | close every open folder in the tree |
 | Help | `h` | Keys | take the Cheatsheet down or put it back, the same as `:help` |
 | | `u` | Update | rebuild Varde from its checkout, the same as `:update` |

@@ -191,6 +191,7 @@ pub enum Corner {
     Buffers,
     History,
     Breakpoints,
+    Frames,
 }
 
 impl Corner {
@@ -206,6 +207,7 @@ impl Corner {
             Corner::Buffers => Some(Pane::Buffers),
             Corner::History => Some(Pane::History),
             Corner::Breakpoints => Some(Pane::Breakpoints),
+            Corner::Frames => Some(Pane::Frames),
         }
     }
 }

@@ -12,6 +12,7 @@ use std::path::Path;
 pub enum Kind {
     Server,
     Formatter,
+    Adapter,
     Requirement,
     Speech,
 }
@@ -21,6 +22,7 @@ impl Kind {
         match self {
             Kind::Server => "language-servers",
             Kind::Formatter => "formatters",
+            Kind::Adapter => "debug-adapters",
             Kind::Requirement => "requirements",
             Kind::Speech => "speech",
         }
@@ -33,6 +35,7 @@ impl Kind {
         match self {
             Kind::Server => Some("lsp"),
             Kind::Formatter => Some("formatter"),
+            Kind::Adapter => Some("dap"),
             Kind::Requirement => Some("facts"),
             Kind::Speech => None,
         }
@@ -202,6 +205,17 @@ pub fn rows(state: &State) -> Vec<ToolRow> {
         |_, formatter| match on_path(&formatter.command) {
             true => Availability::Installed,
             false => absent(formatter.install.get(&state.os)),
+        },
+    ));
+    rows.extend(group(
+        Kind::Adapter,
+        &state.adapters,
+        template.adapters(),
+        |adapter| adapter.command.clone(),
+        |adapter| adapter.install.get(&state.os).cloned(),
+        |_, adapter| match on_path(&adapter.command) {
+            true => Availability::Installed,
+            false => absent(adapter.install.get(&state.os)),
         },
     ));
     // A requirement is a search, not a command: what it reads is whether the

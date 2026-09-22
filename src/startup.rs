@@ -588,6 +588,18 @@ install.macos = "npm install -g prettier"
 install.linux = "npm install -g prettier"
 install.windows = "npm install -g prettier"
 
+# A Debug adapter per language, spoken to over its standard streams
+# (`docs/adr/0021-a-debug-adapter-is-a-hosted-child-reached-three-ways.md`).
+# codelldb has spoken stdio since 1.11. It ships as a VS Code extension and
+# nothing packages it, so the install unpacks the release into
+# `~/.varde/codelldb` and puts a two-line script on `PATH` that runs it from
+# there: the adapter finds its own LLDB beside its real path, which a symlink
+# is not on every OS.
+[dap.rust]
+command = "codelldb"
+install.macos = "curl -sL --create-dirs https://github.com/vadimcn/codelldb/releases/latest/download/codelldb-darwin-$(uname -m | sed 's/x86_64/x64/').vsix -o ~/.varde/codelldb.vsix && unzip -qo ~/.varde/codelldb.vsix -d ~/.varde/codelldb && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec %s \"$@\"\\n' ~/.varde/codelldb/extension/adapter/codelldb > ~/.local/bin/codelldb && chmod +x ~/.local/bin/codelldb"
+install.linux = "curl -sL --create-dirs https://github.com/vadimcn/codelldb/releases/latest/download/codelldb-linux-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/').vsix -o ~/.varde/codelldb.vsix && unzip -qo ~/.varde/codelldb.vsix -d ~/.varde/codelldb && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec %s \"$@\"\\n' ~/.varde/codelldb/extension/adapter/codelldb > ~/.local/bin/codelldb && chmod +x ~/.local/bin/codelldb"
+
 # What reads a Selection aloud (F35). The synthesizer, the voice and the player
 # are named here and in no branch anywhere: a voice nobody has tried works for
 # the same reason an untried AI CLI does
@@ -1081,6 +1093,40 @@ pub struct Formatter {
     pub extensions: Vec<String>,
 }
 
+/// What runs a language's Debug adapter, as configuration named it — the
+/// `[dap.*]` row ADR 0021 puts every adapter in, so no arm names one. Spoken
+/// to over its standard streams.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Adapter {
+    /// Defaulted and held to being named by the merged table, for the reason
+    /// [`Server::command`] is.
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub install: BTreeMap<String, String>,
+}
+
+/// A named way to start a Debug session: which adapter, whether it launches
+/// or attaches, and the arguments that request carries. Allowed in either
+/// layer, and the project's beats the global one of the same name because the
+/// merge is key by key.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Launch {
+    #[serde(default)]
+    pub adapter: String,
+    /// `launch` or `attach`, sent as the request's own name: the protocol has
+    /// the two, and a Scenario naming a third reaches an adapter that says no.
+    #[serde(default)]
+    pub request: String,
+    /// Handed to the adapter untouched, for the reason a server's
+    /// `initialization_options` are: what an adapter needs to be told is its
+    /// own business, so Varde reads none of it.
+    #[serde(default)]
+    pub args: serde_json::Map<String, serde_json::Value>,
+}
+
 /// A path on this machine a server's configuration may name, and how to find
 /// it. Data for the reason a command is data: which marker file means "this
 /// directory configures the language" is the whole of what differs between
@@ -1153,7 +1199,7 @@ pub enum FactValue {
 /// them is a deserialize the `toml` crate can fault with a span rather than a
 /// walk over `Value`s that has to decide what to do about each wrong shape
 /// itself.
-#[derive(serde::Deserialize)]
+#[derive(Default, serde::Deserialize)]
 struct Layer {
     #[serde(default)]
     lsp: BTreeMap<String, Server>,
@@ -1161,6 +1207,10 @@ struct Layer {
     formatter: BTreeMap<String, Formatter>,
     #[serde(default)]
     facts: BTreeMap<String, Fact>,
+    #[serde(default)]
+    dap: BTreeMap<String, Adapter>,
+    #[serde(default)]
+    launch: BTreeMap<String, Launch>,
 }
 
 /// The same two tables read off a layer's source text, keeping where each entry
@@ -1176,6 +1226,10 @@ struct SourceLayer {
     formatter: BTreeMap<String, toml::Spanned<Formatter>>,
     #[serde(default)]
     facts: BTreeMap<String, toml::Spanned<Fact>>,
+    #[serde(default)]
+    dap: BTreeMap<String, toml::Spanned<Adapter>>,
+    #[serde(default)]
+    launch: BTreeMap<String, toml::Spanned<Launch>>,
 }
 
 /// Where each layer named an `[lsp.*]` or `[facts.*]` entry: the dotted name
@@ -1200,20 +1254,14 @@ impl Config {
     /// deciding what to do about each wrong shape it meets, and why every
     /// `command` it returns is non-empty.
     pub fn servers(&self) -> BTreeMap<String, Server> {
-        toml::Value::Table(self.0.clone())
-            .try_into::<Layer>()
-            .map(|layer| layer.lsp)
-            .unwrap_or_default()
+        self.layer().lsp
     }
 
     /// And which command lays each language out, read the same way and for the
     /// same reasons: a project that formats its own files with its own tool is
     /// a row in a file rather than a release.
     pub fn formatters(&self) -> BTreeMap<String, Formatter> {
-        toml::Value::Table(self.0.clone())
-            .try_into::<Layer>()
-            .map(|layer| layer.formatter)
-            .unwrap_or_default()
+        self.layer().formatter
     }
 
     /// Which paths on this machine configuration lets a server name, and how
@@ -1221,9 +1269,24 @@ impl Config {
     /// reasons: a project declaring a fact its own toolchain needs is a row in
     /// a file rather than a release.
     pub fn facts(&self) -> BTreeMap<String, Fact> {
+        self.layer().facts
+    }
+
+    /// Which languages have a Debug adapter, and what runs each one.
+    pub fn adapters(&self) -> BTreeMap<String, Adapter> {
+        self.layer().dap
+    }
+
+    /// The Launch configurations both layers name, by name.
+    pub fn launches(&self) -> BTreeMap<String, Launch> {
+        self.layer().launch
+    }
+
+    /// The typed tables of the merged config. Nothing here can fail for a
+    /// config Varde started on, for the reason `servers` gives.
+    fn layer(&self) -> Layer {
         toml::Value::Table(self.0.clone())
             .try_into::<Layer>()
-            .map(|layer| layer.facts)
             .unwrap_or_default()
     }
 
@@ -1409,6 +1472,9 @@ fn refuse_incomplete(table: &Table, origins: &Origins) -> Result<(), ConfigError
         ("lsp", "command"),
         ("formatter", "command"),
         ("facts", "marker"),
+        ("dap", "command"),
+        ("launch", "adapter"),
+        ("launch", "request"),
     ] {
         let Some(entries) = table.get(section).and_then(toml::Value::as_table) else {
             continue;
@@ -1583,6 +1649,8 @@ fn initial_state(
         // And which paths a server may name, which is data for the same
         // reason: the edge searches, the library decides nothing (R31.27).
         facts: config.facts(),
+        adapters: config.adapters(),
+        launches: config.launches(),
         speech: speech(config, &input.os),
         os: input.os.clone(),
         arch: input.arch.clone(),
@@ -1632,7 +1700,7 @@ pub struct Dep {
     pub install: Option<String>,
 }
 
-/// The `[lsp.*]`, `[formatter.*]` and `[speech]` rows `~/.varde/config.toml`
+/// The `[lsp.*]`, `[formatter.*]`, `[dap.*]` and `[speech]` rows `~/.varde/config.toml`
 /// names — or the [`template`], when there is no file, since that is what the
 /// next start runs — read by the same merge startup does, so what `install.sh`
 /// offers is what Varde would start. A file Varde would refuse to start on is
@@ -1659,6 +1727,12 @@ pub fn deps(global_config: Option<&str>, os: &str) -> Result<Vec<Dep>, ConfigErr
                 .formatters()
                 .iter()
                 .map(|(name, f)| row("formatter", name, &f.command, f.install.get(os))),
+        )
+        .chain(
+            config
+                .adapters()
+                .iter()
+                .map(|(name, a)| row("dap", name, &a.command, a.install.get(os))),
         )
         .chain([
             row("speech", "speech", &speech.command, install),
@@ -1774,6 +1848,18 @@ fn parse(source: &str, label: &str) -> Result<(Table, Origins), ConfigError> {
                 .facts
                 .iter()
                 .map(|(name, entry)| (format!("facts.{name}"), entry.span())),
+        )
+        .chain(
+            layer
+                .dap
+                .iter()
+                .map(|(name, entry)| (format!("dap.{name}"), entry.span())),
+        )
+        .chain(
+            layer
+                .launch
+                .iter()
+                .map(|(name, entry)| (format!("launch.{name}"), entry.span())),
         )
         .map(|(entry, span)| (entry, (label.to_string(), line(span.start))))
         .collect();
@@ -2080,8 +2166,24 @@ mod tests {
             let config = fresh();
             assert_eq!(
                 table.len(),
-                config.servers().len() + config.formatters().len(),
+                config.servers().len() + config.formatters().len() + config.adapters().len(),
                 "{os}"
+            );
+            // The Debug adapter's row, installable on both.
+            let codelldb = table
+                .iter()
+                .find(|dep| (dep.kind, dep.name.as_str()) == ("dap", "rust"))
+                .expect("the rust adapter");
+            assert_eq!(codelldb.command, "codelldb");
+            assert!(
+                codelldb
+                    .install
+                    .as_deref()
+                    .is_some_and(|install| install.contains(&format!(
+                        "codelldb-{}-",
+                        if os == "macos" { "darwin" } else { os }
+                    ))),
+                "{os}: {codelldb:?}"
             );
             for dep in expected {
                 assert!(table.contains(&dep), "{os}: {dep:?}");

@@ -231,10 +231,24 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
 /// Space is shared — other features may claim other letters later.
 pub const CHORDS: [(&str, &str, &[View]); 1] = [("␣b", "breakpoint", &[View::Edit])];
 
-/// The cheatsheet as drawn: [`CHEATSHEET`], then the chords.
-pub fn cheatsheet() -> impl Iterator<Item = &'static (&'static str, &'static str, &'static [View])>
-{
-    CHEATSHEET.iter().chain(CHORDS.iter())
+/// The keys a Debug session reserves, listed while one exists and absent while
+/// none does — which is when the hosted panes have them back.
+pub const DEBUG_KEYS: [(&str, &str, &[View]); 2] = [
+    ("F9", "continue / pause", &[View::Edit]),
+    ("C-F2", "stop debugging", &[View::Edit]),
+];
+
+/// The cheatsheet as drawn: the debug keys while a session exists — first,
+/// because while one does they are the keys being reached for — then
+/// [`CHEATSHEET`] and the chords.
+pub fn cheatsheet(
+    state: &State,
+) -> impl Iterator<Item = &'static (&'static str, &'static str, &'static [View])> {
+    let debug: &'static [(&str, &str, &[View])] = match state.debug {
+        Some(_) => &DEBUG_KEYS,
+        None => &[],
+    };
+    debug.iter().chain(CHEATSHEET.iter()).chain(CHORDS.iter())
 }
 
 /// The Chord hint as drawn, each row carrying the key it offers or nothing —
@@ -274,6 +288,10 @@ pub const TOOL_LIST_KEYS: [(&str, &str); 3] =
 /// is what a picker is for, and Escape is how every box in Varde is left — both
 /// reachable with no modifier (R31.11).
 pub const BRANCH_LIST_KEYS: [(&str, &str); 2] = [("Enter", "story this branch"), ("Esc", "close")];
+
+/// The keys the launch list answers and the word its box says for each, for
+/// the reason [`BRANCH_LIST_KEYS`] is here.
+pub const LAUNCH_LIST_KEYS: [(&str, &str); 2] = [("Enter", "start"), ("Esc", "close")];
 
 /// What the picker's box says about being typed into, here rather than in `ui`
 /// for the reason [`BRANCH_LIST_KEYS`] is: `ui` may only draw the contract, so
@@ -378,6 +396,17 @@ fn reserved(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) -> 
     if event.modifiers.contains(KeyModifiers::CTRL) && event.code == KeyCode::Char(' ') {
         return Some(vec![Event::FallbackBinding]);
     }
+    // JetBrains' debugger keys, from every pane — a shell's included, since
+    // stepping happens in bursts from wherever the keyboard is. Reserved only
+    // while a session exists: with none, the child in a hosted pane gets them.
+    if state.debug.is_some() {
+        let ctrl = event.modifiers.contains(KeyModifiers::CTRL);
+        match event.code {
+            KeyCode::F(9) if !ctrl => return Some(vec![Event::DebugResume]),
+            KeyCode::F(2) if ctrl => return Some(vec![Event::DebugStop]),
+            _ => {}
+        }
+    }
     if child_owns_keys(state, drafts) {
         return Some(to_child(state, event, at_ms));
     }
@@ -426,6 +455,18 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
                 Some('r') => vec![Event::RecheckTool],
                 _ => vec![],
             },
+        },
+        // Tools' shape, with Enter as what the list is for.
+        Modal::Launches { row } => match event.code {
+            KeyCode::Esc => vec![Event::Cancel],
+            KeyCode::Up => vec![Event::MoveLaunchRow(Direction::Up)],
+            KeyCode::Down => vec![Event::MoveLaunchRow(Direction::Down)],
+            KeyCode::Enter => crate::debug::launches(state)
+                .get(*row)
+                .map(|name| Event::StartLaunch(name.to_string()))
+                .into_iter()
+                .collect(),
+            _ => vec![],
         },
         // A list that is also typed into: four hundred branches is a modal
         // nobody can walk, so a letter narrows it rather than being swallowed.
@@ -537,6 +578,7 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         | Modal::Palette
         | Modal::Chord
         | Modal::Tools { .. }
+        | Modal::Launches { .. }
         | Modal::Branches { .. }
         | Modal::Comment
         | Modal::Candidates(_)
@@ -674,7 +716,8 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
             | Pane::Risk
             | Pane::Buffers
             | Pane::History
-            | Pane::Breakpoints => false,
+            | Pane::Breakpoints
+            | Pane::Frames => false,
         }
 }
 
@@ -1312,7 +1355,7 @@ fn claims_colon(state: &State) -> bool {
         Pane::Tree => true,
         Pane::Editor => !crate::editor_inserting(state),
         // Varde's own panes, so the colon is Varde's.
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints => true,
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => true,
         Pane::Ai | Pane::Terminal => false,
     }
 }
@@ -1344,8 +1387,8 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
         (Pane::History, false) => list_arrow(direction),
         (Pane::History, true) => vec![],
         // The fourth, and its rows have one action too.
-        (Pane::Breakpoints, false) => list_arrow(direction),
-        (Pane::Breakpoints, true) => vec![],
+        (Pane::Breakpoints | Pane::Frames, false) => list_arrow(direction),
+        (Pane::Breakpoints | Pane::Frames, true) => vec![],
         // A hosted pane's arrows went to its child; see below.
         (Pane::Ai | Pane::Terminal, _) => vec![],
     })
@@ -1372,7 +1415,9 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         // where they differ. The panes' routing lives here rather than at the
         // edge for the reason every other pane's does: what a key means is a
         // decision, and `main.rs` has no test.
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints => list_pane_key(event),
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
+            list_pane_key(event)
+        }
         // A hosted pane never arrives here: with nothing of Varde's own
         // collecting, `child_owns_keys` sent the key to `to_child`, and with
         // something collecting one of the returns above took it. Every pane is
@@ -2208,7 +2253,7 @@ mod tests {
                 !named(label)
                     // Claimed before the box and held by the cheatsheet where
                     // every view answers them.
-                    && !listed(label, View::Review)
+                    && !listed(&State::default(), label, View::Review)
                     && !omitted_in(label, View::Review)
             })
             .collect();
@@ -3430,6 +3475,9 @@ mod tests {
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
                 arrow_label(shift, alt, ctrl)
             }
+            // Ctrl is inspected on F2, which stops a Debug session and is
+            // nothing without it.
+            KeyCode::F(number) if ctrl => format!("C-F{number}"),
             KeyCode::F(number) => format!("F{number}"),
             code => named_label(code),
         }
@@ -3851,13 +3899,14 @@ mod tests {
     /// ever drive. Tab was one of them, listed in neither the cheatsheet nor the
     /// omissions and invisible to the sweep, which is the exact blind spot this
     /// test exists to close.
-    fn views() -> [(View, State); 5] {
+    fn views() -> [(View, State); 6] {
         [
             (View::Edit, editing()),
             (View::Edit, offering_candidates()),
             (View::Edit, filling_in_a_snippet(&editing())),
             (View::Review, reviewing()),
             (View::Story, story()),
+            (View::Edit, crate::debug::paused(editing())),
         ]
     }
 
@@ -3927,8 +3976,8 @@ mod tests {
 
     /// A binding is listed for a view if it appears in a left-hand column of a
     /// row naming that view.
-    fn listed(label: &str, view: View) -> bool {
-        super::cheatsheet()
+    fn listed(state: &State, label: &str, view: View) -> bool {
+        super::cheatsheet(state)
             .filter(|(_, _, views)| super::applies_to(views, view))
             .flat_map(|(keys, _, _)| keys.split_whitespace())
             .any(|token| names(token, label))
@@ -3953,7 +4002,7 @@ mod tests {
                 .into_iter()
                 .filter(|(_, sequence)| sequence_answers(&state, sequence))
                 .map(|(label, _)| label)
-                .filter(|label| !listed(label, view) && !omitted_in(label, view))
+                .filter(|label| !listed(&state, label, view) && !omitted_in(label, view))
                 .collect();
             // One gesture is one line: the sweep drives every modifier
             // combination, so an unlisted binding is found sixty-four times over.
@@ -4109,6 +4158,77 @@ mod tests {
         );
     }
 
+    /// The same contract for the launch list: what its box names answers,
+    /// and nothing else it answers goes unnamed.
+    #[test]
+    fn the_launch_list_answers_exactly_the_keys_its_box_names() {
+        let mut listing = State {
+            modal: crate::Modal::Launches { row: 0 },
+            ..editing()
+        };
+        listing.launches.insert(
+            "app".to_string(),
+            crate::startup::Launch {
+                adapter: "rust".to_string(),
+                request: "launch".to_string(),
+                args: serde_json::Map::new(),
+            },
+        );
+        for (key, word) in super::LAUNCH_LIST_KEYS {
+            let event = every_key()
+                .into_iter()
+                .find(|event| label(*event) == key)
+                .unwrap_or_else(|| panic!("no key spells {key}"));
+            assert!(
+                answers(&listing, &[event]),
+                "the box offers {key} for {word} and the list does nothing with it"
+            );
+        }
+        let closed = State {
+            modal: crate::Modal::None,
+            ..listing.clone()
+        };
+        let mut unnamed: Vec<String> = every_key()
+            .into_iter()
+            .filter(|event| {
+                !on_key_event(&listing, &mut Drafts::default(), *event, 0).is_empty()
+                    && !answers(&closed, &[*event])
+            })
+            .map(label)
+            .filter(|label| {
+                !super::LAUNCH_LIST_KEYS.iter().any(|(key, _)| key == label)
+                    && !label.contains("arr")
+            })
+            .collect();
+        unnamed.sort();
+        unnamed.dedup();
+        assert!(
+            unnamed.is_empty(),
+            "the launch list answers keys its box does not name: {unnamed:?}"
+        );
+    }
+
+    /// F9 and Ctrl+F2 reach Varde from a shell only while a session exists;
+    /// with none the shell's child has them, as every key it is not denied.
+    #[test]
+    fn the_debug_keys_are_reserved_only_while_a_session_exists() {
+        let shell = State {
+            focus: Pane::Terminal,
+            ..State::default()
+        };
+        let debugging = State {
+            focus: Pane::Terminal,
+            ..crate::debug::paused(State::default())
+        };
+        let f9 = KeyEvent::new(KeyCode::F(9));
+        let stop = KeyEvent::new(KeyCode::F(2)).modifiers(KeyModifiers::CTRL);
+        let press = |state: &State, key| on_key_event(state, &mut Drafts::default(), key, 0);
+        assert_eq!(press(&debugging, f9), vec![Event::DebugResume]);
+        assert_eq!(press(&debugging, stop), vec![Event::DebugStop]);
+        assert!(matches!(press(&shell, f9)[..], [Event::Bytes(_)]));
+        assert!(matches!(press(&shell, stop)[..], [Event::Bytes(_)]));
+    }
+
     /// The other half of the picker's contract: the sweep above excuses every
     /// key that only narrows the list, so this is what holds those keys to
     /// doing what the box says they do. Backspace is here because the excuse
@@ -4212,7 +4332,7 @@ mod tests {
                 !named(label)
                     // Claimed before the box and held by the cheatsheet where
                     // every view answers them.
-                    && !listed(label, View::Edit)
+                    && !listed(&State::default(), label, View::Edit)
                     && !omitted_in(label, View::Edit)
             })
             .collect();
@@ -4290,7 +4410,7 @@ mod tests {
                     "{omitted} is excused as an omission in {view:?} but does nothing there"
                 );
                 assert!(
-                    !listed(omitted, view),
+                    !listed(&State::default(), omitted, view),
                     "{omitted} is both listed and omitted in {view:?}"
                 );
             }
@@ -4367,7 +4487,7 @@ mod tests {
                 .filter(|(_, sequence)| states.iter().any(|s| answers(s, sequence)))
                 .map(|(label, _)| label)
                 .collect();
-            for (keys, what, views) in super::cheatsheet() {
+            for (keys, what, views) in super::cheatsheet(&state) {
                 if !super::applies_to(views, view) {
                     continue;
                 }
@@ -4409,7 +4529,7 @@ mod tests {
                 filling_in_a_snippet(&state),
             ];
             let states: Vec<&State> = std::iter::once(&state).chain(extra.iter()).collect();
-            for (keys, what, views) in super::cheatsheet() {
+            for (keys, what, views) in super::cheatsheet(&state) {
                 if !super::applies_to(views, view) {
                     continue;
                 }

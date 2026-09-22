@@ -288,6 +288,27 @@ pub struct VardeWorld {
     /// where a refused jump would have gone, and "naming where it went" is what
     /// makes that refusal a decision rather than a key that did nothing.
     named: Vec<String>,
+    /// The scripted Debug adapter. No scenario runs one: the world plays the
+    /// edge and the adapter both, answering requests with canned replies and
+    /// sending the events a scenario names.
+    dap: FakeAdapter,
+}
+
+/// What the scripted Debug adapter has been asked and holds ready to say.
+#[derive(Debug, Default)]
+struct FakeAdapter {
+    /// Every command the edge was asked to spawn, including one that
+    /// produced no process.
+    spawned: Vec<String>,
+    /// Whether the edge holds the adapter.
+    held: bool,
+    /// Whether it answers `initialize` the moment it is asked — "is ready".
+    ready: bool,
+    /// Every message sent to it, in order.
+    sent: Vec<Value>,
+    /// The call stack each thread answers `stackTrace` with: name, file, line
+    /// and presentation hint.
+    stacks: BTreeMap<i64, Vec<(String, PathBuf, usize)>>,
 }
 
 impl VardeWorld {
@@ -546,6 +567,7 @@ impl VardeWorld {
             | Pane::Buffers
             | Pane::History
             | Pane::Breakpoints
+            | Pane::Frames
             | Pane::Terminal => self.screen.clone(),
         }
     }
@@ -606,6 +628,52 @@ impl VardeWorld {
         self.send_now(Event::LspGone {
             language: language.to_string(),
             why,
+        });
+    }
+
+    /// The scripted adapter's canned replies: `initialize` with the one
+    /// capability Varde reads, a thread to pause, the stack a scenario gave a
+    /// thread, and a `disconnect` answered. Anything else it is only told.
+    fn adapter_answers(&mut self, message: &Value) {
+        if message["type"] != "request" {
+            return;
+        }
+        let body = match message["command"].as_str() {
+            Some("initialize") => json!({ "supportsConfigurationDoneRequest": true }),
+            Some("threads") => json!({ "threads": [{ "id": 1, "name": "main" }] }),
+            Some("stackTrace") => {
+                let thread = message["arguments"]["threadId"]
+                    .as_i64()
+                    .unwrap_or_default();
+                let frames: Vec<Value> = self
+                    .dap
+                    .stacks
+                    .get(&thread)
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                    .map(|(id, (name, file, line))| {
+                        json!({ "id": id, "name": name, "line": line, "source": { "path": file } })
+                    })
+                    .collect();
+                json!({ "stackFrames": frames })
+            }
+            Some("disconnect") => json!({}),
+            _ => return,
+        };
+        self.adapter_says(json!({
+            "type": "response",
+            "request_seq": message["seq"],
+            "success": true,
+            "command": message["command"],
+            "body": body,
+        }));
+    }
+
+    /// One message from the adapter, driven straight in as the edge would.
+    fn adapter_says(&mut self, message: Value) {
+        self.send_now(Event::DapReceived {
+            json: message.to_string(),
         });
     }
 
@@ -720,6 +788,37 @@ impl VardeWorld {
                     self.lsp_is_gone(&language, Gone::FailedToStart);
                 } else {
                     self.lsp_is_running(&language, &command);
+                }
+            }
+            Effect::StartDap { command, .. } => {
+                self.dap.spawned.push(command.clone());
+                // A command that is not there is the spawn failing as the
+                // edge sees it; one that is starts only once the scenario's
+                // adapter is ready, so a Scenario can report the spawn itself.
+                if !self.on_path.contains(&command) {
+                    self.send_now(Event::DapGone {
+                        why: varde::debug::Gone::Missing,
+                    });
+                } else if self.dap.ready {
+                    self.dap.held = true;
+                    self.send_now(Event::DapStarted);
+                }
+            }
+            Effect::DapSend { json } => {
+                let message: Value = serde_json::from_str(&json).expect("valid DAP");
+                self.dap.sent.push(message.clone());
+                match self.dap.held {
+                    true => self.adapter_answers(&message),
+                    false => self.send_now(Event::DapGone {
+                        why: varde::debug::Gone::Exited,
+                    }),
+                }
+            }
+            Effect::StopDap => {
+                if std::mem::take(&mut self.dap.held) {
+                    self.send_now(Event::DapGone {
+                        why: varde::debug::Gone::Exited,
+                    });
                 }
             }
             Effect::LspSend { language, json } => {
@@ -1998,7 +2097,9 @@ fn pointer_at(
         Pane::Editor => (panes.editor, varde::gutter(state), state.editor_scroll),
         Pane::Tree => (panes.tree, 0, state.tree_scroll),
         Pane::Ai => (panes.ai, 0, 0),
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints => (panes.corner, 0, 0),
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
+            (panes.corner, 0, 0)
+        }
         Pane::Terminal => (panes.terminal, 0, 0),
     };
     (
@@ -2482,7 +2583,9 @@ fn enter_name(world: &mut VardeWorld, name: String) {
 fn press(world: &mut VardeWorld, key: String) {
     // Through the router: what a tapped Space means is where the keyboard is
     // and what mode it is in, which no one event stands for.
-    if key == "Space" {
+    if key == "Space"
+        || named_key(&key).is_some_and(|event| matches!(event.code, terminput::KeyCode::F(_)))
+    {
         return route_key(world, &key, 0);
     }
     world.send(match key.as_str() {
@@ -2561,7 +2664,17 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
             plain(terminput::KeyCode::Char(' ')).modifiers(terminput::KeyModifiers::CTRL)
         }
         "Space" => plain(terminput::KeyCode::Char(' ')),
-        _ => return None,
+        // A function key, bare or with the one modifier a binding inspects.
+        other => {
+            let (modifiers, name) = match other.split_once('+') {
+                Some(("Ctrl", name)) => (terminput::KeyModifiers::CTRL, name),
+                Some(("Shift", name)) => (terminput::KeyModifiers::SHIFT, name),
+                Some(_) => return None,
+                None => (terminput::KeyModifiers::NONE, other),
+            };
+            let number = name.strip_prefix('F')?.parse().ok()?;
+            plain(terminput::KeyCode::F(number)).modifiers(modifiers)
+        }
     })
 }
 
@@ -3923,12 +4036,38 @@ fn make_ai_pane_tall(world: &mut VardeWorld) {
 /// A `[dap.<language>]` row in the programs template's layer, which is where
 /// ADR 0021 puts a Debug adapter.
 #[given(expr = "a Debug adapter for {string} is configured")]
+///
+/// The template's row where it ships one — so a scenario's `codelldb` is the
+/// command the rust row really names — and installed, since that is what
+/// "configured" is short for here: `the command … is not on PATH` takes it
+/// away. Into the running workspace as well as the file, for the reason
+/// `load_debug_config` gives.
 fn debug_adapter_configured(world: &mut VardeWorld, language: String) {
-    let row = format!("[dap.{language}]\ncommand = \"{language}-adapter\"");
+    let adapter = shipped()
+        .adapters
+        .get(&language)
+        .cloned()
+        .unwrap_or_else(|| startup::Adapter {
+            command: format!("{language}-adapter"),
+            args: Vec::new(),
+            install: BTreeMap::new(),
+        });
+    let row = format!("[dap.{language}]\ncommand = \"{}\"", adapter.command);
     world.startup.global_config = Some(match world.startup.global_config.take() {
         Some(config) => format!("{config}\n{row}"),
         None => row,
     });
+    // And what installs it, so a scenario that takes the command away is left
+    // with a row an install would fix rather than one needing an installer.
+    let installer = adapter
+        .install
+        .get("macos")
+        .and_then(|install| tools::installer(install));
+    for command in std::iter::once(adapter.command.clone()).chain(installer) {
+        world.on_path.insert(command.clone());
+        world.state.commands_on_path.insert(command);
+    }
+    world.state.adapters.insert(language, adapter);
 }
 
 /// A World starts with none, and nothing in these steps starts one.
@@ -5088,7 +5227,9 @@ fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
         Pane::Editor => world.panes().editor,
         Pane::Ai => world.panes().ai,
         Pane::Terminal => world.panes().terminal,
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints => world.panes().corner,
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
+            world.panes().corner
+        }
     };
     // Straight out from where the button went down, which is the gesture a
     // person makes: aiming at the middle of the pane instead would move the
@@ -7969,6 +8110,7 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::Palette => "palette",
         Modal::Chord => "chord",
         Modal::Tools { .. } => "tools",
+        Modal::Launches { .. } => "launches",
         Modal::Branches { .. } => "branches",
         Modal::Comment => "comment",
         Modal::NameBox { .. } => "name-box",
@@ -13726,4 +13868,380 @@ fn marked_brackets(world: &mut VardeWorld, step: &Step) {
 #[then(expr = "no brackets are marked")]
 fn no_marked_brackets(world: &mut VardeWorld) {
     assert_eq!(current_buffer(world).bracket_pair(), None);
+}
+
+// ---- F45: the Debug session. No scenario runs an adapter: `FakeAdapter`
+// answers what a real one would, and the events a scenario names are driven in
+// as the edge would drive them.
+
+/// What a scenario's config files name, loaded into the running workspace
+/// rather than by restarting it, which would take the Breakpoints and Buffers
+/// the scenario set up with it. An adapter a step already configured is kept.
+fn load_debug_config(world: &mut VardeWorld) {
+    let (loaded, _, _) = startup::start(&world.startup).expect("the scenario's config starts");
+    world.state.launches = loaded.launches;
+    for (language, adapter) in loaded.adapters {
+        world.state.adapters.entry(language).or_insert(adapter);
+    }
+}
+
+/// A session over whichever adapter the Background configured, for the
+/// features that are about being Paused rather than about how a session is
+/// started: they name no Launch configuration, so one is made here.
+fn session_running(world: &mut VardeWorld) {
+    let adapter = world
+        .state
+        .adapters
+        .keys()
+        .next()
+        .cloned()
+        .expect("a Debug adapter is configured");
+    world.state.launches.insert(
+        "debug".to_string(),
+        startup::Launch {
+            adapter,
+            request: "launch".to_string(),
+            args: serde_json::Map::new(),
+        },
+    );
+    world.dap.ready = true;
+    world.send(Event::StartLaunch("debug".to_string()));
+    adapter_event(world, json!({ "type": "event", "event": "initialized" }));
+}
+
+fn adapter_event(world: &mut VardeWorld, message: Value) {
+    world.adapter_says(message);
+    world.tell_core();
+}
+
+/// The stack a thread answers with, unless a scenario gave it one.
+fn stopped_at(world: &mut VardeWorld, thread: i64, file: &str, line: usize, reason: &str) {
+    let path = abs(world, file);
+    world
+        .dap
+        .stacks
+        .entry(thread)
+        .or_insert_with(|| vec![("main".to_string(), path, line)]);
+    adapter_event(
+        world,
+        json!({ "type": "event", "event": "stopped", "body": { "threadId": thread, "reason": reason } }),
+    );
+}
+
+/// The requests the adapter was sent, by command, in order.
+fn dap_requests<'a>(world: &'a VardeWorld, command: &str) -> Vec<&'a Value> {
+    world
+        .dap
+        .sent
+        .iter()
+        .filter(|message| message["type"] == "request" && message["command"] == command)
+        .collect()
+}
+
+fn last_request<'a>(world: &'a VardeWorld, command: &str) -> &'a Value {
+    dap_requests(world, command)
+        .pop()
+        .unwrap_or_else(|| panic!("no {command:?} request; sent {:?}", world.dap.sent))
+}
+
+#[given(expr = "the Debug adapter for {string} is ready")]
+fn debug_adapter_ready(world: &mut VardeWorld, _language: String) {
+    world.dap.ready = true;
+}
+
+#[when(expr = "I open the launch palette")]
+fn open_launch_palette(world: &mut VardeWorld) {
+    load_debug_config(world);
+    world.send(Event::FallbackBinding);
+    route_key(world, &palette_key("Launch").to_string(), 0);
+}
+
+/// Through the palette the way a person goes: its Launch face, the arrows down
+/// to the row, and Enter.
+#[given(expr = "I start the Launch configuration {string} from the palette")]
+#[when(expr = "I start the Launch configuration {string} from the palette")]
+fn start_launch_from_palette(world: &mut VardeWorld, name: String) {
+    open_launch_palette(world);
+    let row = varde::debug::launches(&world.state)
+        .iter()
+        .position(|offered| *offered == name)
+        .unwrap_or_else(|| panic!("the launch palette does not offer {name:?}"));
+    for _ in 0..row {
+        route_key(world, "Down", 0);
+    }
+    route_key(world, "Enter", 0);
+}
+
+#[then(expr = "the launch palette offers {string}")]
+fn launch_palette_offers(world: &mut VardeWorld, name: String) {
+    assert!(matches!(world.state.modal, Modal::Launches { .. }));
+    assert!(
+        varde::debug::launches(&world.state).contains(&name.as_str()),
+        "offered: {:?}",
+        varde::debug::launches(&world.state)
+    );
+}
+
+#[given(expr = "a Debug session was started from the Launch configuration {string}")]
+fn session_was_started(world: &mut VardeWorld, name: String) {
+    world.dap.ready = true;
+    start_launch_from_palette(world, name);
+    adapter_event(world, json!({ "type": "event", "event": "initialized" }));
+}
+
+#[given(expr = "a Debug session is Running")]
+fn debug_session_is_running(world: &mut VardeWorld) {
+    session_running(world);
+}
+
+#[given(expr = "a Debug session is Paused at {string} line {int}")]
+fn debug_session_is_paused(world: &mut VardeWorld, file: String, line: usize) {
+    session_running(world);
+    stopped_at(world, 1, &file, line, "breakpoint");
+}
+
+#[given(expr = "a Debug session is Paused at {string} line {int} on thread {int}")]
+fn debug_session_is_paused_on(world: &mut VardeWorld, file: String, line: usize, thread: i64) {
+    session_running(world);
+    stopped_at(world, thread, &file, line, "breakpoint");
+}
+
+#[given(
+    expr = "a Debug session is Paused in {string} at {string} line {int} called from {string} at {string} line {int}"
+)]
+fn debug_session_is_paused_in(
+    world: &mut VardeWorld,
+    inner: String,
+    inner_file: String,
+    inner_line: usize,
+    outer: String,
+    outer_file: String,
+    outer_line: usize,
+) {
+    let stack = vec![
+        (inner, abs(world, &inner_file), inner_line),
+        (outer, abs(world, &outer_file), outer_line),
+    ];
+    world.dap.stacks.insert(1, stack);
+    session_running(world);
+    stopped_at(world, 1, &inner_file, inner_line, "breakpoint");
+}
+
+#[given(expr = "the Debug adapter sends the event {string}")]
+#[when(expr = "the Debug adapter sends the event {string}")]
+fn adapter_sends_event(world: &mut VardeWorld, event: String) {
+    adapter_event(world, json!({ "type": "event", "event": event }));
+}
+
+#[given(
+    expr = "the Debug adapter sends the {string} event for thread {int} at {string} line {int} with reason {string}"
+)]
+#[when(
+    expr = "the Debug adapter sends the {string} event for thread {int} at {string} line {int} with reason {string}"
+)]
+fn adapter_sends_stopped(
+    world: &mut VardeWorld,
+    event: String,
+    thread: i64,
+    file: String,
+    line: usize,
+    reason: String,
+) {
+    assert_eq!(event, "stopped");
+    stopped_at(world, thread, &file, line, &reason);
+}
+
+#[given(expr = "the Debug adapter reports the program continued")]
+#[when(expr = "the Debug adapter reports the program continued")]
+fn adapter_reports_continued(world: &mut VardeWorld) {
+    adapter_event(
+        world,
+        json!({ "type": "event", "event": "continued", "body": { "threadId": 1, "allThreadsContinued": true } }),
+    );
+}
+
+#[when(expr = "the Debug adapter answers {string} with the error {string}")]
+fn adapter_answers_with_error(world: &mut VardeWorld, command: String, error: String) {
+    let seq = last_request(world, &command)["seq"].clone();
+    adapter_event(
+        world,
+        json!({ "type": "response", "request_seq": seq, "success": false, "command": command, "message": error }),
+    );
+}
+
+#[when(expr = "the edge reports the Debug adapter is gone")]
+fn edge_reports_adapter_gone(world: &mut VardeWorld) {
+    world.dap.held = false;
+    world.send(Event::DapGone {
+        why: varde::debug::Gone::Exited,
+    });
+}
+
+#[when(expr = "the edge reports the Debug adapter could not be started")]
+fn edge_reports_adapter_failed(world: &mut VardeWorld) {
+    world.send(Event::DapGone {
+        why: varde::debug::Gone::FailedToStart,
+    });
+}
+
+#[then(expr = "the Debug adapter's {word} arguments are:")]
+fn request_arguments_are(world: &mut VardeWorld, request: String, step: &Step) {
+    let expected: Value =
+        serde_json::from_str(step.docstring().expect("docstring")).expect("JSON arguments");
+    assert_eq!(last_request(world, &request)["arguments"], expected);
+}
+
+#[then("the Debug adapter was sent, in order:")]
+fn adapter_sent_in_order(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<&str> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].as_str())
+        .collect();
+    let sent: Vec<&str> = world
+        .dap
+        .sent
+        .iter()
+        .filter(|message| message["type"] == "request")
+        .filter_map(|message| message["command"].as_str())
+        .collect();
+    assert_eq!(sent, expected);
+}
+
+#[then(expr = "the Debug adapter was sent no {string} request")]
+fn adapter_sent_no(world: &mut VardeWorld, command: String) {
+    assert!(
+        dap_requests(world, &command).is_empty(),
+        "{:?}",
+        world.dap.sent
+    );
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request")]
+fn adapter_sent_a(world: &mut VardeWorld, command: String) {
+    last_request(world, &command);
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for thread {int}")]
+fn adapter_sent_for_thread(world: &mut VardeWorld, command: String, thread: i64) {
+    assert_eq!(
+        last_request(world, &command)["arguments"]["threadId"],
+        thread
+    );
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request with {string} {word}")]
+fn adapter_sent_with(world: &mut VardeWorld, command: String, key: String, value: String) {
+    let expected: Value = serde_json::from_str(&value).expect("a JSON value");
+    assert_eq!(
+        last_request(world, &command)["arguments"][key.as_str()],
+        expected
+    );
+}
+
+#[then(expr = "the Debug session is {string}")]
+fn debug_session_is(world: &mut VardeWorld, phase: String) {
+    let actual = match world.state.debug.as_ref().map(|session| &session.phase) {
+        Some(varde::debug::Phase::Running) => "running",
+        Some(varde::debug::Phase::Paused(_)) => "paused",
+        other => panic!("the session is {other:?}"),
+    };
+    assert_eq!(actual, phase);
+}
+
+#[then(expr = "no Debug session exists")]
+fn no_debug_session_exists(world: &mut VardeWorld) {
+    assert_eq!(world.state.debug, None);
+}
+
+#[then(expr = "the Paused line is {string} line {int}")]
+fn paused_line_is(world: &mut VardeWorld, file: String, line: usize) {
+    let file = abs(world, &file);
+    assert_eq!(
+        varde::debug::paused_line(&world.state).map(|(file, line, _)| (file.to_path_buf(), line)),
+        Some((file, line))
+    );
+}
+
+/// The gutter and the full-width wash are drawn from the same answer, and it is
+/// only drawn over the Buffer on screen — which is what these two ask.
+#[then(expr = "the gutter marks line {int} as the Paused line")]
+#[then(expr = "line {int} is highlighted across the editor's full width")]
+fn paused_line_on_screen(world: &mut VardeWorld, line: usize) {
+    let (file, at, _) = varde::debug::paused_line(&world.state).expect("a Paused line");
+    assert_eq!(world.state.current_buffer.as_deref(), Some(file));
+    assert_eq!(at, line);
+}
+
+#[then(expr = "the Paused line is drawn as {string}")]
+fn paused_line_drawn_as(world: &mut VardeWorld, kind: String) {
+    let (_, _, why) = varde::debug::paused_line(&world.state).expect("a Paused line");
+    assert_eq!(why.as_str(), kind);
+}
+
+#[then(expr = "no Paused line is marked")]
+fn no_paused_line(world: &mut VardeWorld) {
+    assert_eq!(varde::debug::paused_line(&world.state), None);
+}
+
+#[given(expr = "the Corner shows the Buffers pane")]
+fn corner_shows_buffers(world: &mut VardeWorld) {
+    world.state.corner = layout::Corner::Buffers;
+}
+
+#[then(expr = "the Corner shows the Buffers pane")]
+fn corner_should_show_buffers(world: &mut VardeWorld) {
+    assert_eq!(world.state.corner, layout::Corner::Buffers);
+}
+
+#[given(expr = "the corner is empty")]
+fn corner_is_empty(world: &mut VardeWorld) {
+    world.state.corner = layout::Corner::Hidden;
+}
+
+#[then(expr = "the Corner holds the Frames")]
+fn corner_holds_frames(world: &mut VardeWorld) {
+    assert_eq!(world.state.corner, layout::Corner::Frames);
+}
+
+/// Through the hit-test, on the Frame's row in the Corner.
+#[when(expr = "I choose the Frame {string}")]
+#[given(expr = "I choose the Frame {string}")]
+fn choose_frame(world: &mut VardeWorld, name: String) {
+    let index = varde::debug::frames(&world.state)
+        .iter()
+        .position(|frame| frame.name == name)
+        .unwrap_or_else(|| panic!("no Frame {name:?}"));
+    let corner = world.panes().corner;
+    let row = corner.y + 1 + index as u16;
+    world.report(mouse::Kind::LeftDown, corner.x + 2, row);
+    world.report(mouse::Kind::LeftUp, corner.x + 2, row);
+}
+
+#[then(expr = "the buffer has unsaved edits")]
+fn the_buffer_has_unsaved_edits(world: &mut VardeWorld) {
+    let path = world.state.current_buffer.clone().expect("a buffer");
+    assert!(world.state.buffers[&path].is_dirty());
+}
+
+#[when(expr = "the tools list is shown")]
+fn tools_list_is_shown(world: &mut VardeWorld) {
+    // The OS a row's install is looked up under, as `Varde starts` fixes it.
+    if world.state.os.is_empty() {
+        world.state.os = "macos".to_string();
+    }
+    world.send(Event::FallbackBinding);
+    route_key(world, &palette_key("Tools").to_string(), 0);
+}
+
+#[then(expr = "the Debug adapter row for {string} is {string}")]
+fn debug_adapter_row_is(world: &mut VardeWorld, language: String, expected: String) {
+    assert_eq!(
+        tool_row(world, tools::Kind::Adapter, &language)
+            .availability
+            .as_str(),
+        expected
+    );
 }
