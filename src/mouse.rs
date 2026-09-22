@@ -557,6 +557,7 @@ fn pressed(state: &State, panes: &Layout, pane: Pane, input: Input) -> Vec<Event
         (Pane::Risk, _) => pressed_in_risk(state, panes, input),
         (Pane::Buffers, _) => pressed_in_buffers(state, panes, input),
         (Pane::History, _) => pressed_in_history(state, panes, input),
+        (Pane::Breakpoints, _) => pressed_in_breakpoints(state, panes, input),
         // Which of the strip's shells was pressed, so a click in a split is
         // the keyboard moving to it — the one gesture that tells them apart.
         (Pane::Terminal, _) => vec![Event::FocusSplit(crate::layout::split_at(
@@ -631,6 +632,28 @@ fn pressed_in_history(state: &State, panes: &Layout, input: Input) -> Vec<Event>
     }
 }
 
+/// A row of the Breakpoint list, its row's icon, or a Chip on its top border —
+/// the Risk list's three, tested in the Risk list's order and for its reasons.
+fn pressed_in_breakpoints(state: &State, panes: &Layout, input: Input) -> Vec<Event> {
+    if input.row == panes.corner.y {
+        return match breakpoint_chip_at(state, panes, input.column) {
+            Some(action) => vec![Event::PaneAction(action)],
+            None => vec![Event::ClickPane(Pane::Breakpoints)],
+        };
+    }
+    if input.row >= panes.corner.bottom().saturating_sub(1) {
+        return vec![Event::ClickPane(Pane::Breakpoints)];
+    }
+    let index = list_row(panes.corner, input.row, state.breakpoints_scroll);
+    if let Some(action) = breakpoint_action_at(state, panes, input.column, index) {
+        return vec![Event::RowAction(action)];
+    }
+    match crate::debug::list(state).len() > index {
+        true => vec![Event::ClickBreakpointRow(index)],
+        false => vec![Event::ClickPane(Pane::Breakpoints)],
+    }
+}
+
 fn dragged(
     state: &State,
     panes: &Layout,
@@ -678,7 +701,7 @@ fn dragged(
         // to rather than text somebody picked: there is nothing in them to
         // copy, and nothing to copy is not the same as copying whatever the
         // pane behind them holds.
-        Pane::Risk | Pane::Buffers | Pane::History => Outcome::default(),
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints => Outcome::default(),
         Pane::Editor => {
             // A drag that began in the mirror stays a travel however far the
             // pointer wanders, and a selection that wanders into the mirror
@@ -938,9 +961,13 @@ fn place_in(state: &State, panes: &Layout, pane: Pane, (column, row): (u16, u16)
     let text = text_area(state, panes, pane);
     let (scroll, sideways) = match pane {
         Pane::Editor => (state.editor_scroll, state.editor_hscroll),
-        Pane::Tree | Pane::Ai | Pane::Terminal | Pane::Risk | Pane::Buffers | Pane::History => {
-            (0, 0)
-        }
+        Pane::Tree
+        | Pane::Ai
+        | Pane::Terminal
+        | Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints => (0, 0),
     };
     Place {
         // Through `line_at_row`, not straight off the row: Story view draws
@@ -996,7 +1023,7 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
             state.terminals.len(),
             state.split(),
         )),
-        Pane::Risk | Pane::Buffers | Pane::History => interior(panes.corner),
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints => interior(panes.corner),
     }
 }
 
@@ -1095,7 +1122,7 @@ fn row_index(state: &State, panes: &Layout, row: u16) -> usize {
 /// columns are worked out.
 fn transport_at(state: &State, panes: &Layout, column: u16) -> Option<&'static str> {
     let chips = crate::reading::transport(state);
-    let labels = layout::editor_chip_labels(&chips, panes.editor.width);
+    let labels = layout::chip_labels(&chips, panes.editor.width, layout::EDITOR_TITLE);
     let at = layout::strip_at(panes.editor, &labels, column)?;
     Some(chips[at].action)
 }
@@ -1159,6 +1186,13 @@ fn action_under(state: &State, panes: &Layout, input: Input) -> Option<&'static 
             let index = list_row(panes.corner, input.row, state.history_scroll);
             history_action_at(state, panes, input.column, index)
         }
+        Pane::Breakpoints if input.row == panes.corner.y => {
+            breakpoint_chip_at(state, panes, input.column)
+        }
+        Pane::Breakpoints if corner_row => {
+            let index = list_row(panes.corner, input.row, state.breakpoints_scroll);
+            breakpoint_action_at(state, panes, input.column, index)
+        }
         _ => None,
     }
 }
@@ -1200,6 +1234,28 @@ fn risk_action_at(
         return None;
     }
     icon_at(&crate::risk::row_actions(state), panes.corner, column)
+}
+
+/// Which icon of the Breakpoint list's focused row sits under the pointer.
+fn breakpoint_action_at(
+    state: &State,
+    panes: &Layout,
+    column: u16,
+    index: usize,
+) -> Option<&'static str> {
+    if index != state.breakpoints_selection {
+        return None;
+    }
+    icon_at(&crate::debug::row_actions(state), panes.corner, column)
+}
+
+/// Which Chip of the Breakpoint list's Transport sits under the pointer, at
+/// the columns `ui` draws them from the same labels.
+fn breakpoint_chip_at(state: &State, panes: &Layout, column: u16) -> Option<&'static str> {
+    let chips = crate::debug::transport(state);
+    let labels = layout::chip_labels(&chips, panes.corner.width, layout::CORNER_TITLE);
+    let at = layout::strip_at(panes.corner, &labels, column)?;
+    Some(chips[at].action)
 }
 
 /// Which of the Risk pane's own action icons sits under the pointer, on the
@@ -1810,6 +1866,70 @@ mod tests {
         // index and reading it as a row would go somewhere nobody pointed.
         assert_eq!(click(&state, 5, 18), vec![Event::ClickPane(Pane::History)]);
         assert_eq!(click(&state, 5, 25), vec![Event::ClickPane(Pane::History)]);
+    }
+
+    /// The fourth occupant: a row, its icon on the row the keyboard is on, and
+    /// the Transport on the top border — " ✕ D " five columns wide, with a
+    /// column of border between it and the corner at 29.
+    #[test]
+    fn a_click_in_the_breakpoint_list_names_the_row_its_icon_or_the_chip() {
+        let mut state = workspace();
+        state.corner = crate::layout::Corner::Breakpoints;
+        state.breakpoints = (1..=2)
+            .map(|line| crate::debug::Breakpoint {
+                file: PathBuf::from("/w/a.rs"),
+                line,
+                text: String::new(),
+                stale: false,
+            })
+            .collect();
+        let click = |state: &State, column, row| {
+            on_mouse(
+                state,
+                &panes(
+                    120,
+                    26,
+                    30,
+                    None,
+                    0,
+                    0,
+                    Shapes {
+                        corner: crate::layout::Corner::Breakpoints,
+                        ..Shapes::default()
+                    },
+                ),
+                &mut Pointer::default(),
+                Input {
+                    kind: Kind::LeftDown,
+                    column,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                },
+            )
+            .events
+        };
+        assert_eq!(click(&state, 5, 19), vec![Event::ClickBreakpointRow(0)]);
+        assert_eq!(
+            click(&state, 27, 19),
+            vec![Event::RowAction(crate::debug::REMOVE)]
+        );
+        assert_eq!(click(&state, 27, 20), vec![Event::ClickBreakpointRow(1)]);
+        assert_eq!(
+            click(&state, 5, 21),
+            vec![Event::ClickPane(Pane::Breakpoints)]
+        );
+        for column in 23..=27 {
+            assert_eq!(
+                click(&state, column, 18),
+                vec![Event::PaneAction(crate::debug::CLEAR_ALL)]
+            );
+        }
+        for column in [22, 28] {
+            assert_eq!(
+                click(&state, column, 18),
+                vec![Event::ClickPane(Pane::Breakpoints)]
+            );
+        }
     }
 
     /// R35.8. The Transport is on the editor's top border, so a click there is

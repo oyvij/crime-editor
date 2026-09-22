@@ -541,9 +541,12 @@ impl VardeWorld {
                 .map(|buffer| buffer.shown().split('\n').map(str::to_string).collect())
                 .unwrap_or_default(),
             Pane::Ai => self.ai_screen.clone(),
-            Pane::Tree | Pane::Risk | Pane::Buffers | Pane::History | Pane::Terminal => {
-                self.screen.clone()
-            }
+            Pane::Tree
+            | Pane::Risk
+            | Pane::Buffers
+            | Pane::History
+            | Pane::Breakpoints
+            | Pane::Terminal => self.screen.clone(),
         }
     }
 
@@ -1995,7 +1998,7 @@ fn pointer_at(
         Pane::Editor => (panes.editor, varde::gutter(state), state.editor_scroll),
         Pane::Tree => (panes.tree, 0, state.tree_scroll),
         Pane::Ai => (panes.ai, 0, 0),
-        Pane::Risk | Pane::Buffers | Pane::History => (panes.corner, 0, 0),
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints => (panes.corner, 0, 0),
         Pane::Terminal => (panes.terminal, 0, 0),
     };
     (
@@ -4042,10 +4045,18 @@ fn click_line_number(world: &mut VardeWorld, line: usize) {
     world.report(mouse::Kind::LeftUp, column, row);
 }
 
-/// Set as the core holds one, against what the file holds on the line.
+/// Set as the core holds one, against what the file holds on the line. A file
+/// the scenario never described is given lines enough to hold it, so going to
+/// the Breakpoint lands on its line rather than clamping to an empty file's.
 #[given(expr = "a Breakpoint on {string} line {int}")]
 fn breakpoint_on(world: &mut VardeWorld, file: String, line: usize) {
     let file = abs(world, &file);
+    world.files.entry(file.clone()).or_insert_with(|| {
+        (1..=line)
+            .map(|at| format!("line {at}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    });
     let text = world
         .files
         .get(&file)
@@ -4148,14 +4159,12 @@ fn starts_again_in_same_folder(world: &mut VardeWorld) {
     varde_starts(world);
 }
 
-/// Read off the core's own list until the Breakpoint list is drawn from it.
+/// Read off the rows the Breakpoint list draws.
 #[then(expr = "the Breakpoint list marks {string} line {int} as {string}")]
 fn breakpoint_list_marks(world: &mut VardeWorld, file: String, line: usize, mark: String) {
     let file = abs(world, &file);
-    let breakpoint = world
-        .state
-        .breakpoints
-        .iter()
+    let breakpoint = varde::debug::list(&world.state)
+        .into_iter()
         .find(|breakpoint| breakpoint.file == file && breakpoint.line == line)
         .expect("a Breakpoint there");
     let marked = match breakpoint.stale {
@@ -4163,6 +4172,95 @@ fn breakpoint_list_marks(world: &mut VardeWorld, file: String, line: usize, mark
         false => "current",
     };
     assert_eq!(marked, mark);
+}
+
+/// Through the palette's event rather than by poking the field, as every other
+/// Corner occupant's Given is: the only way the list comes to be on screen is
+/// being asked for.
+#[given("the Corner shows the Breakpoint list")]
+#[when("the Corner shows the Breakpoint list")]
+fn corner_shows_breakpoint_list(world: &mut VardeWorld) {
+    if world.state.corner != layout::Corner::Breakpoints {
+        world.send(Event::ToggleBreakpointList);
+    }
+}
+
+#[then("the Corner holds the Breakpoint list")]
+fn corner_holds_breakpoint_list(world: &mut VardeWorld) {
+    assert_eq!(world.state.corner, layout::Corner::Breakpoints);
+}
+
+#[given("the Breakpoint list has focus")]
+fn breakpoint_list_has_focus(world: &mut VardeWorld) {
+    world.state.focus = Pane::Breakpoints;
+}
+
+/// Headerless: each row is a path relative to the root and a line, in the
+/// order the list draws them.
+#[then("the Breakpoint list rows are:")]
+fn breakpoint_list_rows(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<(String, usize)> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| (row[0].clone(), row[1].parse().expect("a line")))
+        .collect();
+    let drawn: Vec<(String, usize)> = varde::debug::list(&world.state)
+        .into_iter()
+        .map(|breakpoint| {
+            (
+                varde::relative(&world.state, &breakpoint.file),
+                breakpoint.line,
+            )
+        })
+        .collect();
+    assert_eq!(drawn, expected);
+}
+
+/// The row's icon is drawn on the row the keyboard is on, so the keyboard is
+/// put there first; the click then goes through the hit-test at the icon's
+/// columns, hard against the right-hand border.
+#[when(expr = "I click the {string} Chip on the row for {string} line {int}")]
+fn click_breakpoint_row_chip(world: &mut VardeWorld, chip: String, file: String, line: usize) {
+    assert_eq!(chip, "remove", "unknown row Chip {chip:?}");
+    let file = abs(world, &file);
+    let index = varde::debug::list(&world.state)
+        .iter()
+        .position(|breakpoint| breakpoint.file == file && breakpoint.line == line)
+        .expect("a row for that Breakpoint");
+    world.state.focus = Pane::Breakpoints;
+    world.state.breakpoints_selection = index;
+    let column = world.panes().corner.width.saturating_sub(3) as usize;
+    world.click(
+        Pane::Breakpoints,
+        (index + 1, column),
+        terminput::KeyModifiers::NONE,
+    );
+}
+
+/// A Chip on the Transport along the top border of the Corner's occupant,
+/// found by the hit-test that answers a click there.
+#[when(expr = "I click the {string} Chip")]
+fn click_chip(world: &mut VardeWorld, chip: String) {
+    let panes = world.panes();
+    let chips = varde::debug::transport(&world.state);
+    let at = chips
+        .iter()
+        .position(|offered| offered.name == chip)
+        .unwrap_or_else(|| panic!("no {chip:?} Chip"));
+    let labels = layout::chip_labels(&chips, panes.corner.width, layout::CORNER_TITLE);
+    let column = (panes.corner.x..panes.corner.right())
+        .find(|&column| layout::strip_at(panes.corner, &labels, column) == Some(at))
+        .expect("the Chip on screen");
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, panes.corner.y);
+    world.report(mouse::Kind::LeftUp, column, panes.corner.y);
+}
+
+#[then("the workspace has no Breakpoints")]
+fn workspace_has_no_breakpoints(world: &mut VardeWorld) {
+    assert_eq!(world.state.breakpoints, vec![]);
 }
 
 #[then(expr = "the gutter draws line {int}'s Breakpoint as {string}")]
@@ -4990,7 +5088,7 @@ fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
         Pane::Editor => world.panes().editor,
         Pane::Ai => world.panes().ai,
         Pane::Terminal => world.panes().terminal,
-        Pane::Risk | Pane::Buffers | Pane::History => world.panes().corner,
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints => world.panes().corner,
     };
     // Straight out from where the button went down, which is the gesture a
     // person makes: aiming at the middle of the pane instead would move the

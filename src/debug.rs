@@ -40,6 +40,49 @@ pub fn marks(state: &crate::State) -> std::collections::BTreeMap<usize, Mark> {
         .collect()
 }
 
+/// Every Breakpoint in the workspace as the Breakpoint list draws it: by path,
+/// then line. Read by `ui` to draw the rows, by `mouse` to hit-test them and by
+/// `update` to act on the one selected, so the three cannot disagree about
+/// which Breakpoint a row is.
+pub fn list(state: &crate::State) -> Vec<&Breakpoint> {
+    let mut rows: Vec<&Breakpoint> = state.breakpoints.iter().collect();
+    rows.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
+    rows
+}
+
+/// The row the keyboard is on in the Breakpoint list, if it names one.
+pub fn selected(state: &crate::State) -> Option<&Breakpoint> {
+    list(state).get(state.breakpoints_selection).copied()
+}
+
+pub const REMOVE: &str = "remove-breakpoint";
+pub const CLEAR_ALL: &str = "clear-all-breakpoints";
+
+/// What the focused row offers: removing the Breakpoint it names.
+pub fn row_actions(state: &crate::State) -> Vec<&'static str> {
+    match selected(state) {
+        Some(_) => vec![REMOVE],
+        None => Vec::new(),
+    }
+}
+
+/// The Chips on the Breakpoint list's top border. Clearing is dimmed with
+/// nothing to clear, and never lit: once it has run there is nothing left for
+/// it to say it did.
+pub fn transport(state: &crate::State) -> Vec<crate::Chip> {
+    vec![crate::Chip {
+        action: CLEAR_ALL,
+        name: "clear-all",
+        glyph: "\u{2715}".to_string(),
+        keys: "D",
+        hue: crate::Hue::Halt,
+        tone: match state.breakpoints.is_empty() {
+            true => crate::Tone::Dimmed,
+            false => crate::Tone::Plain,
+        },
+    }]
+}
+
 /// What 1-based `line` of `text` holds, trimmed — the text a Breakpoint is
 /// remembered against — or nothing for a line `text` does not have.
 pub fn held(text: &str, line: usize) -> Option<&str> {

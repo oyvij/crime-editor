@@ -57,20 +57,20 @@ pub fn strip_at(area: Area, labels: &[String], column: u16) -> Option<usize> {
     })
 }
 
-/// The editor's Transport's labels, as [`strip_width`] measures them and
-/// [`strip_at`] hit-tests them: each Chip its glyph and keys, padded a column
-/// each side, or — when the whole strip would not fit in the pane's `width`
-/// less [`EDITOR_TITLE`] — every Chip its glyph alone. All at once, never one
+/// A Transport's labels, as [`strip_width`] measures them and [`strip_at`]
+/// hit-tests them: each Chip its glyph and keys, padded a column each side, or
+/// — when the whole strip would not fit in the pane's `width` less the `title`
+/// its border keeps — every Chip its glyph alone. All at once, never one
 /// by one, so the row has one shape at a given width
 /// (`docs/adr/0022-every-action-has-a-chip.md`); and a glyph alone is never
 /// cut, since a strip past its pane's width hit-tests as nothing. The one
 /// derivation `ui` draws and `mouse` hit-tests, for the reason [`GUTTER`] is.
-pub fn editor_chip_labels(chips: &[crate::Chip], width: u16) -> Vec<String> {
+pub fn chip_labels(chips: &[crate::Chip], width: u16, title: u16) -> Vec<String> {
     let whole: Vec<String> = chips
         .iter()
         .map(|chip| format!(" {} {} ", chip.glyph, chip.keys))
         .collect();
-    match strip_width(&whole) <= width.saturating_sub(EDITOR_TITLE) {
+    match strip_width(&whole) <= width.saturating_sub(title) {
         true => whole,
         false => chips
             .iter()
@@ -83,7 +83,10 @@ pub fn editor_chip_labels(chips: &[crate::Chip], width: u16) -> Vec<String> {
 /// filename and the Authorship before its Chips show their keys: the corners,
 /// a name, its dirty mark and its mode. The Chips give before the name does —
 /// the keys are in the cheatsheet, and which file this is is nowhere else.
-const EDITOR_TITLE: u16 = 34;
+pub const EDITOR_TITLE: u16 = 34;
+
+/// The same for a Corner occupant's top border: the corners and its name.
+pub const CORNER_TITLE: u16 = 14;
 
 /// How wide the editor's line-number gutter is, between its border and its
 /// text. The renderer draws it and the mouse hit-tests past it, so both read
@@ -187,6 +190,7 @@ pub enum Corner {
     Risk,
     Buffers,
     History,
+    Breakpoints,
 }
 
 impl Corner {
@@ -201,6 +205,7 @@ impl Corner {
             Corner::Risk => Some(Pane::Risk),
             Corner::Buffers => Some(Pane::Buffers),
             Corner::History => Some(Pane::History),
+            Corner::Breakpoints => Some(Pane::Breakpoints),
         }
     }
 }
@@ -606,8 +611,8 @@ mod frame_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        editor_chip_labels, inset, pane_at, panes, strip_at, strip_height, strip_width, AiPane,
-        Area, Corner, Shapes, STEP_MENU_WIDTH, STRIP_LEAST, TOP_LEAST,
+        chip_labels, inset, pane_at, panes, strip_at, strip_height, strip_width, AiPane, Area,
+        Corner, Shapes, EDITOR_TITLE, STEP_MENU_WIDTH, STRIP_LEAST, TOP_LEAST,
     };
 
     /// Nine columns, the Breakpoint column leftmost and the fold toggle right
@@ -1186,10 +1191,10 @@ mod tests {
         let chips = [chip("\u{25ba}", ":pause"), chip("1.25x", ":speed")];
         // " ► :pause " is 10 and " 1.25x :speed " is 14, each with its gap,
         // beside the 34 columns the title keeps.
-        let whole = editor_chip_labels(&chips, 60);
+        let whole = chip_labels(&chips, 60, EDITOR_TITLE);
         assert_eq!(whole, [" \u{25ba} :pause ", " 1.25x :speed "]);
         assert_eq!(strip_width(&whole), 26);
-        let shed = editor_chip_labels(&chips, 59);
+        let shed = chip_labels(&chips, 59, EDITOR_TITLE);
         assert_eq!(shed, [" \u{25ba} ", " 1.25x "]);
         assert_eq!(strip_width(&shed), 12);
     }

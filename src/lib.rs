@@ -106,6 +106,9 @@ pub enum Pane {
     /// else, and a click in this one names a place to go back to rather than a
     /// buffer or a Function.
     History,
+    /// The Breakpoint list, in the same corner, for the same reason again: a
+    /// row names a Breakpoint, which is a line to go to and a thing to remove.
+    Breakpoints,
 }
 
 /// One control in a Transport (`docs/adr/0022-every-action-has-a-chip.md`):
@@ -226,6 +229,7 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
             // because "History" alone reads as shell history in a workspace
             // that hosts a shell.
             ('y', "Cursor history"),
+            ('b', "Breakpoints"),
             ('a', "AI"),
             ('l', "  Tall"),
         ],
@@ -579,6 +583,10 @@ pub enum Event {
     /// screen. Straight through the arm Enter takes, for the reason
     /// [`Event::ClickRiskRow`] is.
     ClickHistoryRow(usize),
+    /// A click on a row of the Breakpoint list, by index into the list on
+    /// screen. Straight through the arm Enter takes, for the reason
+    /// [`Event::ClickRiskRow`] is.
+    ClickBreakpointRow(usize),
     Scroll {
         pane: Pane,
         direction: Direction,
@@ -942,6 +950,8 @@ pub enum Event {
     ToggleBuffersList,
     /// The Cursor history pane, on or off — the same corner again.
     ToggleCursorHistory,
+    /// The Breakpoint list, on or off — the same corner again.
+    ToggleBreakpointList,
     /// `Ctrl+p` / `gp` and `Ctrl+n` / `gn` — one step towards the oldest place
     /// the cursor has been, and one towards the newest.
     JumpBack,
@@ -1927,6 +1937,9 @@ pub struct State {
     /// The first row the Cursor history pane shows. Its own offset for the
     /// reason the two panes beside it in the corner have their own.
     pub history_scroll: usize,
+    /// The row the Breakpoint list highlights, and its first row on screen.
+    pub breakpoints_selection: usize,
+    pub breakpoints_scroll: usize,
     /// How many ticks the edge has reported. The edge ticks only while it holds
     /// work, so this advances while a job runs and stands still otherwise —
     /// which is the whole of what the core knows about it
@@ -2203,6 +2216,8 @@ impl Default for State {
             visits: Vec::new(),
             history_selection: 0,
             history_scroll: 0,
+            breakpoints_selection: 0,
+            breakpoints_scroll: 0,
             terminal_mouse: mouse::Encoding::None,
             terminals: vec![Shell::Idle],
             terminal_split: 0,
@@ -2368,6 +2383,19 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
             next.history_scroll,
             next.history_selection.min(history_rows.saturating_sub(1)),
             history_rows,
+            corner_rows(&next),
+        );
+        // Clamped here and not in the arms that remove one, so a Breakpoint
+        // gone by any route — a row's Chip, a deleted line — leaves the
+        // highlight on a row that exists.
+        let breakpoint_rows = next.breakpoints.len();
+        next.breakpoints_selection = next
+            .breakpoints_selection
+            .min(breakpoint_rows.saturating_sub(1));
+        next.breakpoints_scroll = layout::viewport(
+            next.breakpoints_scroll,
+            next.breakpoints_selection,
+            breakpoint_rows,
             corner_rows(&next),
         );
         // The results box, against the same `search::rows` the renderer draws.
@@ -3351,6 +3379,21 @@ fn on_key_3(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
             })
         }
 
+        // The Breakpoint list's own keys: `j` and `k` as every list in the
+        // corner has, and `d` and `D` for its two Chips — vim's delete, and
+        // its shifted letter for the whole of it. Not in `CHEATSHEET`, for the
+        // reason the Risk list's are not; the Transport's Chip names `D`.
+        Event::Key(key @ ('j' | 'k' | 'd' | 'D'))
+            if state.focus == Pane::Breakpoints && state.modal == Modal::None =>
+        {
+            Ok(match key {
+                'j' => update(state, Event::MoveSelection(Direction::Down)),
+                'k' => update(state, Event::MoveSelection(Direction::Up)),
+                'd' => update(state, Event::RowAction(debug::REMOVE)),
+                _ => update(state, Event::PaneAction(debug::CLEAR_ALL)),
+            })
+        }
+
         other => Err((next, other)),
     }
 }
@@ -3447,6 +3490,7 @@ fn palette_command(next: State, entry: &str) -> Result<(State, Vec<Effect>), Sta
         "Risk" => Event::ToggleRiskList,
         "Buffers" => Event::ToggleBuffersList,
         "Cursor history" => Event::ToggleCursorHistory,
+        "Breakpoints" => Event::ToggleBreakpointList,
         // The tree's own `c` reaches this too, but only from the tree: the
         // palette is how it is reached from wherever the growing tree was
         // noticed, which is usually the pane being read rather than the tree.
@@ -3764,7 +3808,12 @@ fn on_submit_review(state: &State, mut next: State, event: Event, wheeled: bool)
                     None => vec![],
                 }
             }
-            Pane::Tree | Pane::Editor | Pane::Risk | Pane::Buffers | Pane::History => vec![],
+            Pane::Tree
+            | Pane::Editor
+            | Pane::Risk
+            | Pane::Buffers
+            | Pane::History
+            | Pane::Breakpoints => vec![],
         },
         Event::ClickLink { row, column } => editor::link_at(&row, column)
             .map(Effect::OpenUrl)
@@ -3969,7 +4018,9 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                         Some(bytes) => vec![Effect::SendKeys { pane, bytes }],
                         None => vec![],
                     },
-                    Pane::Tree | Pane::Risk | Pane::Buffers | Pane::History => vec![],
+                    Pane::Tree | Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints => {
+                        vec![]
+                    }
                 };
                 return Ok(settle(next, effects, wheeled));
             }
@@ -4023,6 +4074,15 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                         direction,
                         state.history_scroll,
                         state.visits.len(),
+                        corner_rows(state),
+                    );
+                    vec![]
+                }
+                Pane::Breakpoints => {
+                    next.breakpoints_scroll = wheeled_to(
+                        direction,
+                        state.breakpoints_scroll,
+                        state.breakpoints.len(),
                         corner_rows(state),
                     );
                     vec![]
@@ -6538,6 +6598,9 @@ fn on_quit_force(state: &State, mut next: State, event: Event, wheeled: bool) ->
         Event::ToggleRiskList => take_the_corner(state, &mut next, layout::Corner::Risk),
         Event::ToggleBuffersList => take_the_corner(state, &mut next, layout::Corner::Buffers),
         Event::ToggleCursorHistory => take_the_corner(state, &mut next, layout::Corner::History),
+        Event::ToggleBreakpointList => {
+            take_the_corner(state, &mut next, layout::Corner::Breakpoints)
+        }
 
         // The two gestures the pane exists beside, answered wherever Varde's
         // own keys are answered. `history` holds the whole of what a step is,
@@ -7335,6 +7398,11 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
                 Event::SetSpeed(reading::next_speed(state.speech.speed)),
             ));
         }
+        // Dimmed with nothing to clear, and a dimmed Chip does nothing.
+        Event::PaneAction(debug::CLEAR_ALL) if !state.breakpoints.is_empty() => {
+            next.breakpoints.clear();
+            vec![Effect::SaveState(state_json(&next))]
+        }
         // Unreachable from any gesture — the key, the icon and the hit-test all
         // read `risk::pane_actions` — and here because a `&str` match has to be
         // exhaustive. Nothing rather than a guess: a pane action is a name, and
@@ -7467,6 +7535,17 @@ fn on_move_selection(state: &State, mut next: State, event: Event, wheeled: bool
             };
             // Another row means the icon you had stepped into is gone — the
             // same rule the tree's and the Risk list's motions follow.
+            next.selected_action = None;
+            vec![]
+        }
+
+        Event::MoveSelection(direction) if state.focus == Pane::Breakpoints => {
+            let last = state.breakpoints.len().saturating_sub(1);
+            next.breakpoints_selection = match direction {
+                Direction::Down => (state.breakpoints_selection + 1).min(last),
+                Direction::Up => state.breakpoints_selection.saturating_sub(1),
+                _ => state.breakpoints_selection.min(last),
+            };
             next.selected_action = None;
             vec![]
         }
@@ -7648,6 +7727,23 @@ fn on_activate_2(state: &State, mut next: State, event: Event, wheeled: bool) ->
             return Ok((gone, effects));
         }
 
+        // The file opened if it is not, and the cursor put on the
+        // Breakpoint's line either way — the Risk list's Enter below, for a
+        // line rather than a Function.
+        Event::Activate if state.focus == Pane::Breakpoints => match debug::selected(state) {
+            Some(breakpoint) => {
+                next.focus = Pane::Editor;
+                vec![Effect::OpenAt {
+                    path: breakpoint.file.clone(),
+                    at: Place {
+                        line: breakpoint.line,
+                        column: 1,
+                    },
+                }]
+            }
+            None => vec![],
+        },
+
         Event::Activate if state.focus == Pane::Risk => match risk::selected(state) {
             Some(function) => {
                 let path = state.root.join(&function.file);
@@ -7686,6 +7782,14 @@ fn on_activate_2(state: &State, mut next: State, event: Event, wheeled: bool) ->
             next.history_selection = index;
             let (mut opened, effects) = update(&next, Event::Activate);
             opened.focus = Pane::History;
+            return Ok((opened, effects));
+        }
+
+        Event::ClickBreakpointRow(index) => {
+            next.focus = Pane::Breakpoints;
+            next.breakpoints_selection = index;
+            let (mut opened, effects) = update(&next, Event::Activate);
+            opened.focus = Pane::Breakpoints;
             return Ok((opened, effects));
         }
 
@@ -7761,7 +7865,12 @@ fn on_bytes(state: &State, next: State, event: Event, wheeled: bool) -> Answered
                 pane: state.focus,
                 bytes,
             }],
-            Pane::Tree | Pane::Editor | Pane::Risk | Pane::Buffers | Pane::History => vec![],
+            Pane::Tree
+            | Pane::Editor
+            | Pane::Risk
+            | Pane::Buffers
+            | Pane::History
+            | Pane::Breakpoints => vec![],
         },
 
         other => return Err((next, other)),
@@ -7784,7 +7893,8 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 | Pane::Editor
                 | Pane::Risk
                 | Pane::Buffers
-                | Pane::History => None,
+                | Pane::History
+                | Pane::Breakpoints => None,
             };
             match asked {
                 Some(paste) => vec![Effect::SendKeys {
@@ -7810,6 +7920,13 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
         // run on a row is not the deliberate "take me there" that Enter on the
         // row itself is.
         Event::RowAction(history::GO_TO) => return Ok(history::go(state, next)),
+        Event::RowAction(debug::REMOVE) => match debug::selected(state).cloned() {
+            Some(gone) => {
+                next.breakpoints.retain(|breakpoint| *breakpoint != gone);
+                vec![Effect::SaveState(state_json(&next))]
+            }
+            None => vec![],
+        },
 
         other => return Err((next, other)),
     };
@@ -8347,11 +8464,21 @@ fn neighbour(state: &State, direction: Direction) -> Pane {
         (Pane::Editor, Direction::Right) => Pane::Ai,
         (Pane::Ai, Direction::Left) => Pane::Editor,
         (Pane::Tree, Direction::Down) => corner.unwrap_or(Pane::Terminal),
-        (Pane::Editor | Pane::Ai | Pane::Risk | Pane::Buffers | Pane::History, Direction::Down) => {
+        (
+            Pane::Editor
+            | Pane::Ai
+            | Pane::Risk
+            | Pane::Buffers
+            | Pane::History
+            | Pane::Breakpoints,
+            Direction::Down,
+        ) => Pane::Terminal,
+        (Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints, Direction::Up) => {
+            Pane::Tree
+        }
+        (Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints, Direction::Right) => {
             Pane::Terminal
         }
-        (Pane::Risk | Pane::Buffers | Pane::History, Direction::Up) => Pane::Tree,
-        (Pane::Risk | Pane::Buffers | Pane::History, Direction::Right) => Pane::Terminal,
         // The way back in, and the reason every direction is written both ways
         // round: the shell starts where the corner ends, so a pane that could be
         // left sideways and not re-entered was a list only the tree above it
@@ -8387,6 +8514,9 @@ fn selected_row_actions(state: &State) -> Vec<&'static str> {
     if state.focus == Pane::History {
         return history::row_actions(state);
     }
+    if state.focus == Pane::Breakpoints {
+        return debug::row_actions(state);
+    }
     match state.tree_selection.as_deref() {
         Some(path) => tree::row_actions(state, path),
         None => Vec::new(),
@@ -8399,9 +8529,12 @@ fn mouse_encoding(state: &State, pane: Pane) -> mouse::Encoding {
     match pane {
         Pane::Terminal => state.terminal_mouse,
         Pane::Ai => state.ai_mouse,
-        Pane::Tree | Pane::Editor | Pane::Risk | Pane::Buffers | Pane::History => {
-            mouse::Encoding::None
-        }
+        Pane::Tree
+        | Pane::Editor
+        | Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints => mouse::Encoding::None,
     }
 }
 
@@ -10829,6 +10962,43 @@ mod tests {
             effect,
             Effect::SaveState(json) if json.contains("\"line\":3")
         )));
+    }
+
+    /// The list's keys reach what its Chips do: `d` the row's, `D` the
+    /// Transport's. Removing the last row leaves the highlight on the row that
+    /// is now last, and clearing with nothing to clear is dimmed and does
+    /// nothing — not even a save.
+    #[test]
+    fn the_breakpoint_lists_keys_remove_one_and_clear_them_all() {
+        let state = State {
+            breakpoints: ["/w/b.rs", "/w/a.rs", "/w/c.rs"]
+                .into_iter()
+                .map(|file| debug::Breakpoint {
+                    file: PathBuf::from(file),
+                    line: 1,
+                    text: String::new(),
+                    stale: false,
+                })
+                .collect(),
+            ..State::default()
+        };
+        let shown = update(&state, Event::ToggleBreakpointList).0;
+        assert_eq!(shown.focus, Pane::Breakpoints);
+        let last = update(&update(&shown, Event::Key('j')).0, Event::Key('j')).0;
+        assert_eq!(
+            debug::selected(&last).unwrap().file,
+            PathBuf::from("/w/c.rs")
+        );
+        let (removed, effects) = update(&last, Event::Key('d'));
+        assert!(matches!(effects[..], [Effect::SaveState(_)]));
+        assert_eq!(
+            debug::selected(&removed).unwrap().file,
+            PathBuf::from("/w/b.rs")
+        );
+        let cleared = update(&removed, Event::Key('D')).0;
+        assert!(cleared.breakpoints.is_empty());
+        assert_eq!(debug::transport(&cleared)[0].tone, Tone::Dimmed);
+        assert_eq!(update(&cleared, Event::Key('D')).1, vec![]);
     }
 
     /// A line the buffer does not have is not a place for a Breakpoint: a

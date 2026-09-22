@@ -669,7 +669,12 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
             // With no session the AI pane is an input box asking which CLI to
             // start, so it is not hosting anything yet.
             Pane::Ai => state.ai_running,
-            Pane::Tree | Pane::Editor | Pane::Risk | Pane::Buffers | Pane::History => false,
+            Pane::Tree
+            | Pane::Editor
+            | Pane::Risk
+            | Pane::Buffers
+            | Pane::History
+            | Pane::Breakpoints => false,
         }
 }
 
@@ -1307,7 +1312,7 @@ fn claims_colon(state: &State) -> bool {
         Pane::Tree => true,
         Pane::Editor => !crate::editor_inserting(state),
         // Varde's own panes, so the colon is Varde's.
-        Pane::Risk | Pane::Buffers | Pane::History => true,
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints => true,
         Pane::Ai | Pane::Terminal => false,
     }
 }
@@ -1338,6 +1343,9 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
         // rows have one action, so Right steps into the icon the mouse clicks.
         (Pane::History, false) => list_arrow(direction),
         (Pane::History, true) => vec![],
+        // The fourth, and its rows have one action too.
+        (Pane::Breakpoints, false) => list_arrow(direction),
+        (Pane::Breakpoints, true) => vec![],
         // A hosted pane's arrows went to its child; see below.
         (Pane::Ai | Pane::Terminal, _) => vec![],
     })
@@ -1364,7 +1372,7 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         // where they differ. The panes' routing lives here rather than at the
         // edge for the reason every other pane's does: what a key means is a
         // decision, and `main.rs` has no test.
-        Pane::Risk | Pane::Buffers | Pane::History => list_pane_key(event),
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints => list_pane_key(event),
         // A hosted pane never arrives here: with nothing of Varde's own
         // collecting, `child_owns_keys` sent the key to `to_child`, and with
         // something collecting one of the returns above took it. Every pane is

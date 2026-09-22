@@ -2394,7 +2394,12 @@ fn grid_lines(edge: &Edge, pane: Pane, split: usize, upto: usize) -> Option<Vec<
     let screen = match pane {
         Pane::Ai => edge.ai.as_ref()?.screen(),
         Pane::Terminal => edge.shells.get(split)?.screen(),
-        Pane::Tree | Pane::Editor | Pane::Risk | Pane::Buffers | Pane::History => return None,
+        Pane::Tree
+        | Pane::Editor
+        | Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints => return None,
     };
     let (rows, columns) = screen.size();
     // Absolutely indexed from the grid's first row, because that is what the
@@ -2497,7 +2502,12 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
                 }
             }
             Pane::Terminal => edge.shell(split).send(&bytes),
-            Pane::Tree | Pane::Editor | Pane::Risk | Pane::Buffers | Pane::History => {}
+            Pane::Tree
+            | Pane::Editor
+            | Pane::Risk
+            | Pane::Buffers
+            | Pane::History
+            | Pane::Breakpoints => {}
         },
         other => return Some(other),
     }

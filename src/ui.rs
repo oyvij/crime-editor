@@ -238,6 +238,9 @@ pub fn draw(
             layout::Corner::History => {
                 frame.render_widget(history_widget(state, areas.corner.width), areas.corner)
             }
+            layout::Corner::Breakpoints => {
+                frame.render_widget(breakpoints_widget(state, areas.corner.width), areas.corner)
+            }
         }
     }
     let caret_is_free = state.modal == Modal::None && typing.is_none();
@@ -771,6 +774,69 @@ fn buffers_lines(state: &State, width: u16) -> Vec<Line<'static>> {
                 Span::styled(mark, selected.fg(colour)),
                 Span::styled(format!(" {}", truncate(&name, room)), selected),
             ])
+        })
+        .collect()
+}
+
+/// One row per Breakpoint, its Transport on the top border at the columns
+/// `mouse::breakpoint_chip_at` hit-tests.
+fn breakpoints_widget(state: &State, width: u16) -> Paragraph<'static> {
+    let chips = varde::debug::transport(state);
+    let labels = layout::chip_labels(&chips, width, layout::CORNER_TITLE);
+    let gap = Style::default().fg(border_colour(state, Pane::Breakpoints));
+    let mut spans = Vec::new();
+    for (chip, label) in chips.iter().zip(labels) {
+        spans.extend(chip_spans(state, chip, label));
+        spans.push(Span::styled("\u{2500}", gap));
+    }
+    Paragraph::new(breakpoints_lines(state, width))
+        .scroll((state.breakpoints_scroll as u16, 0))
+        .block(
+            pane_block("breakpoints", state, Pane::Breakpoints)
+                .title(Line::from(spans).right_aligned()),
+        )
+}
+
+/// Split out of `breakpoints_widget` for the reason `risk_lines` is split out
+/// of `risk_widget`: a `Paragraph` will not give its text back.
+///
+/// The line and the icon are taken out of the row's columns first, so a narrow
+/// pane cuts the path and never slides the icon off the columns `mouse`
+/// hit-tests it from. A Stale one says so, dimmed.
+fn breakpoints_lines(state: &State, width: u16) -> Vec<Line<'static>> {
+    let inner = width.saturating_sub(2) as usize;
+    varde::debug::list(state)
+        .into_iter()
+        .enumerate()
+        .map(|(index, breakpoint)| {
+            let on_this_row = index == state.breakpoints_selection;
+            let selected = match on_this_row {
+                true => Style::default().add_modifier(Modifier::REVERSED),
+                false => Style::default(),
+            };
+            let actions = match on_this_row {
+                true => varde::debug::row_actions(state),
+                false => Vec::new(),
+            };
+            let tail = match breakpoint.stale {
+                true => format!(":{} stale ", breakpoint.line),
+                false => format!(":{} ", breakpoint.line),
+            };
+            let room = inner.saturating_sub(tail.width() + 1 + actions.len() * 2);
+            let path = match room {
+                0 => String::new(),
+                room => truncate(&varde::relative(state, &breakpoint.file), room),
+            };
+            let mut spans = vec![Span::styled(format!(" {path:<room$}"), selected)];
+            spans.push(Span::styled(tail, selected.fg(Color::DarkGray)));
+            for (at, action) in actions.iter().enumerate() {
+                spans.push(Span::styled(
+                    action_icon(action),
+                    action_style(state, action, state.selected_action == Some(at)),
+                ));
+                spans.push(Span::raw(" "));
+            }
+            Line::from(spans)
         })
         .collect()
 }
@@ -2319,7 +2385,7 @@ fn right_title(state: &State, room: usize, width: u16) -> Line<'static> {
         clause => vec![Span::styled(clause, Style::default().fg(Color::DarkGray))],
     };
     let chips = varde::reading::transport(state);
-    let labels = layout::editor_chip_labels(&chips, width);
+    let labels = layout::chip_labels(&chips, width, layout::EDITOR_TITLE);
     let gap = Style::default().fg(border_colour(state, Pane::Editor));
     for (chip, label) in chips.iter().zip(labels) {
         spans.extend(chip_spans(state, chip, label));
@@ -2426,7 +2492,11 @@ fn authorship_clause(state: &State, room: usize) -> String {
 /// border to give, and a pane too narrow for both says nothing about who wrote
 /// the line rather than nothing about which file it is in.
 fn title_room(state: &State, width: u16) -> usize {
-    let labels = layout::editor_chip_labels(&varde::reading::transport(state), width);
+    let labels = layout::chip_labels(
+        &varde::reading::transport(state),
+        width,
+        layout::EDITOR_TITLE,
+    );
     // A column of border between the two, when there is a Transport at all: a
     // name cut to land exactly against a Chip reads as one word with it.
     let strip = match labels.is_empty() {
@@ -3624,6 +3694,9 @@ fn action_icon(action: &str) -> &'static str {
         "copy-path" => "\u{f0c5}",
         "search-here" => "\u{f002}",
         varde::history::GO_TO => "\u{f0a9}",
+        // One cell in every font, as ADR 0022 asks of a Chip's glyph: the
+        // debugger's first row action, built after the rule.
+        varde::debug::REMOVE => "\u{2715}",
         varde::risk::REFACTOR => "\u{f0ad}",
         varde::risk::RECOMPUTE => "\u{f021}",
         varde::risk::START_LOOP => "\u{f04b}",
@@ -4370,7 +4443,7 @@ mod tests {
             assert!(top.ends_with(&format!("{drawn}\u{2510}")), "{top:?}");
             // And every column of it answers with the Chip drawn there, every
             // column of border between two with none.
-            let labels = layout::editor_chip_labels(&chips, width);
+            let labels = layout::chip_labels(&chips, width, layout::EDITOR_TITLE);
             let area = layout::Area {
                 x: 0,
                 y: 0,
@@ -4673,6 +4746,33 @@ mod tests {
             .sum();
         // width - 2 for the borders, less two columns for the action.
         assert_eq!(before, (30 - 2) - 2);
+    }
+
+    /// The Breakpoint list's row: its path and line, `stale` when it is, and
+    /// the icon in the two columns `mouse::breakpoint_action_at` hit-tests —
+    /// however long the path is.
+    #[test]
+    fn the_breakpoint_row_names_its_line_and_keeps_its_icon_in_place() {
+        let mut state = State::default();
+        state.root = std::path::PathBuf::from("/w");
+        state.breakpoints = vec![varde::debug::Breakpoint {
+            file: std::path::PathBuf::from("/w/src/a/very/long/path/to/main.rs"),
+            line: 3,
+            text: String::new(),
+            stale: true,
+        }];
+        let line = super::breakpoints_lines(&state, 30).remove(0);
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.contains(":3 stale"), "{text:?}");
+        let before: usize = line.spans[..line.spans.len() - 2]
+            .iter()
+            .map(|span| span.content.width())
+            .sum();
+        assert_eq!(before, (30 - 2) - 2, "{line:?}");
     }
 
     /// `mouse::history_action_at` hit-tests the row's icon from the pane's right

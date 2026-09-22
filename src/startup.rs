@@ -1525,6 +1525,7 @@ fn initial_state(
             Some("Risk") => crate::layout::Corner::Risk,
             Some("Buffers") => crate::layout::Corner::Buffers,
             Some("History") => crate::layout::Corner::History,
+            Some("Breakpoints") => crate::layout::Corner::Breakpoints,
             Some(_) => crate::layout::Corner::Hidden,
             None => match saved_text(input.state_json.as_deref(), "risk_list").as_deref() {
                 Some("Shown") => crate::layout::Corner::Risk,
@@ -1887,6 +1888,18 @@ mod tests {
             .join("\n")
             .parse()
             .expect("valid TOML uncommented")
+    }
+
+    /// The Corner's occupant persists, as it does for every occupant — the
+    /// Breakpoint list too, which needs no session to be shown.
+    #[test]
+    fn the_breakpoint_list_is_back_in_the_corner_after_a_restart() {
+        let (state, _, _) = start(&Startup {
+            state_json: Some(r#"{"corner": "Breakpoints"}"#.to_string()),
+            ..Startup::default()
+        })
+        .expect("started");
+        assert_eq!(state.corner, crate::layout::Corner::Breakpoints);
     }
 
     /// The refusal a project layer earns, so that the tests below assert the
