@@ -107,6 +107,41 @@ pub enum Pane {
     History,
 }
 
+/// One control in a Transport (`docs/adr/0022-every-action-has-a-chip.md`):
+/// what a click on it routes, what pressing it does now, the glyph, the keys
+/// that do the same, and how it is drawn. `action` and `name` part ways on a
+/// Chip that says what pressing it does — play and pause are one control, so
+/// one action, lit as one whichever it read when it was pressed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Chip {
+    pub action: &'static str,
+    pub name: &'static str,
+    pub glyph: String,
+    pub keys: &'static str,
+    pub hue: Hue,
+    pub tone: Tone,
+}
+
+/// What a Chip's colour says, named for its meaning so `ui` maps each to one
+/// of the theme's named colours and never to a fixed one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hue {
+    Go,
+    Hold,
+    Step,
+    Halt,
+    Plain,
+}
+
+/// Dimmed and lit come from state, never from a timer: ADR 0009 allows a Tick
+/// only while work is in flight, and a lit Chip that faded would need one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Dimmed,
+    Plain,
+    Lit,
+}
+
 /// What one of the terminal strip's shells is doing, told by the edge: a
 /// foreground job is running in it, or its prompt is waiting. A command Varde
 /// pushes goes to a waiting one — typed at a running job it is the job's input.
@@ -1011,6 +1046,10 @@ pub enum Event {
     StartReading,
     /// `:stop` — end the Reading, and the stream with it.
     StopReading,
+    /// The edge's player finished on its own or could not start, so the
+    /// Reading is over. Not `StopReading`: nobody pressed stop, and a stop
+    /// Chip lit for every Reading that ran to its end says somebody did.
+    ReadingEnded,
     /// `:pause` — stop the sound where it is, or start it again from there.
     /// One event for both because it is one control: R35.8's Transport has a
     /// play/pause, not a play and a pause, and a reader who paused presses the
@@ -1702,6 +1741,10 @@ pub struct State {
     /// a button. This is the whole affordance, the way the underline is a
     /// link's.
     pub hovered_action: Option<&'static str>,
+    /// The Transport action taken last, by click or by key, which its Chip
+    /// stays lit for until another is taken. Named by action for the reason
+    /// `hovered_action` is, so one field serves every Transport.
+    pub transport_lit: Option<&'static str>,
     /// Whether the pointer is on the minimap. Transient like the hovered icon
     /// above and never saved: it is where the pointer is, not a preference.
     pub hovered_minimap: bool,
@@ -2200,6 +2243,7 @@ impl Default for State {
             diagnostics: BTreeMap::new(),
             hover: None,
             hovered_action: None,
+            transport_lit: None,
             hovered_minimap: false,
             pointed_at: Pointed::Elsewhere,
         }
@@ -5627,8 +5671,8 @@ fn seek(next: &mut State, sought: Option<reading::Seek>) -> Vec<Effect> {
     }
 }
 
-/// StartReading, StopReading, PlayPause, SetSpeed, NextUtterance,
-/// PreviousUtterance, Speaking
+/// StartReading, StopReading, ReadingEnded, PlayPause, SetSpeed,
+/// NextUtterance, PreviousUtterance, Speaking
 fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         // Superseding, never queueing: whatever was in flight is replaced, the
@@ -5662,7 +5706,15 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
             }
         },
 
+        // Lit only when there was a Reading to act on: a dimmed Chip does
+        // nothing, and a Chip lit for nothing says something happened.
         Event::StopReading => {
+            if next.reading.take().is_some() {
+                next.transport_lit = Some(reading::STOP);
+            }
+            vec![Effect::StopSpeaking]
+        }
+        Event::ReadingEnded => {
             next.reading = None;
             vec![Effect::StopSpeaking]
         }
@@ -5679,15 +5731,22 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
             // button the reader presses twice and then stops believing.
             // `start` still refuses when nothing names a passage, and says so
             // out loud — so this is a route to a Reading, never a silent one.
-            None => return Ok(update(state, Event::StartReading)),
+            None => {
+                let (mut started, effects) = update(state, Event::StartReading);
+                if started.reading.is_some() {
+                    started.transport_lit = Some(reading::PLAY_PAUSE);
+                }
+                return Ok((started, effects));
+            }
             Some(reading) if reading.paused => {
                 reading.paused = false;
-                vec![Effect::SpeakFrom {
-                    at_ms: reading.at_ms,
-                }]
+                let at_ms = reading.at_ms;
+                next.transport_lit = Some(reading::PLAY_PAUSE);
+                vec![Effect::SpeakFrom { at_ms }]
             }
             Some(reading) => {
                 reading.paused = true;
+                next.transport_lit = Some(reading::PLAY_PAUSE);
                 vec![Effect::PauseSpeaking]
             }
         },
@@ -5696,15 +5755,22 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
         // stream it is playing was paced when it was built.
         Event::SetSpeed(speed) => {
             next.speech.speed = speed;
+            next.transport_lit = Some(reading::SPEED);
             vec![]
         }
 
         Event::NextUtterance => {
             let sought = next.reading.as_ref().map(reading::Reading::forward);
+            if sought.is_some() {
+                next.transport_lit = Some(reading::NEXT);
+            }
             seek(&mut next, sought)
         }
         Event::PreviousUtterance => {
             let sought = next.reading.as_ref().map(reading::Reading::back);
+            if sought.is_some() {
+                next.transport_lit = Some(reading::PREVIOUS);
+            }
             seek(&mut next, sought)
         }
 
@@ -10757,6 +10823,50 @@ mod tests {
         let (after, effects) = update(&state, Event::NextUtterance);
         assert_eq!(after.reading, None);
         assert_eq!(effects, vec![Effect::StopSpeaking]);
+    }
+
+    /// ADR 0022. The Chip lit is the Transport action taken last and moves
+    /// only when another is taken — nothing unlights it on its own — while a
+    /// dimmed Chip pressed did nothing, so it lights nothing either.
+    #[test]
+    fn the_last_transport_action_taken_is_the_one_lit() {
+        let state = State {
+            reading: Some(reading::Reading {
+                utterances: reading::utterances("One. Two."),
+                offsets: vec![0, 1_550],
+                at_ms: 0,
+                paused: false,
+                file: None,
+            }),
+            ..State::default()
+        };
+        let lit = |state: &State, event| update(state, event).0.transport_lit;
+        assert_eq!(lit(&state, Event::PlayPause), Some(reading::PLAY_PAUSE));
+        assert_eq!(lit(&state, Event::NextUtterance), Some(reading::NEXT));
+        assert_eq!(
+            lit(&state, Event::PreviousUtterance),
+            Some(reading::PREVIOUS)
+        );
+        assert_eq!(lit(&state, Event::SetSpeed(1.5)), Some(reading::SPEED));
+        let (stopped, _) = update(&state, Event::StopReading);
+        assert_eq!(stopped.transport_lit, Some(reading::STOP));
+        assert_eq!(
+            update(&stopped, Event::Tick).0.transport_lit,
+            Some(reading::STOP)
+        );
+        // A Reading that ran to its end, or whose player never started, was
+        // not stopped by anybody, and a play that started nothing — no
+        // Selection to read — was refused out loud rather than done.
+        let (ended, _) = update(&state, Event::ReadingEnded);
+        assert_eq!((ended.reading, ended.transport_lit), (None, None));
+        assert_eq!(lit(&State::default(), Event::PlayPause), None);
+        for dimmed in [
+            Event::NextUtterance,
+            Event::PreviousUtterance,
+            Event::StopReading,
+        ] {
+            assert_eq!(lit(&State::default(), dimmed), None);
+        }
     }
 
     /// A position report is what the machine did, so it is the tick's

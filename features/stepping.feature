@@ -317,21 +317,6 @@ Feature: Stepping and the Transport
       Then no Chip shows its keys
       And every Chip is drawn whole
 
-  Rule: The Reading's Transport is drawn in the same Chip style
-
-    Scenario: The Reading's Transport is made of Chips
-      Given a voice is configured
-      And "guide.md" is open in the editor holding:
-        """
-        Install it.
-        """
-      Then the editor's Transport's Chips are:
-        | play     |
-        | previous |
-        | next     |
-        | stop     |
-        | speed    |
-
   Rule: The debug keys are in the cheatsheet, from the same list as the Chord hint
 
     Scenario: The cheatsheet lists the debug keys while a session exists

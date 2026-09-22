@@ -1069,10 +1069,10 @@ fn row_index(state: &State, panes: &Layout, row: u16) -> usize {
 /// the click and the key, and `layout::strip_at` is the one place their
 /// columns are worked out.
 fn transport_at(state: &State, panes: &Layout, column: u16) -> Option<&'static str> {
-    let controls = crate::reading::transport(state);
-    let labels: Vec<String> = controls.iter().map(|(_, glyph)| glyph.clone()).collect();
-    let at = crate::layout::strip_at(panes.editor, &labels, column)?;
-    Some(controls[at].0)
+    let chips = crate::reading::transport(state);
+    let labels = layout::editor_chip_labels(&chips, panes.editor.width);
+    let at = layout::strip_at(panes.editor, &labels, column)?;
+    Some(chips[at].action)
 }
 
 /// Whether a press lands on a fold's affordance: the toggle in the gutter's
@@ -1778,56 +1778,81 @@ mod tests {
     /// R35.8. The Transport is on the editor's top border, so a click there is
     /// a control and never a place in the text — and a buffer that cannot be
     /// read has no controls, so the same columns are just the pane again.
+    ///
+    /// Pinned in both of its shapes, every column of each Chip including its
+    /// padding, and the border column between two naming neither: the columns
+    /// `ui`'s render test pins.
     #[test]
-    fn a_click_on_the_transport_reaches_the_reading_it_names() {
+    fn a_click_on_the_transport_reaches_the_chip_drawn() {
+        use crate::reading::{NEXT, PLAY_PAUSE, PREVIOUS, SPEED, STOP};
         let mut state = workspace();
         state.current_buffer = Some(PathBuf::from("/w/guide.md"));
         state.speech.speed = 1.0;
-        let editor = panes(120, 26, 30, None, 0, 0, Shapes::default()).editor;
-        // The strip is `« ▸ » ▪ 1.00x `, fourteen columns ending on the one
-        // before the corner — the columns `ui`'s render test pins.
-        let last = editor.x + editor.width - 1;
-        assert_eq!(
-            click(&state, last - 14, 0),
-            vec![Event::PaneAction(crate::reading::PREVIOUS)]
-        );
-        assert_eq!(
-            click(&state, last - 12, 0),
-            vec![Event::PaneAction(crate::reading::PLAY_PAUSE)]
-        );
-        assert_eq!(
-            click(&state, last - 10, 0),
-            vec![Event::PaneAction(crate::reading::NEXT)]
-        );
-        assert_eq!(
-            click(&state, last - 8, 0),
-            vec![Event::PaneAction(crate::reading::STOP)]
-        );
-        assert_eq!(
-            click(&state, last - 5, 0),
-            vec![Event::PaneAction(crate::reading::SPEED)]
-        );
+        let press = |state: &State, width: u16, from_corner: u16, row: u16| {
+            let panes = panes(width, 26, 30, None, 0, 0, Shapes::default());
+            let corner = panes.editor.x + panes.editor.width - 1;
+            on_mouse(
+                state,
+                &panes,
+                &mut Pointer::default(),
+                Input {
+                    kind: Kind::LeftDown,
+                    column: corner - from_corner,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                },
+            )
+            .events
+        };
+        let chip = |action| vec![Event::PaneAction(action)];
+        let border = vec![Event::ClickPane(Pane::Editor)];
+        // 120 columns leave the editor 54, too few for the keys: ` ► ` ` « `
+        // ` » ` ` ■ ` ` 1.00x `, each followed by a column of border.
+        let shed = [
+            (22..=24, PLAY_PAUSE),
+            (18..=20, PREVIOUS),
+            (14..=16, NEXT),
+            (10..=12, STOP),
+            (2..=8, SPEED),
+        ];
+        // 220 leave it 124: ` ► :pause ` ` « :prev ` ` » :next ` ` ■ :stop `
+        // ` 1.00x :speed `.
+        let whole = [
+            (47..=56, PLAY_PAUSE),
+            (37..=45, PREVIOUS),
+            (27..=35, NEXT),
+            (17..=25, STOP),
+            (2..=15, SPEED),
+        ];
+        for (width, strip) in [(120, shed), (220, whole)] {
+            for (columns, action) in strip {
+                let gap = columns.end() + 1;
+                assert_eq!(press(&state, width, gap, 0), border, "{width}: {gap}");
+                for column in columns {
+                    assert_eq!(
+                        press(&state, width, column, 0),
+                        chip(action),
+                        "{width}: {column}"
+                    );
+                }
+            }
+            assert_eq!(press(&state, width, 1, 0), border, "{width}");
+        }
         // The border's name, not its controls. The corner itself is not
         // tested here: it is the AI divider's handle, which is grabbed before
         // any pane sees the press — `layout`'s own test holds it to naming no
         // control.
-        assert_eq!(
-            click(&state, editor.x + 10, 0),
-            vec![Event::ClickPane(Pane::Editor)]
-        );
+        assert_eq!(press(&state, 120, 43, 0), border);
         // A row inside the pane is still text, which is what the border row
         // being tested first has to leave alone.
         assert!(matches!(
-            click(&state, editor.x + 8, 3).as_slice(),
+            press(&state, 120, 20, 3).as_slice(),
             [Event::ClickText(_)]
         ));
         // A buffer nothing can read draws no Transport, so those columns are
         // the pane and not a control that quietly does nothing.
         state.current_buffer = Some(PathBuf::from("/w/a.rs"));
-        assert_eq!(
-            click(&state, last - 5, 0),
-            vec![Event::ClickPane(Pane::Editor)]
-        );
+        assert_eq!(press(&state, 120, 5, 0), border);
     }
 
     /// Where the pointer rests is the editor's text and nothing else: the row

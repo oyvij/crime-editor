@@ -40,10 +40,14 @@ wanders into one is stopped by hand.
 
 ## Starting, pausing, skipping, stopping
 
-Every control is a `:` command, and every one also sits on the **Transport** — the strip of controls
-on the editor's top border, drawn only over a markdown buffer, clickable. The cheatsheet lists them
-on one row: `:read :pause :next :prev :stop :speed`. See [editing.md](editing.md) for the rest of
-the editor's keys.
+Every control is a `:` command, and every one also sits on the **Transport** — the row of Chips
+on the editor's top border, drawn only over a markdown buffer, clickable. Each Chip is a glyph and
+the command that does the same, so the Transport teaches its own keys; on a border too narrow for
+all of them, every Chip drops its command at once and keeps its glyph. Previous, next and stop are
+dimmed while nothing is being read, and the last control you used, by click or by command, stays
+lit until you use another. The cheatsheet lists them on one row:
+`:read :pause :next :prev :stop :speed`. See [editing.md](editing.md) for the rest of the editor's
+keys.
 
 | Command | Does |
 |---|---|

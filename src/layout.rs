@@ -57,6 +57,34 @@ pub fn strip_at(area: Area, labels: &[String], column: u16) -> Option<usize> {
     })
 }
 
+/// The editor's Transport's labels, as [`strip_width`] measures them and
+/// [`strip_at`] hit-tests them: each Chip its glyph and keys, padded a column
+/// each side, or — when the whole strip would not fit in the pane's `width`
+/// less [`EDITOR_TITLE`] — every Chip its glyph alone. All at once, never one
+/// by one, so the row has one shape at a given width
+/// (`docs/adr/0022-every-action-has-a-chip.md`); and a glyph alone is never
+/// cut, since a strip past its pane's width hit-tests as nothing. The one
+/// derivation `ui` draws and `mouse` hit-tests, for the reason [`GUTTER`] is.
+pub fn editor_chip_labels(chips: &[crate::Chip], width: u16) -> Vec<String> {
+    let whole: Vec<String> = chips
+        .iter()
+        .map(|chip| format!(" {} {} ", chip.glyph, chip.keys))
+        .collect();
+    match strip_width(&whole) <= width.saturating_sub(EDITOR_TITLE) {
+        true => whole,
+        false => chips
+            .iter()
+            .map(|chip| format!(" {} ", chip.glyph))
+            .collect(),
+    }
+}
+
+/// The columns of the editor's top border its Transport leaves to the
+/// filename and the Authorship before its Chips show their keys: the corners,
+/// a name, its dirty mark and its mode. The Chips give before the name does —
+/// the keys are in the cheatsheet, and which file this is is nowhere else.
+const EDITOR_TITLE: u16 = 34;
+
 /// How wide the editor's line-number gutter is, between its border and its
 /// text. The renderer draws it and the mouse hit-tests past it, so both read
 /// this rather than each counting columns.
@@ -534,7 +562,8 @@ mod frame_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        inset, pane_at, panes, strip_at, strip_width, AiPane, Area, Corner, Shapes, STEP_MENU_WIDTH,
+        editor_chip_labels, inset, pane_at, panes, strip_at, strip_width, AiPane, Area, Corner,
+        Shapes, STEP_MENU_WIDTH,
     };
     use crate::Pane;
 
@@ -1054,5 +1083,32 @@ mod tests {
         // A pane narrower than its own strip has no columns to offer rather
         // than wrapping the strip onto columns nobody pointed at.
         assert_eq!(strip_at(Area { width: 4, ..area }, &labels, 2), None);
+    }
+
+    fn chip(glyph: &str, keys: &'static str) -> crate::Chip {
+        crate::Chip {
+            action: "a",
+            name: "a",
+            glyph: glyph.to_string(),
+            keys,
+            hue: crate::Hue::Plain,
+            tone: crate::Tone::Plain,
+        }
+    }
+
+    /// Short of room every Chip sheds its keys at once: one column short of
+    /// the whole strip is a row of bare glyphs, never one Chip with its keys
+    /// beside one without, and never a Chip cut to fit.
+    #[test]
+    fn short_of_room_every_chip_sheds_its_keys_together() {
+        let chips = [chip("\u{25ba}", ":pause"), chip("1.25x", ":speed")];
+        // " ► :pause " is 10 and " 1.25x :speed " is 14, each with its gap,
+        // beside the 34 columns the title keeps.
+        let whole = editor_chip_labels(&chips, 60);
+        assert_eq!(whole, [" \u{25ba} :pause ", " 1.25x :speed "]);
+        assert_eq!(strip_width(&whole), 26);
+        let shed = editor_chip_labels(&chips, 59);
+        assert_eq!(shed, [" \u{25ba} ", " 1.25x "]);
+        assert_eq!(strip_width(&shed), 12);
     }
 }

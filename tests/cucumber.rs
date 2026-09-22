@@ -13200,6 +13200,25 @@ fn transport_not_on_screen(world: &mut VardeWorld) {
     );
 }
 
+/// R44.7. The names say what pressing each does, so the first reads `play`
+/// here and `pause` while a Reading plays.
+#[then("the editor's Transport's Chips are:")]
+fn editor_transport_chips_are(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table
+        .as_ref()
+        .expect("a table of Chips")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let drawn: Vec<&str> = reading::transport(&world.state)
+        .iter()
+        .map(|chip| chip.name)
+        .collect();
+    assert_eq!(drawn, expected);
+}
+
 /// R35.8. The bar is an affordance and a reminder, never the only way in: a
 /// control reachable only by mouse is one the cheatsheet cannot promise.
 ///
@@ -13212,19 +13231,24 @@ fn transport_not_on_screen(world: &mut VardeWorld) {
 fn every_transport_action_has_a_key(world: &mut VardeWorld) {
     open_buffer_plain(world, "guide.md".to_string());
     let commands = [
-        (reading::PREVIOUS, ":prev"),
         (reading::PLAY_PAUSE, ":pause"),
+        (reading::PREVIOUS, ":prev"),
         (reading::NEXT, ":next"),
         (reading::STOP, ":stop"),
         // The ladder's next rung, said out loud: a glyph on a border cannot be
         // typed a number into, so the click steps and the key names.
         (reading::SPEED, ":speed 1.25"),
     ];
-    let offered: Vec<&str> = reading::transport(&world.state)
+    // Each Chip's keys are the command it is held to below, so a Chip cannot
+    // teach a key that does something else.
+    let offered: Vec<(&str, &str)> = reading::transport(&world.state)
         .iter()
-        .map(|(action, _)| *action)
+        .map(|chip| (chip.action, chip.keys))
         .collect();
-    let listed: Vec<&str> = commands.iter().map(|(action, _)| *action).collect();
+    let listed: Vec<(&str, &str)> = commands
+        .iter()
+        .map(|(action, line)| (*action, line.split(' ').next().unwrap_or(line)))
+        .collect();
     assert_eq!(offered, listed, "a control with no key beside it");
     for (action, line) in commands {
         let clicked = update(&world.state, Event::PaneAction(action));

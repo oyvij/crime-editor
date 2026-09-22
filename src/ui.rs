@@ -2258,8 +2258,8 @@ fn buffer_title(
 }
 
 /// Everything the editor's top border says at its right-hand end: F40's
-/// Authorship, then R35.8's Transport — the reading controls, one space apart
-/// and the last of them hard against the corner. `layout::strip_at` hit-tests
+/// Authorship, then R35.8's Transport — its Chips, a column of border after
+/// each, the last of them against the corner. `layout::strip_at` hit-tests
 /// exactly those columns, and a test below pins ratatui's placement of a
 /// right-aligned title so the two cannot drift; the Authorship goes to the left
 /// of them for that reason, and `room` is what the filename left it.
@@ -2270,27 +2270,56 @@ fn buffer_title(
 ///
 /// Nothing at all for a buffer that cannot be read and no Authorship to report:
 /// both are empty then, and an empty `Line` draws no title.
-fn right_title(state: &State, room: usize) -> Line<'static> {
+fn right_title(state: &State, room: usize, width: u16) -> Line<'static> {
     let mut spans = match authorship_clause(state, room) {
         clause if clause.is_empty() => Vec::new(),
         clause => vec![Span::styled(clause, Style::default().fg(Color::DarkGray))],
     };
-    spans.extend(
-        varde::reading::transport(state)
-            .into_iter()
-            .flat_map(|(control, glyph)| {
-                // Lit under the pointer, exactly as a row's action icons are:
-                // a control that looks the same whether or not you are on it
-                // is a control nobody knows is a button, and a terminal has no
-                // hand pointer to say so any other way.
-                [
-                    Span::styled(glyph, action_style(state, control, false)),
-                    Span::raw(" "),
-                ]
-            })
-            .collect::<Vec<Span<'static>>>(),
-    );
+    let chips = varde::reading::transport(state);
+    let labels = layout::editor_chip_labels(&chips, width);
+    let gap = Style::default().fg(border_colour(state, Pane::Editor));
+    for (chip, label) in chips.iter().zip(labels) {
+        spans.extend(chip_spans(state, chip, label));
+        spans.push(Span::styled("\u{2500}", gap));
+    }
     Line::from(spans).right_aligned()
+}
+
+/// One Chip as drawn: its glyph in its hue and its keys dimmer, dimmed whole
+/// while it cannot act, and reversed whole while it is the last action taken.
+/// Every colour is one of the terminal's named ones, so the Chip belongs to
+/// whatever theme it is drawn in (ADR 0022). Under the pointer it is bold and
+/// underlined as well, for the reason a row's action icons light up there: a
+/// terminal has no hand pointer to say a thing is a button.
+fn chip_spans(state: &State, chip: &varde::Chip, label: String) -> [Span<'static>; 2] {
+    let hue = match chip.hue {
+        varde::Hue::Go => Color::Green,
+        varde::Hue::Hold => Color::Yellow,
+        varde::Hue::Step => Color::Blue,
+        varde::Hue::Halt => Color::Red,
+        varde::Hue::Plain => Color::Reset,
+    };
+    let (glyph, keys, mut lift) = match chip.tone {
+        varde::Tone::Dimmed => (Color::DarkGray, Color::DarkGray, Modifier::empty()),
+        varde::Tone::Plain => (hue, Color::DarkGray, Modifier::empty()),
+        varde::Tone::Lit => (hue, hue, Modifier::REVERSED),
+    };
+    if state.hovered_action == Some(chip.action) {
+        lift |= Modifier::BOLD | Modifier::UNDERLINED;
+    }
+    // The label opens with the glyph and a column each side of it; what is
+    // left is the keys, or nothing once the Transport has shed them.
+    let (head, tail) = label.split_at(chip.glyph.len() + 2);
+    [
+        Span::styled(
+            head.to_string(),
+            Style::default().fg(glyph).add_modifier(lift),
+        ),
+        Span::styled(
+            tail.to_string(),
+            Style::default().fg(keys).add_modifier(lift),
+        ),
+    ]
 }
 
 /// F40. Who last committed the line the cursor is on, and the day they wrote
@@ -2326,12 +2355,9 @@ fn authorship_clause(state: &State, room: usize) -> String {
 /// border to give, and a pane too narrow for both says nothing about who wrote
 /// the line rather than nothing about which file it is in.
 fn title_room(state: &State, width: u16) -> usize {
-    let labels: Vec<String> = varde::reading::transport(state)
-        .into_iter()
-        .map(|(_, glyph)| glyph)
-        .collect();
-    // A column of air between the two, when there is a Transport at all: a
-    // name cut to land exactly against `«` reads as one word with the control.
+    let labels = layout::editor_chip_labels(&varde::reading::transport(state), width);
+    // A column of border between the two, when there is a Transport at all: a
+    // name cut to land exactly against a Chip reads as one word with it.
     let strip = match labels.is_empty() {
         true => 0,
         false => layout::strip_width(&labels) as usize + 1,
@@ -2917,7 +2943,7 @@ fn editor_block(
     // Transport leaves.
     let room = title_room(state, width).saturating_sub(title.width());
     pane_block(title, state, Pane::Editor)
-        .title(right_title(state, room))
+        .title(right_title(state, room, width))
         .title_bottom(Line::from(footer).right_aligned())
         .title_bottom(
             Line::from(Span::styled(
@@ -4245,51 +4271,133 @@ mod tests {
     }
 
     /// R35.8. The Transport lands on the columns `mouse::transport_at`
-    /// hit-tests: each control one space from the next, the last hard against
-    /// the top-right corner. Rendered rather than reasoned about, because the
-    /// placement is ratatui's and not ours — the same reason `layout`'s tests
-    /// pin the rectangles its solver produced.
+    /// hit-tests: each Chip followed by a column of border, the last against
+    /// the top-right corner, in both of its shapes. Rendered rather than
+    /// reasoned about, because the placement is ratatui's and not ours — the
+    /// same reason `layout`'s tests pin the rectangles its solver produced.
     #[test]
-    fn the_transports_controls_land_on_the_columns_they_are_hit_tested_from() {
+    fn the_transports_chips_land_on_the_columns_they_are_hit_tested_from() {
         use ratatui::widgets::Widget;
         let mut state = State::default();
         state.current_buffer = Some(std::path::PathBuf::from("/w/guide.md"));
         state.speech.speed = 1.25;
-        let area = ratatui::layout::Rect::new(0, 0, 40, 4);
-        let mut buffer = ratatui::buffer::Buffer::empty(area);
-        Block::default()
-            .borders(Borders::ALL)
-            // No Authorship on a default State — nothing told the core git is
-            // installed — so there is no clause to leave room for.
-            .title(right_title(&state, 0))
-            .render(area, &mut buffer);
-        let top: Vec<String> = (0..40)
-            .map(|column| buffer[(column, 0)].symbol().to_string())
-            .collect();
-        let controls = varde::reading::transport(&state);
-        let labels: Vec<String> = controls.iter().map(|(_, glyph)| glyph.clone()).collect();
-        let drawn: Vec<String> = labels
-            .join(" ")
-            .chars()
-            .map(|glyph| glyph.to_string())
-            .collect();
-        let start = 39 - layout::strip_width(&labels) as usize;
-        assert_eq!(top[start..start + drawn.len()], drawn[..], "{top:?}");
-        // And every column of it answers with the control drawn there.
-        let area = layout::Area {
-            x: 0,
-            y: 0,
-            width: 40,
-            height: 4,
-        };
-        for (at, (action, _)) in controls.iter().enumerate() {
-            let column = (start + labels[..at].iter().map(|l| l.width() + 1).sum::<usize>()) as u16;
-            assert_eq!(
-                layout::strip_at(area, &labels, column).map(|hit| controls[hit].0),
-                Some(*action),
-                "column {column}"
-            );
+        let chips = varde::reading::transport(&state);
+        for (width, drawn) in [
+            (40, " \u{25ba} \u{2500} \u{ab} \u{2500} \u{bb} \u{2500} \u{25a0} \u{2500} 1.25x \u{2500}"),
+            (
+                120,
+                " \u{25ba} :pause \u{2500} \u{ab} :prev \u{2500} \u{bb} :next \u{2500} \u{25a0} :stop \u{2500} 1.25x :speed \u{2500}",
+            ),
+        ] {
+            let area = ratatui::layout::Rect::new(0, 0, width, 4);
+            let mut buffer = ratatui::buffer::Buffer::empty(area);
+            Block::default()
+                .borders(Borders::ALL)
+                // No Authorship on a default State — nothing told the core git
+                // is installed — so there is no clause to leave room for.
+                .title(right_title(&state, 0, width))
+                .render(area, &mut buffer);
+            let top: String = (0..width)
+                .map(|column| buffer[(column, 0)].symbol().to_string())
+                .collect();
+            assert!(top.ends_with(&format!("{drawn}\u{2510}")), "{top:?}");
+            // And every column of it answers with the Chip drawn there, every
+            // column of border between two with none.
+            let labels = layout::editor_chip_labels(&chips, width);
+            let area = layout::Area {
+                x: 0,
+                y: 0,
+                width,
+                height: 4,
+            };
+            let start = width - 1 - drawn.chars().count() as u16;
+            for (at, cell) in drawn.chars().enumerate() {
+                let column = start + at as u16;
+                let hit = layout::strip_at(area, &labels, column).map(|hit| chips[hit].action);
+                let owner = drawn.chars().take(at + 1).filter(|c| *c == '\u{2500}').count();
+                let expected = match cell {
+                    '\u{2500}' => None,
+                    _ => Some(chips[owner].action),
+                };
+                assert_eq!(hit, expected, "{width}: column {column}");
+            }
         }
+    }
+
+    /// No scenario can see a colour, so this is where "the theme's named
+    /// colours, never fixed RGB" is held: every tone of every hue, under the
+    /// pointer and not.
+    #[test]
+    fn every_chip_is_drawn_in_the_themes_named_colours() {
+        let mut state = State::default();
+        state.current_buffer = Some(std::path::PathBuf::from("/w/guide.md"));
+        let named = |colour: Option<Color>| {
+            !matches!(colour, Some(Color::Rgb(..)) | Some(Color::Indexed(_)))
+        };
+        for lit in [
+            None,
+            Some(varde::reading::STOP),
+            Some(varde::reading::SPEED),
+        ] {
+            for hovered in [None, Some(varde::reading::PREVIOUS)] {
+                state.transport_lit = lit;
+                state.hovered_action = hovered;
+                for span in right_title(&state, 0, 120).spans {
+                    let style = span.style;
+                    assert!(named(style.fg) && named(style.bg), "{span:?}");
+                }
+            }
+        }
+        // And lit is not a colour of its own but the Chip reversed, which is
+        // what keeps it in the theme whatever the theme is.
+        state.transport_lit = Some(varde::reading::STOP);
+        state.hovered_action = None;
+        let spans = right_title(&state, 0, 120).spans;
+        let stop = spans
+            .iter()
+            .find(|span| span.content.contains('\u{25a0}'))
+            .expect("the stop Chip");
+        assert_eq!(stop.style.fg, Some(Color::Red));
+        assert!(stop.style.add_modifier.contains(Modifier::REVERSED));
+
+        // Plain, each glyph in its hue and its keys dimmer beside it; under the
+        // pointer, bold and underlined as well, since nothing else says it is a
+        // button. Play is plain while a Reading is paused, previous with one.
+        state.transport_lit = None;
+        state.hovered_action = Some(varde::reading::PREVIOUS);
+        state.reading = Some(varde::reading::Reading {
+            utterances: varde::reading::utterances("One."),
+            offsets: Vec::new(),
+            at_ms: 0,
+            paused: true,
+            file: None,
+        });
+        let spans = right_title(&state, 0, 120).spans;
+        let drawn = |glyph: char| {
+            let at = spans
+                .iter()
+                .position(|span| span.content.contains(glyph))
+                .expect("the Chip");
+            (spans[at].style, spans[at + 1].style)
+        };
+        for (glyph, hue) in [
+            ('\u{25ba}', Color::Green),
+            ('\u{ab}', Color::Blue),
+            ('\u{bb}', Color::Blue),
+        ] {
+            let (head, keys) = drawn(glyph);
+            assert_eq!((head.fg, keys.fg), (Some(hue), Some(Color::DarkGray)));
+        }
+        let hovered = Modifier::BOLD | Modifier::UNDERLINED;
+        assert!(drawn('\u{ab}').0.add_modifier.contains(hovered));
+        assert!(!drawn('\u{bb}').0.add_modifier.intersects(hovered));
+        state.reading.as_mut().expect("a Reading").paused = false;
+        let spans = right_title(&state, 0, 120).spans;
+        let pause = spans
+            .iter()
+            .find(|span| span.content.contains('\u{25ae}'))
+            .expect("the pause Chip");
+        assert_eq!(pause.style.fg, Some(Color::Yellow));
     }
 
     /// F40 on the border, rendered: the Authorship lands to the *left* of the
@@ -4345,7 +4453,7 @@ mod tests {
             top.contains("Ada Lovelace  2026-01-05"),
             "the authorship is not on the border: {top:?}"
         );
-        assert!(top.ends_with("1.00x \u{2510}"), "{top:?}");
+        assert!(top.ends_with(" 1.00x \u{2500}\u{2510}"), "{top:?}");
 
         // And the filename is the last thing to give: a name that leaves no room
         // for a date takes the columns, rather than being drawn over by a clause
@@ -4354,12 +4462,9 @@ mod tests {
             &state,
             "a-very-long-document-name-indeed-and-then-some-more-of-it.md",
         );
-        assert!(
-            top.contains("indeed-and-then-some"),
-            "the name gave: {top:?}"
-        );
+        assert!(top.contains("indeed-and-then"), "the name gave: {top:?}");
         assert!(!top.contains("Ada"), "{top:?}");
-        assert!(top.ends_with("1.00x \u{2510}"), "{top:?}");
+        assert!(top.ends_with(" 1.00x \u{2500}\u{2510}"), "{top:?}");
     }
 
     /// A filename long enough to reach the Transport is cut, rather than drawn
@@ -4384,16 +4489,16 @@ mod tests {
             ))
             // No Authorship on a default State — nothing told the core git is
             // installed — so there is no clause to leave room for.
-            .title(right_title(&state, 0))
+            .title(right_title(&state, 0, 40))
             .render(area, &mut buffer);
         let top: String = (0..40)
             .map(|column| buffer[(column, 0)].symbol().to_string())
             .collect();
         assert!(top.contains('\u{2026}'), "the name was not cut: {top:?}");
-        assert!(top.ends_with("1.00x \u{2510}"), "{top:?}");
+        assert!(top.ends_with(" 1.00x \u{2500}\u{2510}"), "{top:?}");
         // And a column of border between the cut title and the first
         // control, so the two do not read as one word.
-        assert!(top.contains("\u{2500}\u{ab}"), "{top:?}");
+        assert!(top.contains("[normal]\u{2500} \u{25ba}"), "{top:?}");
     }
 
     /// A running loop's line and the icons share the border: the left title is

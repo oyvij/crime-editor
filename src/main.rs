@@ -1934,7 +1934,7 @@ fn play(edge: &mut Edge, at_ms: u32, queue: &mut VecDeque<Event>) {
         // spelled with a different child, and refusing out loud is R35.9.
         Err(because) => {
             hush(edge);
-            queue.push_back(Event::StopReading);
+            queue.push_back(Event::ReadingEnded);
             edge.status = Status {
                 text: because,
                 tone: ui::Tone::Warning,
@@ -2128,7 +2128,7 @@ fn reap_player(edge: &mut Edge, queue: &mut VecDeque<Event>) {
     );
     if done {
         hush(edge);
-        queue.push_back(Event::StopReading);
+        queue.push_back(Event::ReadingEnded);
     }
 }
 
