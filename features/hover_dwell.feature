@@ -100,3 +100,71 @@ Feature: Resting the pointer says what a symbol is
         """
       When the pointer moves out of the editor
       Then no hover is shown
+
+  Rule: The box stands while the pointer is on the symbol or on the box itself
+
+    Scenario: Moving the pointer onto the box keeps it up
+      Given a language server for "rust" is ready
+      And "src/lib.rs" holds:
+        """
+        fn main() {
+            let one = 1;
+        }
+        """
+      And "src/lib.rs" is open in the editor
+      And the pointer rests on line 2 column 9 in the editor
+      And the language server for "rust" answers the hover with:
+        """
+        {"contents":{"kind":"plaintext","value":"let one: i32"}}
+        """
+      When the pointer moves onto the hover
+      Then the hover shows "let one: i32"
+
+    Scenario: Leaving the box for somewhere else takes it down
+      Given a language server for "rust" is ready
+      And "src/lib.rs" holds:
+        """
+        fn main() {
+            let one = 1;
+        }
+        """
+      And "src/lib.rs" is open in the editor
+      And the pointer rests on line 2 column 9 in the editor
+      And the language server for "rust" answers the hover with:
+        """
+        {"contents":{"kind":"plaintext","value":"let one: i32"}}
+        """
+      And the pointer moves onto the hover
+      When the pointer moves to line 1 column 1 in the editor
+      Then no hover is shown
+
+    Scenario: The wheel over the box scrolls the box, not the editor
+      Given a language server for "rust" is ready
+      And "src/lib.rs" is open in the editor with 40 lines
+      And the pointer rests on line 2 column 9 in the editor
+      And the language server for "rust" answers the hover with a 30-line reply
+      And the pointer moves onto the hover
+      When I scroll down with the pointer over the hover
+      Then the hover starts at its row 2
+      And the editor view starts at line 1
+
+  Rule: Pressing K again moves the keyboard into the box
+
+    Scenario: A second K moves the keyboard into the hover
+      Given a language server for "rust" is ready
+      And "src/lib.rs" is open in the editor
+      And I press "K" in the editor
+      And the language server for "rust" answers the hover with:
+        """
+        {"contents":{"kind":"plaintext","value":"fn main()"}}
+        """
+      When I press "K" in the editor
+      Then the hover has focus
+
+    Scenario: Escape in the hover gives the keyboard back to the editor
+      Given a language server for "rust" is ready
+      And "src/lib.rs" is open in the editor
+      And the hover has focus
+      When I press "Escape"
+      Then no hover is shown
+      And the editor pane has focus
