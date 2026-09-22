@@ -538,6 +538,9 @@ pub enum Event {
         /// child reads it; the tree and the editor scroll by rows.
         at: Place,
     },
+    /// The Hover box moved a row, by the wheel over it or by `j`/`k` with the
+    /// keyboard in it — never the editor underneath.
+    ScrollHover(Direction),
     RightClick(Pane),
     DragDivider(u32),
     /// The AI pane's left edge was dragged: how many columns wide it is now.
@@ -932,15 +935,15 @@ pub enum Event {
     /// decided here, and every keystroke resets it, so this arrives once for a
     /// typed word rather than once per letter.
     CandidatesDue,
-    /// Where the pointer is now, in the buffer's text — or nothing at all,
-    /// which is the pointer over any other pane and so over no symbol. A fact
-    /// only the edge can observe, and one nobody pressed.
+    /// Where the pointer is now: in the buffer's text, on the Hover box, or
+    /// anywhere else, which is over no symbol. A fact only the edge can
+    /// observe, and one nobody pressed.
     ///
     /// Two things read it, and both are the reason it carries the place rather
     /// than an answer: the rest it may become is what the dwell window is
     /// armed off, and what is under it decides whether a diagnostic box is
     /// drawn — so a move that leaves the text is the event that takes one down.
-    PointerMoved(Option<Place>),
+    PointerMoved(Pointed),
     /// The pointer rested for as long as `Effect::DwellHover` asked for, so
     /// what is under it is worth asking the server about. The debounce's shape
     /// exactly: the edge holds the timer and the number came from here, and
@@ -1450,6 +1453,18 @@ impl Effect {
 pub struct Place {
     pub line: usize,
     pub column: usize,
+}
+
+/// What the pointer is over, as far as the buffer's text is concerned. The
+/// Hover box is one answer among the three rather than a flag beside the place:
+/// a pointer on the box is over no symbol, and the box floats over whatever is
+/// under it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Pointed {
+    #[default]
+    Elsewhere,
+    Text(Place),
+    Hover,
 }
 
 /// The one selection the workspace holds. Its two representations do not merge
@@ -1985,7 +2000,7 @@ pub struct State {
     /// describes where the reader is pointing, and the diagnostic box
     /// (`lsp::pointed`) is answered from it on the way past. A box remembered
     /// here would need taking down by every arm that moved the text under it.
-    pub pointed_at: Option<Place>,
+    pub pointed_at: Pointed,
 }
 
 impl State {
@@ -2186,7 +2201,7 @@ impl Default for State {
             hover: None,
             hovered_action: None,
             hovered_minimap: false,
-            pointed_at: None,
+            pointed_at: Pointed::Elsewhere,
         }
     }
 }
@@ -2553,7 +2568,7 @@ fn route(state: &State, event: Event) -> (State, Vec<Effect>) {
     next.refusal = None;
     // Taken before the match consumes the event; see the scroll rule in
     // `settle`.
-    let wheeled = matches!(event, Event::Scroll { .. });
+    let wheeled = matches!(event, Event::Scroll { .. } | Event::ScrollHover(_));
     let declined = (next, event);
     let declined = match section_input(state, declined.0, declined.1, wheeled) {
         Ok(answer) => return answer,
@@ -3030,6 +3045,14 @@ fn on_enter_name(state: &State, mut next: State, event: Event, wheeled: bool) ->
             _ => vec![],
         },
 
+        // Leaving the box is closing it, and nothing else: a box left standing
+        // with the keyboard back in the editor is one the next `K` walks
+        // straight back into, and an Escape that also left a Story or dropped
+        // a wait would be the box's Escape answering for what is behind it.
+        Event::Cancel if state.hover.as_ref().is_some_and(|hover| hover.focused) => {
+            next.hover = None;
+            vec![]
+        }
         Event::Cancel => {
             next.modal = Modal::None;
             next.selected_action = None;
@@ -3920,6 +3943,25 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
             travel_editor(state, &mut next, fits, |_| {
                 minimap::travel(row as usize, minimap::lines(state), fits)
             });
+            vec![]
+        }
+
+        // Bounded by the rows the box has on screen, which a box taller than
+        // the pane has fewer of than it has lines — so the last line can come
+        // up to the bottom border and no further.
+        Event::ScrollHover(direction) => {
+            let panes = panes_of(state);
+            if let Some(hover) = next.hover.as_mut() {
+                let spot = hover.placement().spot(state, &panes);
+                let shown = usize::from(spot.height).saturating_sub(2);
+                let last = hover.lines.len().saturating_sub(shown);
+                hover.first = match direction {
+                    Direction::Down => (hover.first + 1).min(last),
+                    Direction::Up | Direction::Left | Direction::Right => {
+                        hover.first.saturating_sub(1)
+                    }
+                };
+            }
             vec![]
         }
 
@@ -5197,6 +5239,14 @@ fn on_editor_key_4(state: &State, mut next: State, event: Event, wheeled: bool) 
         // `K` asks what the symbol under the cursor is — no modifier, and in
         // the cheatsheet, because a key nobody can discover is a key nobody
         // uses. Normal mode only: inserting a capital must still type one.
+        // A second `K` moves the keyboard into the box that is up, which is how
+        // a Hover longer than the pane is read without reaching for the mouse.
+        Event::EditorKey('K') if normal_mode(state) && state.hover.is_some() => {
+            if let Some(hover) = next.hover.as_mut() {
+                hover.focused = true;
+            }
+            vec![]
+        }
         Event::EditorKey('K') if normal_mode(state) => lsp::ask(&mut next, lsp::About::Hover),
 
         // `/` searches the file being edited, on the line the editor already
@@ -5698,8 +5748,8 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         // the tick does: nobody pressed the pointer, and a rest that pulled a
         // wheeled editor back to the cursor would leave it unscrollable for as
         // long as the pointer lay over it.
-        Event::PointerMoved(at) => {
-            next.pointed_at = at;
+        Event::PointerMoved(pointed) => {
+            next.pointed_at = pointed;
             // The box goes with the pointer that asked for it. Asked here
             // rather than left to `settle`, because this arm returns before it:
             // `settle`'s take-down covers everything a person pressed, and this
@@ -5711,7 +5761,7 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
             // A report for the cell the pointer is already on is not a rest
             // interrupted, so the window is left running rather than restarted
             // — a terminal that repeats them would otherwise never let it end.
-            let crossed = at.is_some() && at != state.pointed_at;
+            let crossed = matches!(pointed, Pointed::Text(_)) && pointed != state.pointed_at;
             let effects = match crossed {
                 true => vec![Effect::DwellHover(lsp::DWELL_MS)],
                 false => Vec::new(),
@@ -5720,8 +5770,8 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         }
         Event::HoverDue => {
             let effects = match state.pointed_at {
-                Some(at) => lsp::ask_at(&mut next, lsp::About::Hover, Some(at)),
-                None => Vec::new(),
+                Pointed::Text(at) => lsp::ask_at(&mut next, lsp::About::Hover, Some(at)),
+                Pointed::Hover | Pointed::Elsewhere => Vec::new(),
             };
             return Ok((next, effects));
         }
@@ -10753,15 +10803,112 @@ mod tests {
             editor_scroll: 12,
             ..State::default()
         };
-        let (moved, effects) = update(&state, Event::PointerMoved(Some(at)));
+        let (moved, effects) = update(&state, Event::PointerMoved(Pointed::Text(at)));
         assert_eq!(moved.editor_scroll, 12, "the pointer pulled the wheel back");
-        assert_eq!(moved.pointed_at, Some(at));
+        assert_eq!(moved.pointed_at, Pointed::Text(at));
         assert_eq!(effects, vec![Effect::DwellHover(lsp::DWELL_MS)]);
-        let (rested, effects) = update(&moved, Event::PointerMoved(Some(at)));
+        let (rested, effects) = update(&moved, Event::PointerMoved(Pointed::Text(at)));
         assert!(effects.is_empty(), "the window was armed a second time");
         let (asked, effects) = update(&rested, Event::HoverDue);
         assert_eq!(asked.editor_scroll, 12, "the rest pulled the wheel back");
         assert!(effects.is_empty(), "there is no server to ask");
+    }
+
+    /// A box of `lines` rows asked about line 2 of an open file, placed from
+    /// line 3 — the state every wheel over a Hover below arrives into.
+    fn hovering(lines: usize) -> State {
+        let path = PathBuf::from("/w/src/lib.rs");
+        let mut state = State {
+            screen_width: 120,
+            screen_height: 26,
+            current_buffer: Some(path.clone()),
+            ..State::default()
+        };
+        state.buffers.insert(
+            path.clone(),
+            editor::Buffer::open(
+                &(1..=40).map(|n| format!("line {n}\n")).collect::<String>(),
+                false,
+                4,
+            ),
+        );
+        state.hover = Some(lsp::Hover {
+            lines: vec![
+                preview::Row {
+                    kind: preview::RowKind::Paragraph,
+                    line: 1,
+                    pieces: Vec::new(),
+                    refused: None,
+                };
+                lines
+            ],
+            from: 3,
+            asked: lsp::Ask {
+                path,
+                place: Place { line: 2, column: 9 },
+                revision: 0,
+                about: lsp::About::Hover,
+            },
+            first: 0,
+            focused: false,
+        });
+        state.pointed_at = Pointed::Hover;
+        state
+    }
+
+    /// The wheel stops with the last line against the bottom border: the
+    /// pane's 18 rows are 16 of text inside the box's border, so a 30-line
+    /// reply has 14 rows to scroll and a reply that fits has none.
+    #[test]
+    fn the_wheel_scrolls_a_hover_as_far_as_its_last_line() {
+        let mut state = hovering(30);
+        for _ in 0..20 {
+            state = update(&state, Event::ScrollHover(Direction::Down)).0;
+        }
+        assert_eq!(state.hover.as_ref().map(|hover| hover.first), Some(14));
+        let state = update(&state, Event::ScrollHover(Direction::Up)).0;
+        assert_eq!(state.hover.as_ref().map(|hover| hover.first), Some(13));
+        let fits = update(&hovering(3), Event::ScrollHover(Direction::Down)).0;
+        assert_eq!(fits.hover.as_ref().map(|hover| hover.first), Some(0));
+    }
+
+    /// Scrolling the box is the wheel, and the wheel is the exception to the
+    /// clamp: an editor wheeled away from the cursor stays where it was, or
+    /// the box would jump with the lines it sits over.
+    #[test]
+    fn scrolling_a_hover_leaves_a_wheeled_editor_where_it_was() {
+        let state = State {
+            editor_scroll: 2,
+            ..hovering(30)
+        };
+        let (scrolled, _) = update(&state, Event::ScrollHover(Direction::Down));
+        assert_eq!(
+            scrolled.editor_scroll, 2,
+            "the editor was pulled back to the cursor"
+        );
+    }
+
+    /// Escape with the keyboard in a Hover closes the box and nothing behind
+    /// it: a Story being authored keeps waiting, which the bare Escape it
+    /// shares an event with would cancel.
+    #[test]
+    fn escape_in_a_hover_closes_the_box_and_nothing_else() {
+        let mut state = State {
+            view: View::Story,
+            story_set: story::Set::Authoring {
+                spelling: "HEAD".to_string(),
+            },
+            ..hovering(3)
+        };
+        if let Some(hover) = state.hover.as_mut() {
+            hover.focused = true;
+        }
+        let (left, _) = update(&state, Event::Cancel);
+        assert_eq!(left.hover, None);
+        assert!(
+            matches!(left.story_set, story::Set::Authoring { .. }),
+            "the wait was dropped"
+        );
     }
 
     /// The other half of ticket 07's guard: a markdown buffer already crossed

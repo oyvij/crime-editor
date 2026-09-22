@@ -10609,6 +10609,74 @@ fn pointer_rests_on(world: &mut VardeWorld, line: usize, column: usize) {
     }
 }
 
+/// Where the box is drawn, asked of the same rectangle the renderer and the
+/// mouse both read — a step that worked it out for itself would prove its own
+/// arithmetic rather than the hit-test's. Its first row of text, inside the
+/// border.
+fn on_the_hover(world: &VardeWorld) -> (u16, u16) {
+    let panes = world.panes();
+    let hover = world.state.hover.as_ref().expect("a hover");
+    let spot = hover.placement().spot(&world.state, &panes);
+    (spot.x + 1, spot.y + 1)
+}
+
+#[given("the pointer moves onto the hover")]
+#[when("the pointer moves onto the hover")]
+fn pointer_onto_the_hover(world: &mut VardeWorld) {
+    let (column, row) = on_the_hover(world);
+    move_pointer(world, column, row);
+}
+
+#[when(expr = "I scroll {word} with the pointer over the hover")]
+fn scroll_over_the_hover(world: &mut VardeWorld, direction: String) {
+    let (column, row) = on_the_hover(world);
+    let kind = match parse_direction(&direction) {
+        Direction::Down => mouse::Kind::ScrollDown,
+        _ => mouse::Kind::ScrollUp,
+    };
+    world.report(kind, column, row);
+}
+
+#[then(expr = "the hover starts at its row {int}")]
+fn hover_starts_at(world: &mut VardeWorld, row: usize) {
+    assert_eq!(world.state.hover.as_ref().expect("a hover").first + 1, row);
+}
+
+#[given(expr = "the language server for {string} answers the hover with a {int}-line reply")]
+fn server_answers_a_long_hover(world: &mut VardeWorld, language: String, lines: usize) {
+    let value: Vec<String> = (1..=lines).map(|line| format!("row {line}")).collect();
+    world.lsp_replies(
+        &language,
+        json!({
+            "jsonrpc": "2.0",
+            "id": asked(world, &language, "textDocument/hover"),
+            "result": {"contents": {"kind": "plaintext", "value": value.join("\n")}},
+        }),
+    );
+}
+
+/// Arrived at the way a reader arrives at it: `K`, the reply, and `K` again.
+#[given("the hover has focus")]
+fn hover_focused(world: &mut VardeWorld) {
+    world.send(Event::EditorKey('K'));
+    world.lsp_replies(
+        "rust",
+        json!({
+            "jsonrpc": "2.0",
+            "id": asked(world, "rust", "textDocument/hover"),
+            "result": {"contents": {"kind": "plaintext", "value": "fn main()"}},
+        }),
+    );
+    world.send(Event::EditorKey('K'));
+    hover_has_focus(world);
+}
+
+#[then("the hover has focus")]
+fn hover_has_focus(world: &mut VardeWorld) {
+    let hover = world.state.hover.as_ref().expect("a hover");
+    assert!(hover.focused, "the keyboard is not in the hover");
+}
+
 #[then(expr = "the pointer must rest {int} ms before the server is asked")]
 fn dwell_window_is(world: &mut VardeWorld, window: u64) {
     assert_eq!(world.dwell_armed, Some(window));

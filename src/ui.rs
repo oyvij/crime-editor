@@ -116,6 +116,9 @@ pub struct Areas {
     /// mirror is hidden — the library's answer, so the renderer and the
     /// hit-test cannot disagree about which columns are the mirror's.
     pub minimap: Rect,
+    /// The layout these were drawn from, for a box over the buffer: where it
+    /// lands is the library's arithmetic, which the mouse hit-tests too.
+    pub panes: layout::Layout,
 }
 
 /// Rectangles for drawing, derived from the library's layout so that drawing
@@ -144,6 +147,7 @@ pub fn areas(area: Rect, state: &State) -> Areas {
         step_menu: rect(panes.step_menu),
         corner: rect(panes.corner),
         minimap: rect(minimap::strip(state, panes.editor)),
+        panes,
     }
 }
 
@@ -249,9 +253,9 @@ pub fn draw(
     // so it overhangs the editor's own rectangle, and anything drawn after it
     // paints over it — which is how its right-hand half came to sit behind the
     // AI pane's border. A modal still outranks it, below.
-    hover(frame, state, areas.editor);
-    diagnostic_box(frame, state, areas.editor);
-    candidates(frame, state, areas.editor);
+    hover(frame, state, &areas.panes);
+    diagnostic_box(frame, state, &areas.panes);
+    candidates(frame, state, &areas.panes);
 
     // Search floats over the panes rather than replacing them: you can still
     // see where you were.
@@ -2812,7 +2816,7 @@ fn cheatsheet(frame: &mut Frame, state: &State, area: Rect) {
 /// neither that arithmetic nor the parse behind it is the renderer's. All that is left is turning a buffer line
 /// into a screen row, off the same `editor_scroll` the code lines are drawn
 /// from, and keeping the box inside the pane.
-fn hover(frame: &mut Frame, state: &State, area: Rect) {
+fn hover(frame: &mut Frame, state: &State, panes: &layout::Layout) {
     let Some(hover) = state.hover.as_ref() else {
         return;
     };
@@ -2824,16 +2828,17 @@ fn hover(frame: &mut Frame, state: &State, area: Rect) {
     let lines = hover
         .lines
         .iter()
+        .skip(hover.first)
         .map(|row| preview_line(row, dark, columns))
         .collect();
-    over_buffer_line(frame, state, area, placement, lines);
+    over_buffer_line(frame, state, panes, placement, lines);
 }
 
 /// What is wrong with the characters the pointer rests on, beside the line they
 /// are on. The message is wrapped and the box is placed by the core, for the
 /// reason the hover box is: a box sized here would be one row tall while the
 /// message needs three.
-fn diagnostic_box(frame: &mut Frame, state: &State, area: Rect) {
+fn diagnostic_box(frame: &mut Frame, state: &State, panes: &layout::Layout) {
     let Some((lines, placement)) = lsp::pointed(state) else {
         return;
     };
@@ -2841,13 +2846,13 @@ fn diagnostic_box(frame: &mut Frame, state: &State, area: Rect) {
         .into_iter()
         .map(|row| Line::from(Span::styled(row, Style::default().fg(Color::LightRed))))
         .collect();
-    over_buffer_line(frame, state, area, placement, lines);
+    over_buffer_line(frame, state, panes, placement, lines);
 }
 
 /// The candidate list, over the lines the core placed it on and never over the
 /// one being typed. The chosen row is drawn reversed: a list with nothing
 /// marked is a list where Enter takes something the reader did not pick.
-fn candidates(frame: &mut Frame, state: &State, area: Rect) {
+fn candidates(frame: &mut Frame, state: &State, panes: &layout::Layout) {
     let Modal::Candidates(list) = &state.modal else {
         return;
     };
@@ -2863,52 +2868,21 @@ fn candidates(frame: &mut Frame, state: &State, area: Rect) {
             false => Line::from(candidate.label.clone()),
         })
         .collect();
-    over_buffer_line(frame, state, area, list.placement(), lines);
+    over_buffer_line(frame, state, panes, list.placement(), lines);
 }
 
 /// A bordered box over a buffer line, where and as big as the core said. Every
-/// number in a `Placement` is the core's — a box sized here from unwrapped
-/// text would be drawn one row tall while the message needs three, and one
-/// shifted left by a width measured somewhere else is a box drawn past the
-/// edge it was shifted away from. All that is left is turning a buffer line
-/// and column into a screen row and column, off the same `editor_scroll` and
-/// `editor_hscroll` the code is drawn from, and keeping the box inside the
-/// pane. One function for both boxes for the same reason there is one layout:
-/// two copies of this arithmetic is one of them landing a row off.
+/// number in a `Placement` is the core's, and so is the rectangle it turns into
+/// on screen — the mouse hit-tests the same one. One function for every box for
+/// the same reason there is one layout.
 fn over_buffer_line(
     frame: &mut Frame,
     state: &State,
-    area: Rect,
+    panes: &layout::Layout,
     placement: varde::lsp::Placement,
     lines: Vec<Line>,
 ) {
-    let varde::lsp::Placement {
-        from,
-        column,
-        width: widest,
-        rows,
-    } = placement;
-    let height = (rows as u16).min(area.height);
-    // Bounded by the screen across and by the editor pane down. The box floats
-    // over its neighbours like every other overlay — the core wraps it to the
-    // screen for that reason — but its *rows* are that pane's lines, so a row
-    // outside the pane would sit beside a line nobody is looking at.
-    let screen = frame.area();
-    let width = (widest as u16).min(screen.width);
-    // The first row the box wants, in the pane's own rows: its lines are buffer
-    // lines and `editor_scroll` is the first one drawn.
-    let row = from.saturating_sub(1 + state.editor_scroll) as u16;
-    // The column is the core's, turned into a screen column off the same
-    // `editor_hscroll` the code is drawn from — exactly as `from` is turned
-    // into a row off `editor_scroll`. The clamp keeps the box inside the
-    // screen; it no longer decides where the box goes.
-    let across = column.saturating_sub(1 + state.editor_hscroll) as u16;
-    let spot = Rect {
-        x: (area.x + varde::gutter(state) + across).min(screen.width.saturating_sub(width)),
-        y: (area.y + 1 + row).min(area.bottom().saturating_sub(height)),
-        width,
-        height,
-    };
+    let spot = rect(placement.spot(state, panes));
     frame.render_widget(Clear, spot);
     frame.render_widget(
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL)),

@@ -8,9 +8,10 @@
 //! `docs/adr/0011-a-language-server-is-a-second-hosted-child.md` argues why that
 //! fact is the edge's alone, and `State::lsp_running` is where the edge puts it.
 
+use crate::layout::{Area, Layout};
 use crate::search::{Hit, Results};
 use crate::startup::Server;
-use crate::{preview, Effect, Place, Search, State};
+use crate::{preview, Effect, Place, Pointed, Search, State};
 use lsp_types::{
     ClientCapabilities, CompletionClientCapabilities, CompletionItemCapability, CompletionResponse,
     DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
@@ -351,7 +352,13 @@ impl Ask {
                     // still there: the cursor was never moved for it, and
                     // measured against the cursor the reply would be dropped as
                     // stale before it could be drawn.
-                    About::Hover if state.pointed_at == Some(self.place) => true,
+                    About::Hover if state.pointed_at == Pointed::Text(self.place) => true,
+                    // And while the pointer is on the box itself, which is
+                    // the only way to read or scroll a box longer than a
+                    // glance: the pointer has to cross from the symbol to get
+                    // there, and a box that went when it left the symbol
+                    // could never be reached.
+                    About::Hover if state.pointed_at == Pointed::Hover => true,
                     _ => buffer.line == self.place.line && buffer.column == self.place.column,
                 })
     }
@@ -1038,6 +1045,13 @@ pub struct Hover {
     /// pass — a box drawn over a different file, or over a cursor that has
     /// moved on, describes a symbol nobody is looking at.
     pub asked: Ask,
+    /// The first of `lines` the box draws. A reply longer than the pane is
+    /// only readable by scrolling the box, and scrolling the editor under it
+    /// moves the symbol it describes instead. Clamped in `update`.
+    pub first: usize,
+    /// Whether the keyboard is in the box. Here and not a [`crate::Modal`]
+    /// variant, so the keyboard goes with the box whatever takes it down.
+    pub focused: bool,
 }
 
 impl Hover {
@@ -1082,6 +1096,35 @@ pub struct Placement {
     pub column: usize,
     pub width: usize,
     pub rows: usize,
+}
+
+impl Placement {
+    /// Where the box is on screen, over the editor pane it was placed in: its
+    /// buffer line and column turned into a row and column off the same
+    /// `editor_scroll` and `editor_hscroll` the code is drawn from, and kept
+    /// inside the screen across and inside the pane down. The box floats over
+    /// its neighbours like every other overlay — the core wraps it to the
+    /// screen for that reason — but its *rows* are that pane's lines, so a row
+    /// outside the pane would sit beside a line nobody is looking at.
+    ///
+    /// Here rather than in `ui` because the pointer is hit-tested against the
+    /// box as well as drawn under it: two copies of this arithmetic is a
+    /// pointer on the box's border read as a pointer on the code. The screen's
+    /// width is the AI pane's right edge, the last column the layout hands out.
+    pub fn spot(&self, state: &State, panes: &Layout) -> Area {
+        let editor = panes.editor;
+        let screen_width = panes.ai.right();
+        let height = (self.rows as u16).min(editor.height);
+        let width = (self.width as u16).min(screen_width);
+        let row = self.from.saturating_sub(1 + state.editor_scroll) as u16;
+        let across = self.column.saturating_sub(1 + state.editor_hscroll) as u16;
+        Area {
+            x: (editor.x + crate::gutter(state) + across).min(screen_width.saturating_sub(width)),
+            y: (editor.y + 1 + row).min(editor.bottom().saturating_sub(height)),
+            width,
+            height,
+        }
+    }
 }
 
 /// How wide a box holding these lines is: its widest line in *screen columns*,
@@ -1642,6 +1685,8 @@ fn hovered(state: &mut State, ask: Ask, result: &Value) -> Told {
         lines,
         from: 0,
         asked: ask,
+        first: 0,
+        focused: false,
     };
     hover.from = placed(
         hover.rows(),
@@ -2530,7 +2575,9 @@ pub fn pointed(state: &State) -> Option<(Vec<String>, Placement)> {
     if state.diff.is_some() || crate::previewing(state) {
         return None;
     }
-    let at = state.pointed_at?;
+    let Pointed::Text(at) = state.pointed_at else {
+        return None;
+    };
     let path = state.current_buffer.as_ref()?;
     let (from, _, diagnostic) = spans(state, path, at.line)
         .into_iter()
@@ -3433,7 +3480,7 @@ mod tests {
         let path = state.root.join("src/lib.rs");
         open(&mut state, "src/lib.rs", "fn main() {}");
         state.current_buffer = Some(path.clone());
-        state.pointed_at = Some(crate::Place { line: 1, column: 4 });
+        state.pointed_at = Pointed::Text(crate::Place { line: 1, column: 4 });
         state.diagnostics.entry(path.clone()).or_default().insert(
             "rust".to_string(),
             vec![Diagnostic {
@@ -3920,6 +3967,8 @@ mod tests {
                     revision: 1,
                     about: About::Hover,
                 },
+                first: 0,
+                focused: false,
             };
             hover.from = placed(hover.rows(), line, 0, 20);
             hover

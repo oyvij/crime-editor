@@ -5,7 +5,7 @@
 //! [`Selection`] request for the edge to fulfil.
 
 use crate::layout::{self, Area, Layout};
-use crate::{tree, Direction, Event, Modal, Pane, Place, State};
+use crate::{tree, Direction, Event, Modal, Pane, Place, Pointed, State};
 use terminput::KeyModifiers;
 
 /// Which mouse-report encoding the program in a hosted pane asked for, as the
@@ -253,6 +253,16 @@ pub fn on_mouse(state: &State, panes: &Layout, pointer: &mut Pointer, input: Inp
             return Outcome::of(result_click(state, search, input));
         }
     }
+    // The wheel over the Hover box scrolls the box, whatever pane it floats
+    // over: the reader is reading it, not the code underneath.
+    let wheel = match input.kind {
+        Kind::ScrollUp => Some(Direction::Up),
+        Kind::ScrollDown => Some(Direction::Down),
+        _ => None,
+    };
+    if let Some(direction) = wheel.filter(|_| on_hover(state, panes, input)) {
+        return Outcome::of(vec![Event::ScrollHover(direction)]);
+    }
     if let Some(outcome) = divider_drag(panes, pointer, input) {
         return outcome;
     }
@@ -447,9 +457,9 @@ fn hovered(state: &State, panes: &Layout, input: Input) -> Vec<Event> {
     // The editor's own text only, and the border row the Transport lives on is
     // not text — the same rows `pressed` reads as places, and the same ones
     // `resting` answers for.
-    let at = match jumping(input.modifiers) {
-        true => resting(state, panes, input),
-        false => None,
+    let at = match (jumping(input.modifiers), resting(state, panes, input)) {
+        (true, Pointed::Text(at)) => Some(at),
+        _ => None,
     };
     match at == state.link {
         true => vec![],
@@ -855,26 +865,40 @@ fn nudge(at: Place, vertical: Option<Direction>, horizontal: Option<Direction>) 
     }
 }
 
-/// Which place in the buffer the pointer is over, or nothing at all when it is
-/// over anything else. Nothing is what the dwell asks about, so it is also what
-/// says the pointer has left: the border row the Transport lives on, another
-/// pane, the gap between them, a diff, a Preview and an empty editor are one
-/// answer — there is no symbol under it.
-fn resting(state: &State, panes: &Layout, input: Input) -> Option<Place> {
+/// Which place in the buffer the pointer is over, the Hover box, or neither.
+/// Neither is what says the pointer has left: the border row the Transport
+/// lives on, another pane, the gap between them, a diff, a Preview and an empty
+/// editor are one answer — there is no symbol under it. The box is asked first
+/// because it is drawn over the text and over the panes beside it.
+fn resting(state: &State, panes: &Layout, input: Input) -> Pointed {
+    if on_hover(state, panes, input) {
+        return Pointed::Hover;
+    }
     if state.diff.is_some() || state.current_buffer.is_none() || crate::previewing(state) {
-        return None;
+        return Pointed::Elsewhere;
     }
     if layout::pane_at(panes, input.column, input.row) != Some(Pane::Editor)
         || input.row <= panes.editor.y
     {
-        return None;
+        return Pointed::Elsewhere;
     }
-    Some(place_in(
+    Pointed::Text(place_in(
         state,
         panes,
         Pane::Editor,
         (input.column, input.row),
     ))
+}
+
+/// Whether the pointer is on the Hover box, border and all, against the
+/// rectangle the renderer draws it in.
+fn on_hover(state: &State, panes: &Layout, input: Input) -> bool {
+    state.hover.as_ref().is_some_and(|hover| {
+        hover
+            .placement()
+            .spot(state, panes)
+            .holds(input.column, input.row)
+    })
 }
 
 /// Where a screen position sits in the pane's own text, 1-based like the
@@ -1183,7 +1207,7 @@ mod tests {
     use crate::layout::{AiPane, Shapes};
     use crate::tree::Entry;
     use crate::Direction;
-    use crate::{Event, Modal, Pane, Place, State, View};
+    use crate::{Event, Modal, Pane, Place, Pointed, State, View};
     use std::path::PathBuf;
 
     fn workspace() -> State {
@@ -1831,13 +1855,19 @@ mod tests {
         };
         assert_eq!(
             moved(editor.x + 1 + crate::gutter(&state) + 3, editor.y + 2),
-            vec![Event::PointerMoved(Some(Place { line: 2, column: 4 }))]
+            vec![Event::PointerMoved(Pointed::Text(Place {
+                line: 2,
+                column: 4
+            }))]
         );
         assert_eq!(
             moved(editor.x + 4, editor.y),
-            vec![Event::PointerMoved(None)]
+            vec![Event::PointerMoved(Pointed::Elsewhere)]
         );
-        assert_eq!(moved(1, editor.y + 2), vec![Event::PointerMoved(None)]);
+        assert_eq!(
+            moved(1, editor.y + 2),
+            vec![Event::PointerMoved(Pointed::Elsewhere)]
+        );
         // A diff and a Preview draw rows that are not the buffer's lines, so
         // the cell the pointer is on names no place in the text (ADR 0007).
         for showing in [diffed(), previewing()] {
@@ -1854,7 +1884,7 @@ mod tests {
                     },
                 )
                 .events,
-                vec![Event::PointerMoved(None)]
+                vec![Event::PointerMoved(Pointed::Elsewhere)]
             );
         }
     }
@@ -1891,16 +1921,22 @@ mod tests {
         let at = place_in(&state, &panes, Pane::Editor, cell);
         assert_eq!(
             hover(&state, KeyModifiers::SUPER),
-            vec![Event::PointerMoved(Some(at)), Event::HoverLink(Some(at))]
+            vec![
+                Event::PointerMoved(Pointed::Text(at)),
+                Event::HoverLink(Some(at))
+            ]
         );
         state.link = Some(at);
         assert_eq!(
             hover(&state, KeyModifiers::CTRL),
-            vec![Event::PointerMoved(Some(at))]
+            vec![Event::PointerMoved(Pointed::Text(at))]
         );
         assert_eq!(
             hover(&state, KeyModifiers::NONE),
-            vec![Event::PointerMoved(Some(at)), Event::HoverLink(None)]
+            vec![
+                Event::PointerMoved(Pointed::Text(at)),
+                Event::HoverLink(None)
+            ]
         );
     }
 
@@ -2376,11 +2412,14 @@ mod tests {
         let over_text = moved(&mut pointer, 43, 5);
         assert_eq!(
             over_text.events,
-            vec![Event::PointerMoved(Some(Place { line: 5, column: 5 }))]
+            vec![Event::PointerMoved(Pointed::Text(Place {
+                line: 5,
+                column: 5
+            }))]
         );
         assert_eq!(
             moved(&mut pointer, 5, 5).events,
-            vec![Event::PointerMoved(None)]
+            vec![Event::PointerMoved(Pointed::Elsewhere)]
         );
         assert_eq!(pointer, Pointer::default(), "a move took hold of something");
     }

@@ -127,7 +127,9 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
     ),
     ("* gr", "project", &[View::Edit]),
     ("u", "undo", &[View::Edit]),
-    ("K", "what is this", &[View::Edit]),
+    // The second `K` is on the row the first is on: it is the same question
+    // read further, and a key nobody can discover is a key nobody uses.
+    ("K K", "what is this / read it", &[View::Edit]),
     ("gd", "definition", &[View::Edit]),
     // The fifteenth and sixteenth Edit rows, which is the last two a 26-row
     // terminal has room for, and the two on this table Varde says nowhere else.
@@ -442,6 +444,16 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
         | Modal::ConfirmStory { .. }
         | Modal::Prediction { .. }
         | Modal::Restart => answered(&state.modal, event),
+        // The keyboard in a Hover reads it and nothing else: a letter that
+        // reached the buffer would edit code the box is covering.
+        Modal::None if state.hover.as_ref().is_some_and(|hover| hover.focused) => {
+            match (event.code, typed(event)) {
+                (KeyCode::Esc, _) => vec![Event::Cancel],
+                (_, Some('j')) => vec![Event::ScrollHover(Direction::Down)],
+                (_, Some('k')) => vec![Event::ScrollHover(Direction::Up)],
+                _ => vec![],
+            }
+        }
         Modal::None => routed(state, drafts, event),
     }
 }
@@ -1953,6 +1965,37 @@ mod tests {
             press(&focused(Pane::Tree), plain('K')),
             vec![Event::EditorKey('K')]
         );
+    }
+
+    /// With the keyboard in a Hover, `j`/`k` scroll it, Escape
+    /// leaves it, and every other key is swallowed rather than typed into the
+    /// code the box covers.
+    #[test]
+    fn the_keyboard_in_a_hover_scrolls_it_and_nothing_else() {
+        let state = State {
+            hover: Some(crate::lsp::Hover {
+                lines: Vec::new(),
+                from: 2,
+                asked: crate::lsp::Ask {
+                    path: std::path::PathBuf::from("/w/one.rs"),
+                    place: crate::Place { line: 1, column: 1 },
+                    revision: 0,
+                    about: crate::lsp::About::Hover,
+                },
+                first: 0,
+                focused: true,
+            }),
+            ..editing()
+        };
+        let down = vec![Event::ScrollHover(Direction::Down)];
+        let up = vec![Event::ScrollHover(Direction::Up)];
+        assert_eq!(press(&state, plain('j')), down);
+        assert_eq!(press(&state, plain('k')), up);
+        assert_eq!(
+            press(&state, KeyEvent::new(KeyCode::Esc)),
+            vec![Event::Cancel]
+        );
+        assert!(press(&state, plain('x')).is_empty(), "x reached the buffer");
     }
 
     // Shift is not a mode key: the editor extends, and no other pane Varde
