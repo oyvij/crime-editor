@@ -2741,6 +2741,16 @@ fn perform_files(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) -
                 queue.push_back(Event::ReviewFileRead { path, contents });
             }
         }
+        // A file that cannot be read is answered as empty, which makes every
+        // Breakpoint in it Stale — the honest answer about a line nobody can
+        // find — and says why.
+        Effect::ReadBreakpointFile(path) => {
+            let contents = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+                eprintln!("varde: cannot read {}: {error}", path.display());
+                String::new()
+            });
+            queue.push_back(Event::BreakpointFileRead { contents, path });
+        }
         Effect::ReadDiff(path) => {
             let diff = diff_lines(&edge.root, &path);
             let file = path

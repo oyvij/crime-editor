@@ -225,6 +225,33 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
     ),
 ];
 
+/// What a tapped Space can be followed by. The one list both the Chord hint
+/// and the cheatsheet draw, so the two cannot disagree: each row is spelled as
+/// the chord, and the hint reads its key off the spelling's second character.
+/// Space is shared — other features may claim other letters later.
+pub const CHORDS: [(&str, &str, &[View]); 1] = [("␣b", "breakpoint", &[View::Edit])];
+
+/// The cheatsheet as drawn: [`CHEATSHEET`], then the chords.
+pub fn cheatsheet() -> impl Iterator<Item = &'static (&'static str, &'static str, &'static [View])>
+{
+    CHEATSHEET.iter().chain(CHORDS.iter())
+}
+
+/// The Chord hint as drawn, each row carrying the key it offers or nothing —
+/// the shape [`crate::palette_rows`] has, so the mouse hit-tests these same
+/// rows and a click is the keystroke.
+pub fn chord_rows() -> Vec<(Option<char>, String)> {
+    let mut rows: Vec<(Option<char>, String)> = CHORDS
+        .iter()
+        .filter_map(|(keys, what, _)| {
+            let key = keys.chars().nth(1)?;
+            Some((Some(key), format!("   ({key}) {what}")))
+        })
+        .collect();
+    rows.push((None, "   Esc  cancel".to_string()));
+    rows
+}
+
 /// The keys Tools answers and the word the box says for each — here,
 /// beside the router that answers them, for the reason [`CHEATSHEET`] is here:
 /// `ui` may only draw the contract, so a test can hold the two together. They
@@ -420,6 +447,12 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
                 None => vec![],
             },
         },
+        // Every key takes the hint down; a letter is also the chord's second
+        // key, and one nobody bound does nothing else.
+        Modal::Chord => match typed(event) {
+            Some(c) => vec![Event::Key(c)],
+            None => vec![Event::Cancel],
+        },
         Modal::Comment => comment_picker(drafts, event),
         Modal::NameBox { .. } => name_box(drafts, event),
         Modal::Candidates(_) => candidate_list(state, drafts, event),
@@ -502,6 +535,7 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         Modal::None
         | Modal::NameBox { .. }
         | Modal::Palette
+        | Modal::Chord
         | Modal::Tools { .. }
         | Modal::Branches { .. }
         | Modal::Comment
@@ -3373,6 +3407,9 @@ mod tests {
             KeyCode::Modifier(modifier, _) => format!("{modifier:?} alone"),
             KeyCode::Media(_) => "a media key".to_string(),
             KeyCode::Char(' ') if ctrl => "C-space".to_string(),
+            // The cheatsheet spells Space as the glyph its chords are written
+            // with, because a space cannot be a token of a row.
+            KeyCode::Char(' ') => "␣".to_string(),
             KeyCode::Char(c) if ctrl => format!("C-{c}"),
             KeyCode::Char(c @ ('c' | 'v')) if command => format!("D-{c}"),
             KeyCode::Char(c) if alt => format!("M-{c}"),
@@ -3883,8 +3920,7 @@ mod tests {
     /// A binding is listed for a view if it appears in a left-hand column of a
     /// row naming that view.
     fn listed(label: &str, view: View) -> bool {
-        super::CHEATSHEET
-            .iter()
+        super::cheatsheet()
             .filter(|(_, _, views)| super::applies_to(views, view))
             .flat_map(|(keys, _, _)| keys.split_whitespace())
             .any(|token| names(token, label))
@@ -4180,6 +4216,51 @@ mod tests {
         );
     }
 
+    /// The Chord hint is drawn from [`CHORDS`], so what it names must be what a
+    /// waiting Space answers, and what a waiting Space answers must be named.
+    /// Measured against Escape, which takes the hint down and does nothing else:
+    /// a second key that only does that is not a chord. A key claimed before
+    /// the hint — `C-q`, `C-space` — answers through it and is not the hint's.
+    #[test]
+    fn a_waiting_space_answers_exactly_the_keys_the_chord_hint_names() {
+        let (waiting, _) = drive(&editing(), &mut Drafts::default(), &[plain(' ')]);
+        assert_eq!(waiting.modal, crate::Modal::Chord, "the hint opens at once");
+        let (cancelled, _) = drive(
+            &waiting,
+            &mut Drafts::default(),
+            &[KeyEvent::new(KeyCode::Esc)],
+        );
+        assert_eq!(cancelled.modal, crate::Modal::None, "Escape cancels it");
+        let chord = |event: KeyEvent| {
+            let events = on_key_event(&waiting, &mut Drafts::default(), event, 0);
+            let (after, acted) = drive(&waiting, &mut Drafts::default(), &[event]);
+            matches!(events.as_slice(), [Event::Key(_)])
+                && (acted || settled(&after) != settled(&cancelled))
+        };
+        let mut answered: Vec<String> = every_key()
+            .into_iter()
+            .filter(|event| chord(*event))
+            .map(label)
+            .collect();
+        answered.sort();
+        answered.dedup();
+        let mut named: Vec<String> = super::chord_rows()
+            .into_iter()
+            .filter_map(|(key, _)| key.map(String::from))
+            .collect();
+        named.sort();
+        assert_eq!(answered, named);
+    }
+
+    /// Space is only a chord prefix in normal mode: inserting, it is a space.
+    #[test]
+    fn space_while_inserting_is_a_space() {
+        let inserting = crate::update(&editing(), Event::EditorKey('i')).0;
+        let (after, _) = drive(&inserting, &mut Drafts::default(), &[plain(' ')]);
+        assert_eq!(after.modal, crate::Modal::None);
+        assert!(crate::current_buffer(&after).is_some_and(|buffer| buffer.is_dirty()));
+    }
+
     /// An omissions list nobody prunes is how the contract rots: an entry for a
     /// binding that no longer does anything in a view it names excuses
     /// nothing, and one that is also listed there is a contradiction about
@@ -4278,7 +4359,7 @@ mod tests {
                 .filter(|(_, sequence)| states.iter().any(|s| answers(s, sequence)))
                 .map(|(label, _)| label)
                 .collect();
-            for (keys, what, views) in super::CHEATSHEET {
+            for (keys, what, views) in super::cheatsheet() {
                 if !super::applies_to(views, view) {
                     continue;
                 }
@@ -4320,7 +4401,7 @@ mod tests {
                 filling_in_a_snippet(&state),
             ];
             let states: Vec<&State> = std::iter::once(&state).chain(extra.iter()).collect();
-            for (keys, what, views) in super::CHEATSHEET {
+            for (keys, what, views) in super::cheatsheet() {
                 if !super::applies_to(views, view) {
                     continue;
                 }

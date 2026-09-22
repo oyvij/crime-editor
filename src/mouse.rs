@@ -518,6 +518,12 @@ fn pressed(state: &State, panes: &Layout, pane: Pane, input: Input) -> Vec<Event
                 input.row,
             ))]
         }
+        // The gutter's leftmost column is the Breakpoint column, and the line
+        // numbers beside it set nothing.
+        (Pane::Editor, _) if breakpoint_column(state, panes, input) => {
+            let at = place_in(state, panes, pane, (input.column, input.row));
+            vec![Event::ToggleBreakpoint(at.line)]
+        }
         // The toggle in the gutter and the dots at the end of a folded line are
         // one affordance drawn in two places, so a press on either is one
         // event. The caret lands first, because the block toggled is the block
@@ -994,19 +1000,20 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
     }
 }
 
-/// Which palette entry sits under the pointer, if the palette is open — named
-/// by the key it offers, so a click is the keystroke and not a second mapping
-/// beside it. Rows carrying no key (a heading, a gap, the cancel line) answer
-/// nothing.
+/// Which palette or Chord hint entry sits under the pointer, if one is open —
+/// named by the key it offers, so a click is the keystroke and not a second
+/// mapping beside it. Rows carrying no key (a heading, a gap, the cancel line)
+/// answer nothing.
 pub fn palette_entry_at(state: &State, panes: &Layout, column: u16, row: u16) -> Option<char> {
-    if state.modal != Modal::Palette {
-        return None;
-    }
     // The screen, which `ui` centres the box against and sizes the list to.
     // Read off the panes rather than taken as an argument: `tree` and
     // `terminal` tile the screen's height between them by construction.
     let height = panes.tree.height + panes.terminal.height;
-    let rows = crate::palette_rows(height);
+    let rows = match state.modal {
+        Modal::Palette => crate::palette_rows(height),
+        Modal::Chord => crate::keys::chord_rows(),
+        _ => return None,
+    };
     let widest = rows
         .iter()
         .map(|(_, line)| line.chars().count() as u16)
@@ -1091,6 +1098,18 @@ fn transport_at(state: &State, panes: &Layout, column: u16) -> Option<&'static s
     let labels = layout::editor_chip_labels(&chips, panes.editor.width);
     let at = layout::strip_at(panes.editor, &labels, column)?;
     Some(chips[at].action)
+}
+
+/// Whether a press lands in the gutter's Breakpoint column, on the code a
+/// Breakpoint can be set in: not a diff, a Preview or a walked Site.
+fn breakpoint_column(state: &State, panes: &Layout, input: Input) -> bool {
+    state.view == crate::View::Edit
+        && state.diff.is_none()
+        && state.walking.is_none()
+        && !crate::previewing(state)
+        && state.current_buffer.is_some()
+        && input.column == panes.editor.x + 1 + layout::BREAKPOINT_COLUMN
+        && input.row + 1 < panes.editor.bottom()
 }
 
 /// Whether a press lands on a fold's affordance: the toggle in the gutter's
@@ -2327,6 +2346,53 @@ mod tests {
         assert!((0..26).any(|row| palette_entry_at(&state, &panes, 60, row) == Some('r')));
     }
 
+    /// Every key the Chord hint names is a cell a click lands on, and the click
+    /// is that key: the hint is also a menu.
+    #[test]
+    fn every_chord_hint_entry_is_a_click_on_its_key() {
+        let state = State {
+            modal: Modal::Chord,
+            ..workspace()
+        };
+        let panes = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        for (key, _) in crate::keys::chord_rows() {
+            let Some(key) = key else { continue };
+            let clicked = (0..26).any(|row| {
+                (0..120)
+                    .any(|column| click(&state, column, row) == vec![Event::ClickPaletteEntry(key)])
+            });
+            assert!(clicked, "the hint's ({key}) cannot be clicked");
+        }
+        let closed = workspace();
+        assert!((0..26).all(|row| palette_entry_at(&closed, &panes, 60, row).is_none()));
+    }
+
+    /// The gutter's leftmost column is the Breakpoint column, and the line
+    /// number beside it sets nothing — it is a click at the start of the line,
+    /// as it always was. A diff has no Breakpoints to set.
+    #[test]
+    fn a_click_in_the_breakpoint_column_toggles_that_lines_breakpoint() {
+        let panes = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        let column = panes.editor.x + 1 + crate::layout::BREAKPOINT_COLUMN;
+        assert_eq!(
+            click(&editing(), column, 3),
+            vec![Event::ToggleBreakpoint(3)]
+        );
+        assert_eq!(
+            click(&editing(), column + 1, 3),
+            vec![Event::ClickText(Place { line: 3, column: 1 })]
+        );
+        assert!(!click(&diffed(), column, 3).contains(&Event::ToggleBreakpoint(3)));
+        // A Preview has no gutter, so the column is its text; and the bottom
+        // border is chrome, not the line scrolled beneath it.
+        assert!(!click(&previewing(), column, 3).contains(&Event::ToggleBreakpoint(3)));
+        let border = panes.editor.bottom() - 1;
+        assert!(!matches!(
+            click(&editing(), column, border).as_slice(),
+            [Event::ToggleBreakpoint(_)]
+        ));
+    }
+
     /// Every entry the palette offers is clickable at some cell, at the two
     /// screen heights that matter: 26 rows, which the replay recipe and the
     /// scenarios use, and 24, which is a stock macOS Terminal. The box is sized
@@ -2549,7 +2615,7 @@ mod tests {
                 },
             )
         };
-        let over_text = moved(&mut pointer, 43, 5);
+        let over_text = moved(&mut pointer, 44, 5);
         assert_eq!(
             over_text.events,
             vec![Event::PointerMoved(Pointed::Text(Place {
@@ -2734,7 +2800,7 @@ mod tests {
     // screen for that, so the drag comes back finished.
     #[test]
     fn dragging_in_the_editor_covers_a_span_of_the_buffer() {
-        let outcome = drag(&editing(), (39, 1), (43, 3));
+        let outcome = drag(&editing(), (40, 1), (44, 3));
         assert_eq!(
             outcome.events,
             vec![Event::DragText {
@@ -2764,7 +2830,7 @@ mod tests {
         let mut scrolled = editing();
         scrolled.editor_scroll = 4;
         assert_eq!(
-            drag(&scrolled, (40, 2), (40, 2)).events,
+            drag(&scrolled, (41, 2), (41, 2)).events,
             vec![Event::DragText {
                 from: Place { line: 6, column: 2 },
                 to: Place { line: 6, column: 2 },
@@ -2780,7 +2846,7 @@ mod tests {
         let mut scrolled = editing();
         scrolled.editor_hscroll = 12;
         assert_eq!(
-            drag(&scrolled, (40, 2), (40, 2)).events,
+            drag(&scrolled, (41, 2), (41, 2)).events,
             vec![Event::DragText {
                 from: Place {
                     line: 2,
@@ -2798,7 +2864,7 @@ mod tests {
     #[test]
     fn clicking_in_the_editor_reports_the_place_clicked() {
         assert_eq!(
-            click(&editing(), 43, 3),
+            click(&editing(), 44, 3),
             vec![Event::ClickText(Place { line: 3, column: 5 })]
         );
     }
@@ -2968,9 +3034,9 @@ mod tests {
     fn two_presses_on_one_cell_inside_the_window_pick_the_word() {
         let state = editing();
         let doubled = Event::DoubleClickText(Place { line: 3, column: 5 });
-        assert!(twice(&state, (43, 3, 0), (43, 3, 299)).contains(&doubled));
-        assert!(!twice(&state, (43, 3, 0), (43, 3, 301)).contains(&doubled));
-        assert!(!twice(&state, (44, 3, 0), (43, 3, 100)).contains(&doubled));
+        assert!(twice(&state, (44, 3, 0), (44, 3, 299)).contains(&doubled));
+        assert!(!twice(&state, (44, 3, 0), (44, 3, 301)).contains(&doubled));
+        assert!(!twice(&state, (45, 3, 0), (44, 3, 100)).contains(&doubled));
     }
 
     // Nothing to pick where a press names no place in the text: the pane, a

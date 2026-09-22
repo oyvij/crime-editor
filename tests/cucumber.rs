@@ -871,6 +871,13 @@ impl VardeWorld {
     /// The effects that read something back and feed it in as an event.
     fn applied_to_lists(&mut self, effect: Effect) -> Option<Effect> {
         match effect {
+            Effect::ReadBreakpointFile(path) => {
+                let contents = self.on_disk(&path);
+                let (state, effects) =
+                    update(&self.state, Event::BreakpointFileRead { path, contents });
+                self.state = state;
+                self.apply(effects);
+            }
             Effect::ReadForReview(path) => {
                 let contents = self.on_disk(&path);
                 let (state, effects) =
@@ -1563,6 +1570,7 @@ fn nothing_written(world: &mut VardeWorld) {
 }
 
 #[given(expr = "Varde started in the project")]
+#[given(expr = "Varde starts in the project")]
 #[when(expr = "Varde starts in the project")]
 fn varde_starts(world: &mut VardeWorld) {
     // A scenario that says nothing about the OS still needs one, since the
@@ -2469,6 +2477,11 @@ fn enter_name(world: &mut VardeWorld, name: String) {
 #[when(expr = "I press {string}")]
 #[given(expr = "I pressed {string}")]
 fn press(world: &mut VardeWorld, key: String) {
+    // Through the router: what a tapped Space means is where the keyboard is
+    // and what mode it is in, which no one event stands for.
+    if key == "Space" {
+        return route_key(world, &key, 0);
+    }
     world.send(match key.as_str() {
         "Escape" => Event::Cancel,
         "Ctrl+Space" => Event::FallbackBinding,
@@ -2544,6 +2557,7 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Ctrl+Space" => {
             plain(terminput::KeyCode::Char(' ')).modifiers(terminput::KeyModifiers::CTRL)
         }
+        "Space" => plain(terminput::KeyCode::Char(' ')),
         _ => return None,
     })
 }
@@ -4000,6 +4014,165 @@ fn strip_shows_shells(world: &mut VardeWorld) {
         .filter_map(|(group, lit)| lit.then_some(group))
         .collect();
     assert_eq!(lit, vec![layout::Group::Shells]);
+}
+
+// ---- F45: Breakpoints ----
+
+/// Through the hit-test, in the gutter's Breakpoint column, so the column is
+/// one a pointer can reach.
+#[given(expr = "I click the Breakpoint column on line {int}")]
+#[when(expr = "I click the Breakpoint column on line {int}")]
+fn click_breakpoint_column(world: &mut VardeWorld, line: usize) {
+    let panes = world.panes();
+    let (_, row) = pointer_at(&world.state, &panes, Pane::Editor, (line, 1));
+    let column = panes.editor.x + 1 + layout::BREAKPOINT_COLUMN;
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, row);
+    world.report(mouse::Kind::LeftUp, column, row);
+}
+
+/// The column right of the Breakpoint column, where the number starts.
+#[when(expr = "I click the line number of line {int}")]
+fn click_line_number(world: &mut VardeWorld, line: usize) {
+    let panes = world.panes();
+    let (_, row) = pointer_at(&world.state, &panes, Pane::Editor, (line, 1));
+    let column = panes.editor.x + 2 + layout::BREAKPOINT_COLUMN;
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, row);
+    world.report(mouse::Kind::LeftUp, column, row);
+}
+
+/// Set as the core holds one, against what the file holds on the line.
+#[given(expr = "a Breakpoint on {string} line {int}")]
+fn breakpoint_on(world: &mut VardeWorld, file: String, line: usize) {
+    let file = abs(world, &file);
+    let text = world
+        .files
+        .get(&file)
+        .and_then(|held| held.split('\n').nth(line - 1))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    world.state.breakpoints.push(varde::debug::Breakpoint {
+        file,
+        line,
+        text,
+        stale: false,
+    });
+}
+
+fn breakpoint_lines(world: &VardeWorld, file: &str) -> Vec<usize> {
+    let file = abs(world, file);
+    world
+        .state
+        .breakpoints
+        .iter()
+        .filter(|breakpoint| breakpoint.file == file)
+        .map(|breakpoint| breakpoint.line)
+        .collect()
+}
+
+#[then(expr = "{string} line {int} has a Breakpoint")]
+fn has_breakpoint(world: &mut VardeWorld, file: String, line: usize) {
+    assert!(
+        breakpoint_lines(world, &file).contains(&line),
+        "Breakpoints: {:?}",
+        world.state.breakpoints
+    );
+}
+
+#[then(expr = "{string} line {int} has no Breakpoint")]
+fn has_no_breakpoint(world: &mut VardeWorld, file: String, line: usize) {
+    assert!(
+        !breakpoint_lines(world, &file).contains(&line),
+        "Breakpoints: {:?}",
+        world.state.breakpoints
+    );
+}
+
+#[then(expr = "{string} has no Breakpoints")]
+fn has_no_breakpoints(world: &mut VardeWorld, file: String) {
+    assert_eq!(breakpoint_lines(world, &file), Vec::<usize>::new());
+}
+
+/// Added to whatever the project's state already records, the way a project
+/// that set a Breakpoint last time also recorded everything else.
+#[given(expr = "the project {string} records a Breakpoint on {string} line {int} holding {string}")]
+fn state_records_breakpoint(
+    world: &mut VardeWorld,
+    path: String,
+    file: String,
+    line: u64,
+    text: String,
+) {
+    assert_eq!(path, ".varde/state.json");
+    let mut saved: serde_json::Value = world
+        .startup
+        .state_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    saved["breakpoints"] = serde_json::json!([{"file": file, "line": line, "text": text}]);
+    world.startup.state_json = Some(saved.to_string());
+}
+
+#[then(expr = "the project {string} records a Breakpoint on {string} line {int} holding {string}")]
+fn records_breakpoint(world: &mut VardeWorld, path: String, file: String, line: u64, text: String) {
+    assert_eq!(path, ".varde/state.json");
+    let saved: serde_json::Value =
+        serde_json::from_str(world.startup.state_json.as_deref().expect("state saved"))
+            .expect("json");
+    assert_eq!(
+        saved["breakpoints"],
+        serde_json::json!([{"file": file, "line": line, "text": text}])
+    );
+}
+
+/// The folder is the one the scenario already opened; what makes it Bare is
+/// that its state goes to a Sidecar.
+#[given(expr = "the workspace is a Bare workspace")]
+fn workspace_is_bare(world: &mut VardeWorld) {
+    world.startup.sidecar = Some(PathBuf::from(SIDECAR));
+    world.state.sidecar = Some(PathBuf::from(SIDECAR));
+}
+
+/// What the edge does between two runs: a Bare workspace's state went to its
+/// Sidecar, which is deleted at exit, and the next run is another process
+/// with a Sidecar of its own — so what it reads is nothing.
+#[when(expr = "Varde starts again in the same folder")]
+fn starts_again_in_same_folder(world: &mut VardeWorld) {
+    if world.startup.sidecar.is_some() {
+        world.startup.sidecar = Some(PathBuf::from(format!("{SIDECAR}1")));
+        world.startup.state_json = None;
+    }
+    varde_starts(world);
+}
+
+/// Read off the core's own list until the Breakpoint list is drawn from it.
+#[then(expr = "the Breakpoint list marks {string} line {int} as {string}")]
+fn breakpoint_list_marks(world: &mut VardeWorld, file: String, line: usize, mark: String) {
+    let file = abs(world, &file);
+    let breakpoint = world
+        .state
+        .breakpoints
+        .iter()
+        .find(|breakpoint| breakpoint.file == file && breakpoint.line == line)
+        .expect("a Breakpoint there");
+    let marked = match breakpoint.stale {
+        true => "stale",
+        false => "current",
+    };
+    assert_eq!(marked, mark);
+}
+
+#[then(expr = "the gutter draws line {int}'s Breakpoint as {string}")]
+fn gutter_draws_breakpoint(world: &mut VardeWorld, line: usize, kind: String) {
+    let drawn = match varde::debug::marks(&world.state).get(&line) {
+        Some(varde::debug::Mark::Plain) => "plain",
+        Some(varde::debug::Mark::Stale) => "stale",
+        None => "none",
+    };
+    assert_eq!(drawn, kind);
 }
 
 // ---- F38: terminal splits ----
@@ -7696,6 +7869,7 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::ConfirmStory { .. } => "confirm-story",
         Modal::ConfirmSubmit => "confirm-submit",
         Modal::Palette => "palette",
+        Modal::Chord => "chord",
         Modal::Tools { .. } => "tools",
         Modal::Branches { .. } => "branches",
         Modal::Comment => "comment",

@@ -1313,6 +1313,14 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
     let buffers = saved_buffers(&input.root, input.state_json.as_deref());
     state.restoring = buffers.len();
     effects.extend(buffers.into_iter().map(Effect::OpenBuffer));
+    // Each file a remembered Breakpoint is in is read once, open or not, so a
+    // Breakpoint whose line has moved on is Stale from the start.
+    let files: std::collections::BTreeSet<PathBuf> = state
+        .breakpoints
+        .iter()
+        .map(|breakpoint| breakpoint.file.clone())
+        .collect();
+    effects.extend(files.into_iter().map(Effect::ReadBreakpointFile));
 
     // Measuring starts without being asked: the figure is there when the user
     // wants it rather than after they remember to ask for it. Unless the cache
@@ -1497,6 +1505,7 @@ fn initial_state(
         // layout reads as its share of the screen.
         ai_width: saved_number(input.state_json.as_deref(), "ai_width"),
         strip_height: saved_number(input.state_json.as_deref(), "strip_height"),
+        breakpoints: saved_breakpoints(&input.root, input.state_json.as_deref()),
         // Beside the editor unless the project was last worked in the tall
         // shape — including state recorded before `:tall` existed, which names
         // no shape at all.
@@ -1802,6 +1811,27 @@ fn saved_buffers(root: &Path, state_json: Option<&str>) -> Vec<PathBuf> {
         paths.push(current);
     }
     paths
+}
+
+fn saved_breakpoints(root: &Path, state_json: Option<&str>) -> Vec<crate::debug::Breakpoint> {
+    let Some(parsed) = state_json.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+    else {
+        return Vec::new();
+    };
+    let Some(saved) = parsed.get("breakpoints").and_then(|value| value.as_array()) else {
+        return Vec::new();
+    };
+    saved
+        .iter()
+        .filter_map(|breakpoint| {
+            Some(crate::debug::Breakpoint {
+                file: root.join(breakpoint.get("file")?.as_str()?),
+                line: usize::try_from(breakpoint.get("line")?.as_u64()?).ok()?,
+                text: breakpoint.get("text")?.as_str()?.to_string(),
+                stale: false,
+            })
+        })
+        .collect()
 }
 
 fn saved_text(state_json: Option<&str>, key: &str) -> Option<String> {

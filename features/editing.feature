@@ -254,7 +254,7 @@ Feature: Editing a file
       And the minimap is turned off
       And "src/long.js" is open in the editor holding a 40-character line above a short one
       When I press "$" in the editor
-      Then the editor view starts at column 25
+      Then the editor view starts at column 26
       And the cursor is at line 1 column 40
 
     Scenario: Typing past the right edge slides the view along with the text
@@ -264,7 +264,7 @@ Feature: Editing a file
       And I press "$" in the editor
       And I press "a" in the editor
       When I type "xyz" in the editor
-      Then the editor view starts at column 7
+      Then the editor view starts at column 8
       And the cursor is at line 1 column 22
 
     Scenario: The view slides back when the cursor returns to the start

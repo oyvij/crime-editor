@@ -15,6 +15,7 @@
 //! touches the terminal, the pty, the filesystem or git.
 
 pub mod authorship;
+pub mod debug;
 pub mod editor;
 pub mod filter;
 pub mod fold;
@@ -325,6 +326,9 @@ pub enum Modal {
         dir: PathBuf,
     },
     Palette,
+    /// A tapped Space waiting for its second key, with the Chord hint naming
+    /// every key that can follow it. Gone at the second key or Escape.
+    Chord,
     /// Picking the type and body for the selected diff lines.
     Comment,
     /// Submitting clears whatever the AI's CLI is showing, which can be a
@@ -463,6 +467,15 @@ pub enum Event {
     /// second mapping can disagree with it — the click used to answer only the
     /// three views, and every other row it landed on did nothing.
     ClickPaletteEntry(char),
+    /// Set or remove a Breakpoint on this line of the buffer on screen: a click
+    /// in the gutter's Breakpoint column, or `␣b` on the cursor's line.
+    ToggleBreakpoint(usize),
+    /// What a file holding remembered Breakpoints holds now, read by the edge
+    /// because the core reads no files. Answers [`Effect::ReadBreakpointFile`].
+    BreakpointFileRead {
+        path: PathBuf,
+        contents: String,
+    },
     /// Files appeared on disk from somewhere that is not a tree action, each
     /// with what the edge saw it to be.
     FilesAppeared(Vec<(PathBuf, tree::Kind)>),
@@ -1224,6 +1237,11 @@ pub enum Effect {
     /// when the file cannot be read — which leaves it *not measured*, the same
     /// answer a file no server serves gets.
     ReadForReview(PathBuf),
+    /// Read a file the project remembers Breakpoints in, so each can be held
+    /// to the text its line had — at load, whether or not the file is open.
+    /// Answered with [`Event::BreakpointFileRead`], empty for a file that is
+    /// gone, which makes every Breakpoint in it Stale.
+    ReadBreakpointFile(PathBuf),
     /// Wait this many milliseconds and then answer with
     /// [`Event::CandidatesDue`] — one timer, restarted every time this
     /// arrives, so a burst of typing asks once. The edge holds the clock and
@@ -1691,6 +1709,8 @@ pub struct State {
     pub strip_height: Option<u32>,
     /// Which group the Strip is showing.
     pub strip: layout::Group,
+    /// Every Breakpoint in the workspace, with or without a Debug session.
+    pub breakpoints: Vec<debug::Breakpoint>,
     pub terminal_mouse: mouse::Encoding,
     /// The terminal strip's shells, side by side, and what each is doing.
     /// Told by the edge — it starts them, watches them exit and asks the OS
@@ -2173,6 +2193,7 @@ impl Default for State {
             ai_pane: layout::AiPane::Beside,
             strip_height: None,
             strip: layout::Group::Shells,
+            breakpoints: Vec::new(),
             corner: layout::Corner::Hidden,
             risk_all: false,
             risk_selection: 0,
@@ -2605,6 +2626,28 @@ pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
     if refuse_guest_edits(state, &mut next) {
         next.refusal = Some(preview::Refusal::GuestReadOnly);
     }
+    // A Breakpoint moves with its line whatever moved the line — a key, a
+    // paste, an undo, a format, the file changing on disk — so it is carried
+    // here, by outcome, for the reason the guest refusal above is decided here.
+    // Remembered as soon as it moves: a project whose state still named the
+    // old line would find a Breakpoint that followed its line Stale next time.
+    let mut moved = false;
+    for (path, buffer) in &next.buffers {
+        match state.buffers.get(path) {
+            Some(before)
+                if before.revision() != buffer.revision()
+                    && next.breakpoints.iter().any(|b| &b.file == path) =>
+            {
+                let was = next.breakpoints.clone();
+                debug::follow(&mut next.breakpoints, path, before.shown(), buffer.shown());
+                moved |= was != next.breakpoints;
+            }
+            _ => {}
+        }
+    }
+    if moved {
+        effects.push(Effect::SaveState(state_json(&next)));
+    }
     // Every event passes through here for the reason it passes through the
     // scroll clamp: an arm that has to remember to tell the language server
     // what the buffer now holds is an arm that will forget. What has been sent
@@ -2909,6 +2952,10 @@ fn route_editor_key(state: &State, next: State, event: Event, wheeled: bool) -> 
         Err(declined) => declined,
     };
     let declined = match on_editor_escape(state, declined.0, declined.1, wheeled) {
+        Ok(answer) => return Ok(answer),
+        Err(declined) => declined,
+    };
+    let declined = match on_breakpoint(declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };
@@ -3334,6 +3381,18 @@ fn on_key_4(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
 /// Key
 fn on_key_5(state: &State, mut next: State, event: Event, _wheeled: bool) -> Answered {
     match event {
+        // Whatever the second key is, the hint goes: a chord nobody bound
+        // costs the one key, the way Escape does.
+        Event::Key(key) if state.modal == Modal::Chord => {
+            next.modal = Modal::None;
+            match key {
+                'b' => {
+                    let line = current_buffer(&next).map_or(0, |buffer| buffer.line);
+                    Ok(update(&next, Event::ToggleBreakpoint(line)))
+                }
+                _ => Ok((next, vec![])),
+            }
+        }
         Event::Key(key) if state.modal == Modal::Palette => {
             let Some(entry) = palette_entry(key) else {
                 // Unrecognised keys leave the palette open.
@@ -4920,6 +4979,23 @@ fn on_editor_key(state: &State, mut next: State, event: Event, wheeled: bool) ->
             return Ok(update(state, Event::ToggleFold { all: false }));
         }
 
+        // Space is a chord prefix in normal mode, on the code a Breakpoint can
+        // be set in — never over a half-typed operator, which it would
+        // otherwise swallow.
+        Event::EditorKey(' ')
+            if state.modal == Modal::None
+                && state.view == View::Edit
+                && state.diff.is_none()
+                && state.walking.is_none()
+                && !previewing(state)
+                && current_buffer(state).is_some_and(|buffer| {
+                    buffer.mode == editor::Mode::Normal && buffer.pending().is_empty()
+                }) =>
+        {
+            next.modal = Modal::Chord;
+            vec![]
+        }
+
         // The sideways gesture, on the two surfaces that are read rather than
         // typed in and have no cursor of their own to follow — Review's diff
         // and the code a Story walk is showing. One arm rather than one per
@@ -5599,6 +5675,49 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
             Some(path) => return Ok(update(state, Event::Reload(path))),
             None => vec![],
         },
+
+        other => return Err((next, other)),
+    };
+    Ok(settle(next, effects, wheeled))
+}
+
+/// ToggleBreakpoint, BreakpointFileRead
+fn on_breakpoint(mut next: State, event: Event, wheeled: bool) -> Answered {
+    let effects = match event {
+        Event::ToggleBreakpoint(line) => {
+            let Some((file, text)) = next.current_buffer.clone().and_then(|file| {
+                let text = debug::held(next.buffers.get(&file)?.shown(), line)?.to_string();
+                Some((file, text))
+            }) else {
+                return Ok((next, vec![]));
+            };
+            match next
+                .breakpoints
+                .iter()
+                .position(|breakpoint| breakpoint.file == file && breakpoint.line == line)
+            {
+                Some(at) => {
+                    next.breakpoints.remove(at);
+                }
+                None => next.breakpoints.push(debug::Breakpoint {
+                    file,
+                    line,
+                    text,
+                    stale: false,
+                }),
+            }
+            vec![Effect::SaveState(state_json(&next))]
+        }
+
+        // Stale is decided here and nowhere else: a Breakpoint whose line no
+        // longer holds its text is marked, never moved to where the text went.
+        Event::BreakpointFileRead { path, contents } => {
+            for breakpoint in next.breakpoints.iter_mut().filter(|b| b.file == path) {
+                breakpoint.stale =
+                    debug::held(&contents, breakpoint.line) != Some(breakpoint.text.as_str());
+            }
+            vec![]
+        }
 
         other => return Err((next, other)),
     };
@@ -7720,7 +7839,9 @@ fn on_row_action(state: &State, next: State, event: Event, wheeled: bool) -> Ans
         // than assumed open: the mouse hit-tests the palette's rows only while
         // it is up, and a core that force-opened it here would answer a click
         // nobody could have made.
-        Event::ClickPaletteEntry(_) if state.modal != Modal::Palette => vec![],
+        Event::ClickPaletteEntry(_) if !matches!(state.modal, Modal::Palette | Modal::Chord) => {
+            vec![]
+        }
         Event::ClickPaletteEntry(key) => return Ok(update(state, Event::Key(key))),
         other => return Err((next, other)),
     };
@@ -7981,6 +8102,19 @@ fn state_json(state: &State) -> String {
             .map(|rest| rest.to_string_lossy().into_owned())
     };
     let buffers: Vec<String> = state.buffers.keys().filter_map(|p| relative(p)).collect();
+    // The text a Breakpoint was set against, so the next start can tell a
+    // line that still holds it from one that does not.
+    let breakpoints: Vec<serde_json::Value> = state
+        .breakpoints
+        .iter()
+        .filter_map(|breakpoint| {
+            Some(serde_json::json!({
+                "file": breakpoint.file.strip_prefix(&state.root).ok()?,
+                "line": breakpoint.line,
+                "text": breakpoint.text,
+            }))
+        })
+        .collect();
     serde_json::json!({
         "last_view": format!("{:?}", state.view),
         "ai_command": state.ai_command,
@@ -7995,6 +8129,7 @@ fn state_json(state: &State) -> String {
         "minimap": state.minimap,
         "buffers": buffers,
         "current_buffer": state.current_buffer.as_deref().and_then(relative),
+        "breakpoints": breakpoints,
     })
     .to_string()
 }
@@ -10648,6 +10783,73 @@ mod tests {
             let buffer = editor::Buffer::open("", false, editor::DEFAULT_TAB_WIDTH);
             assert_eq!(mode_label(&state, &buffer), expected);
         }
+    }
+
+    /// Space waits for a chord only in plain normal mode over Source: over a
+    /// half-typed operator it would swallow the operator's second key, and a
+    /// Preview's rows are not lines a Breakpoint could be set on.
+    #[test]
+    fn space_opens_the_chord_hint_only_over_source_in_plain_normal_mode() {
+        let source = update(
+            &State::default(),
+            Event::BufferOpened {
+                path: PathBuf::from("/w/a.rs"),
+                contents: "one\ntwo\n".to_string(),
+                preview: false,
+                at: None,
+            },
+        )
+        .0;
+        let spaced = |state: &State| update(state, Event::EditorKey(' ')).0.modal;
+        assert_eq!(spaced(&source), Modal::Chord);
+        let operator = update(&source, Event::EditorKey('d')).0;
+        assert_eq!(spaced(&operator), Modal::None);
+        assert_eq!(spaced(&previewing_readme("# Title\n")), Modal::None);
+    }
+
+    /// Moving is saved as it happens, not only at the next toggle or at quit:
+    /// state naming the old line would make a Breakpoint that followed its
+    /// line read as Stale at the next start.
+    #[test]
+    fn a_breakpoint_moved_by_an_edit_is_remembered_where_it_went() {
+        let source = update(
+            &State::default(),
+            Event::BufferOpened {
+                path: PathBuf::from("/a.rs"),
+                contents: "one\ntwo".to_string(),
+                preview: false,
+                at: None,
+            },
+        )
+        .0;
+        let set = update(&source, Event::ToggleBreakpoint(2)).0;
+        let (moved, effects) = update(&set, Event::EditorKey('O'));
+        assert_eq!(moved.breakpoints[0].line, 3);
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::SaveState(json) if json.contains("\"line\":3")
+        )));
+    }
+
+    /// A line the buffer does not have is not a place for a Breakpoint: a
+    /// click below a short file's last line sets nothing.
+    #[test]
+    fn a_breakpoint_is_only_set_on_a_line_the_buffer_has() {
+        let source = update(
+            &State::default(),
+            Event::BufferOpened {
+                path: PathBuf::from("/w/a.rs"),
+                contents: "one\ntwo".to_string(),
+                preview: false,
+                at: None,
+            },
+        )
+        .0;
+        let (past, effects) = update(&source, Event::ToggleBreakpoint(9));
+        assert!(past.breakpoints.is_empty());
+        assert!(effects.is_empty());
+        let (set, _) = update(&source, Event::ToggleBreakpoint(2));
+        assert_eq!(set.breakpoints[0].text, "two");
     }
 
     /// The pane a Preview lays out to, arrived at through the events the edge

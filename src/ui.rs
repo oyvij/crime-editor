@@ -395,7 +395,14 @@ fn status_line(
 /// asserts on wording.
 fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
     match &state.modal {
-        Modal::Palette => overlay(frame, "COMMANDS", palette_lines(frame.area().height)),
+        // The screen's height goes in because the row count depends on it —
+        // the same number the mouse hit-test passes.
+        Modal::Palette => overlay(
+            frame,
+            "COMMANDS",
+            rows_lines(palette_rows(frame.area().height)),
+        ),
+        Modal::Chord => overlay(frame, "SPACE", rows_lines(keys::chord_rows())),
         Modal::NameBox { .. } => overlay(
             frame,
             "NAME",
@@ -1726,7 +1733,19 @@ fn editor_widget(
         }
     }
 
-    Paragraph::new(folded(lines, state))
+    // After the fold, which recognises a line's gutter by its first span: the
+    // rows it leaves are numbered by the lines it did not hide.
+    let hidden = varde::fold::hidden(state);
+    let marks = varde::debug::marks(state);
+    let lines: Vec<Line> = folded(lines, state)
+        .into_iter()
+        .zip((1..).filter(|number| !hidden.contains(number)))
+        .map(|(line, number)| match marks.get(&number) {
+            Some(mark) => with_breakpoint(line, *mark),
+            None => line,
+        })
+        .collect();
+    Paragraph::new(lines)
         .scroll((state.editor_scroll as u16, 0))
         .block(editor_block(state, title, footer, command, width))
 }
@@ -1877,6 +1896,28 @@ fn folded(lines: Vec<Line<'static>>, state: &State) -> Vec<Line<'static>> {
         .collect()
 }
 
+/// One line with its Breakpoint in the gutter's first column, which every
+/// gutter leaves blank for it: `layout::BREAKPOINT_COLUMN`, where `mouse`
+/// hit-tests the click that set it.
+fn with_breakpoint(line: Line<'static>, mark: varde::debug::Mark) -> Line<'static> {
+    let glyph = match mark {
+        varde::debug::Mark::Plain => Span::styled("●", Style::default().fg(Color::Red)),
+        // Dotted and grey: remembered against text its line no longer holds,
+        // so not a place the program will pause. Not the hollow circle, which
+        // is an Unverified breakpoint's.
+        varde::debug::Mark::Stale => Span::styled("◌", Style::default().fg(Color::DarkGray)),
+    };
+    let style = line.style;
+    let mut spans = line.spans.into_iter();
+    let Some(first) = spans.next() else {
+        return Line::from(vec![glyph]).style(style);
+    };
+    let rest: String = first.content.chars().skip(1).collect();
+    let mut drawn = vec![glyph, Span::styled(rest, first.style)];
+    drawn.extend(spans);
+    Line::from(drawn).style(style)
+}
+
 /// What a folded block leaves at the end of the line that opens it: the one
 /// character standing for everything hidden under it, which is also the one
 /// column past the text the cursor may sit on there
@@ -1903,18 +1944,18 @@ fn with_toggle(
         Style::default().fg(Color::Cyan),
     );
     let first = line.spans.first().map(|span| span.content.as_ref());
-    let mut spans = if first == Some(format!("{number:>4} {PAD}").as_str()) {
+    let mut spans = if first == Some(format!(" {number:>4} {PAD}").as_str()) {
         // The number keeps whatever colour it was given — the cursor's line is
         // brighter, and rebuilding it grey here is how that mark would vanish
         // on exactly the lines a reader folds.
         let mut spans = vec![
-            Span::styled(format!("{number:>4} "), line.spans[0].style),
+            Span::styled(format!(" {number:>4} "), line.spans[0].style),
             glyph,
             Span::raw("  "),
         ];
         spans.extend(line.spans.iter().skip(1).cloned());
         spans
-    } else if first == Some(format!("{number:>4}").as_str())
+    } else if first == Some(format!(" {number:>4}").as_str())
         && line.spans.get(2).map(|span| span.content.as_ref()) == Some(PAD)
     {
         let mut spans = line.spans.clone();
@@ -2741,7 +2782,7 @@ fn barred(line: &Line<'static>, number: usize, colour: Color) -> Line<'static> {
     let mut spans = vec![
         // Brighter than the grey `dimmed` flattens to: the Site's own numbers
         // are the ones worth reading, and two identical greys say nothing.
-        Span::styled(format!("{number:>4}"), Style::default().fg(Color::Gray)),
+        Span::styled(format!(" {number:>4}"), Style::default().fg(Color::Gray)),
         Span::styled("▌", Style::default().fg(colour)),
         // The pad columns the bar did not take, one of which `with_toggle`
         // then claims — which is what the seventh gutter column buys: news and
@@ -2822,8 +2863,7 @@ fn showing_cheatsheet(state: &State) -> bool {
 /// ones nothing else teaches you. Twenty-five Edit rows compete for sixteen on
 /// a 26-row screen, so the order is the whole of the answer.
 fn cheatsheet_rows(state: &State, height: u16) -> Vec<(String, Color)> {
-    let rows_for_view: Vec<(&str, &str)> = keys::CHEATSHEET
-        .iter()
+    let rows_for_view: Vec<(&str, &str)> = keys::cheatsheet()
         .filter(|(_, _, views)| state.cheatsheet && keys::applies_to(views, state.view))
         .map(|(keys, what, _)| (*keys, *what))
         .collect();
@@ -3035,7 +3075,7 @@ fn diff_rows(
         let mut spans = vec![
             Span::styled(
                 format!(
-                    "{:>4} ",
+                    " {:>4} ",
                     line.new_line.map(|n| n.to_string()).unwrap_or_default()
                 ),
                 Style::default().fg(Color::DarkGray),
@@ -3103,7 +3143,7 @@ fn changed_row(
     let (_, own, tint) = change_colours(removed, dark);
     let mut spans = vec![
         Span::styled(
-            format!("{:>4}", number.map(|n| n.to_string()).unwrap_or_default()),
+            format!(" {:>4}", number.map(|n| n.to_string()).unwrap_or_default()),
             Style::default().fg(Color::Gray),
         ),
         Span::styled("▌", Style::default().fg(own)),
@@ -3393,7 +3433,7 @@ fn numbered(number: usize, cursor: Option<usize>) -> Line<'static> {
         false => Color::DarkGray,
     };
     Line::from(Span::styled(
-        format!("{number:>4} {PAD}"),
+        format!(" {number:>4} {PAD}"),
         Style::default().fg(colour),
     ))
 }
@@ -3947,13 +3987,10 @@ fn branch_lines(names: &[String], filter: &str, selected: usize) -> Vec<Line<'st
     lines
 }
 
-/// The rows `varde::palette_rows` built, with the headings dimmed: a heading
-/// offers no key, so it must not read as one. The screen's height goes in
-/// because the row count depends on it — the same number the mouse hit-test
-/// passes, since the two must be handed the same vector.
-fn palette_lines(screen: u16) -> Vec<Line<'static>> {
-    palette_rows(screen)
-        .into_iter()
+/// A list whose rows offer a key or carry none — a heading, a gap, the cancel
+/// line — the ones carrying none dimmed so they do not read as keys.
+fn rows_lines(rows: Vec<(Option<char>, String)>) -> Vec<Line<'static>> {
+    rows.into_iter()
         .map(|(key, row)| match key {
             Some(_) => Line::from(row),
             None => Line::from(Span::styled(row, Style::default().fg(Color::DarkGray))),
@@ -4046,9 +4083,9 @@ mod tests {
         action_icon, authorship_clause, branch_lines, buffer_title, cheatsheet_rows, code_lines,
         colour, diff_rows, editor_block, faint, folded, guided, highlight, icon_colour, layout,
         paint_drag, pane_actions_title, preview_line, right_title, risk_lines, risk_title, shift,
-        status_line, story_title, title_room, tree_lines, truncate, with_caret, Block, Borders,
-        Color, Kind, Line, Modifier, Place, Selection, Span, State, Style, Tone, UnicodeWidthStr,
-        DIRTY, DOTS, WARNING,
+        status_line, story_title, title_room, tree_lines, truncate, with_breakpoint, with_caret,
+        Block, Borders, Color, Kind, Line, Modifier, Place, Selection, Span, State, Style, Tone,
+        UnicodeWidthStr, DIRTY, DOTS, WARNING,
     };
     use varde::risk::{Figure, Figures, Function, Metrics};
 
@@ -5429,10 +5466,10 @@ mod tests {
         assert_eq!(
             drawn(&state),
             [
-                "   1 \u{25bc}  fn main() {",
-                "   2        go();",
-                "   3    }",
-                "   4    "
+                "    1 \u{25bc}  fn main() {",
+                "    2        go();",
+                "    3    }",
+                "    4    "
             ]
         );
         assert_eq!(
@@ -5451,10 +5488,41 @@ mod tests {
         assert_eq!(
             drawn(&state),
             [
-                format!("   1 \u{25ba}  fn main() {{{DOTS}"),
-                "   3    }".to_string(),
-                "   4    ".to_string()
+                format!("    1 \u{25ba}  fn main() {{{DOTS}"),
+                "    3    }".to_string(),
+                "    4    ".to_string()
             ]
+        );
+    }
+
+    /// A Breakpoint takes the gutter's first column, the one `mouse` hit-tests
+    /// the click that set it at, and moves nothing else on the line: the
+    /// number, the toggle and the text are where they were.
+    #[test]
+    fn a_breakpoint_is_drawn_in_the_column_its_click_lands_in() {
+        let plain =
+            code_lines(&highlight::highlight("main.rs", "fn main() {}"), true, None).remove(0);
+        let text = |line: &Line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        };
+        let marked = text(&with_breakpoint(plain.clone(), varde::debug::Mark::Plain));
+        assert_eq!(
+            marked.chars().nth(layout::BREAKPOINT_COLUMN as usize),
+            Some('\u{25cf}')
+        );
+        assert_eq!(
+            marked.chars().skip(1).collect::<String>(),
+            text(&plain).chars().skip(1).collect::<String>()
+        );
+        assert_eq!(
+            text(&with_breakpoint(plain, varde::debug::Mark::Stale))
+                .chars()
+                .next(),
+            Some('\u{25cc}'),
+            "a Stale breakpoint is drawn apart from one the program will pause at"
         );
     }
 

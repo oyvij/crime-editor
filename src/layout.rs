@@ -89,19 +89,24 @@ const EDITOR_TITLE: u16 = 34;
 /// text. The renderer draws it and the mouse hit-tests past it, so both read
 /// this rather than each counting columns.
 ///
-/// Eight, not five. Four columns are the number; the fifth is the bar a
-/// diagnostic or a Reading draws; the sixth is the fold toggle; the last two
-/// are air between the gutter and the code. A toggle wedged between the last
-/// digit and the first character of the code is a target too small to aim a
-/// pointer at, and code that starts against the line number is code you read
-/// the number as part of.
-pub const GUTTER: u16 = 8;
+/// Nine, not five. The first column holds Breakpoints; the next four are the
+/// number; the sixth is the bar a diagnostic or a Reading draws; the seventh
+/// is the fold toggle; the last two are air between the gutter and the code. A
+/// toggle wedged between the last digit and the first character of the code is
+/// a target too small to aim a pointer at, and code that starts against the
+/// line number is code you read the number as part of.
+pub const GUTTER: u16 = 9;
+
+/// Which gutter column Breakpoints sit in, counted from the pane's inside
+/// edge: the leftmost, where a JetBrains hand already reaches for them, and
+/// apart from the line numbers so a click on a number sets nothing.
+pub const BREAKPOINT_COLUMN: u16 = 0;
 
 /// Which gutter column the fold toggle sits in, counted from the pane's inside
 /// edge. Here beside [`GUTTER`] for the reason `GUTTER` is here — `ui` draws
 /// it and `mouse` hit-tests it, and two derivations of one column is a click
 /// landing beside the thing it pointed at.
-pub const TOGGLE_COLUMN: u16 = 5;
+pub const TOGGLE_COLUMN: u16 = 6;
 
 /// How wide the step-menu is while walking a Story — a fixed constant, the
 /// same shape as `GUTTER`, rather than sized to the longest Step name in
@@ -604,6 +609,18 @@ mod tests {
         editor_chip_labels, inset, pane_at, panes, strip_at, strip_height, strip_width, AiPane,
         Area, Corner, Shapes, STEP_MENU_WIDTH, STRIP_LEAST, TOP_LEAST,
     };
+
+    /// Nine columns, the Breakpoint column leftmost and the fold toggle right
+    /// of the four the number takes and the one a bar takes. `ui` draws and
+    /// `mouse` hit-tests both columns from here, so moving one is a change
+    /// on screen and fails here.
+    #[test]
+    fn the_gutter_is_nine_columns_with_breakpoints_leftmost() {
+        use super::{gutter, Gutter, BREAKPOINT_COLUMN, TOGGLE_COLUMN};
+        assert_eq!(gutter(Gutter::Numbers), 9);
+        assert_eq!(BREAKPOINT_COLUMN, 0);
+        assert_eq!(TOGGLE_COLUMN, 1 + 4 + 1);
+    }
     use crate::Pane;
 
     /// Measured from ratatui's solver before the layout moved here. If these
