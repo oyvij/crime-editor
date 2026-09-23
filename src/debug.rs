@@ -12,7 +12,7 @@
 use crate::preview::Refusal;
 use crate::{layout, Effect, Pane, Place, State};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// A line the program pauses at. `text` is what the line held, trimmed, so a
@@ -185,15 +185,27 @@ pub struct Session {
     /// session starts, so a config edited mid-session changes the next one.
     request: String,
     args: serde_json::Map<String, Value>,
-    /// The `seq` the last request went out with, and the command of every one
-    /// still unanswered, by `seq`: a response names its request only by number.
+    /// The `seq` the last request went out with, and every one still
+    /// unanswered, by `seq`: a response names its request only by number.
     seq: i64,
-    asked: BTreeMap<i64, String>,
+    asked: BTreeMap<i64, Ask>,
     /// A pause asked for before any thread was known, so it waits on the
     /// `threads` answer that names one.
     pausing: bool,
-    /// What the Corner held when the session began, given back when it ends.
+    /// What the Corner and the Strip held when the session began, given back
+    /// when it ends.
     corner: layout::Corner,
+    strip: layout::Group,
+}
+
+/// A request waiting for its answer: the command, which is how the response is
+/// read, and the Variables reference it asked about — which a `variables`
+/// response carries nowhere in itself, so an answer would otherwise be a list
+/// of members belonging to nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Ask {
+    command: String,
+    reference: i64,
 }
 
 /// Where a session has got to. An enum rather than flags, for the reason
@@ -208,7 +220,11 @@ pub enum Phase {
     /// the Breakpoints go: one that arrives any earlier would send them ahead
     /// of the program they are for.
     Starting,
-    Running,
+    /// Running, holding what the last pause showed so it can stay on screen,
+    /// dimmed, while the program runs — `None` until the first pause. The
+    /// pause has one home either way: a second field holding it beside the
+    /// phase is two authors for one fact.
+    Running(Option<Pause>),
     Paused(Pause),
     /// `disconnect` sent, waiting for its answer before the adapter is let go:
     /// dropped at once, it could take a launched program down with it before
@@ -222,10 +238,98 @@ pub enum Phase {
 pub struct Pause {
     pub thread: i64,
     pub why: Why,
+    /// What the adapter said paused it, where it said anything: the first
+    /// Variables row, since an exception is what the reader is looking for.
+    exception: Option<String>,
     /// Empty until the adapter answers `stackTrace`, which the pause asks for.
     pub frames: Vec<Frame>,
     pub chosen: usize,
+    /// The chosen Frame's scopes, as the adapter named them, and the children
+    /// fetched for every reference that has been opened. A member is asked
+    /// for when it is opened and never before: a tree walked whole at every
+    /// pause is a debugger that stops for seconds on a deep structure.
+    scopes: Vec<Member>,
+    children: BTreeMap<i64, Vec<Member>>,
+    open: BTreeSet<i64>,
+    /// How many children of a reference have arrived, which is where its next
+    /// page starts.
+    fetched: BTreeMap<i64, usize>,
 }
+
+/// One member of the Variables tree as the adapter named it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Member {
+    name: String,
+    value: String,
+    /// What to ask for this member's children by; 0 for one that has none.
+    reference: i64,
+    hint: Hint,
+    /// How many indexed children the adapter says it has, which is what
+    /// decides whether it is read a page at a time. 0 for a member the
+    /// adapter did not count, which is every member small enough not to need
+    /// counting.
+    indexed: usize,
+}
+
+/// How a member is drawn, as the adapter's presentation hints say — never as
+/// Varde guesses from the language, which it does not know.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hint {
+    Plain,
+    Private,
+    ReadOnly,
+    /// A member the adapter will only compute when it is asked for, which is
+    /// what opening it does.
+    Lazy,
+}
+
+impl Hint {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Hint::Plain => "plain",
+            Hint::Private => "private",
+            Hint::ReadOnly => "read-only",
+            Hint::Lazy => "lazy",
+        }
+    }
+}
+
+/// One row of the Variables as it is drawn: the tree flattened to what is
+/// open, which is what `ui` draws, what the mouse hit-tests and what Enter
+/// acts on — the three reading one list, for the reason the Breakpoint list's
+/// rows are one list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Row {
+    pub name: String,
+    pub value: String,
+    pub depth: usize,
+    pub hint: Hint,
+    pub open: bool,
+    pub opens: Opens,
+}
+
+/// What opening a row asks the adapter for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opens {
+    /// A member with no children to ask for.
+    Nothing,
+    Children {
+        reference: i64,
+        indexed: usize,
+    },
+    /// The row that stands for the rest of a collection too big to have come
+    /// whole, and the index it carries on from.
+    NextPage {
+        reference: i64,
+        start: usize,
+    },
+}
+
+/// How many members of an indexed collection are asked for at a time. A
+/// hundred is more rows than any pane shows and few enough that an adapter
+/// answers at once; the alternative — asking for all of them — is a ten
+/// thousand element vector serialized into a pane twenty rows tall.
+const PAGE: usize = 100;
 
 /// Why the program paused, as far as the Paused line is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,6 +362,9 @@ pub enum Step {
 /// adapter can name — a call inside a library shipped without one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
+    /// The adapter's number for it, which is the only way to ask for its
+    /// scopes: a Frame is named to the reader and numbered to the adapter.
+    pub id: i64,
     pub name: String,
     pub file: Option<PathBuf>,
     pub line: usize,
@@ -306,6 +413,7 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
         asked: BTreeMap::new(),
         pausing: false,
         corner: next.corner,
+        strip: next.strip,
     });
     vec![effect]
 }
@@ -394,7 +502,7 @@ pub fn received(next: &mut State, json: &str) -> Vec<Effect> {
 
 fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
     let session = next.debug.as_mut().expect("a session");
-    let Some(command) = message["request_seq"]
+    let Some(Ask { command, reference }) = message["request_seq"]
         .as_i64()
         .and_then(|seq| session.asked.remove(&seq))
     else {
@@ -444,6 +552,7 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
                 .into_iter()
                 .flatten()
                 .map(|frame| Frame {
+                    id: frame["id"].as_i64().unwrap_or_default(),
                     name: printable(frame["name"].as_str().unwrap_or_default()),
                     file: frame["source"]["path"]
                         .as_str()
@@ -458,7 +567,53 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
             pause.frames = frames;
             pause.chosen = 0;
             next.frames_selection = 0;
-            shown(next)
+            inspect(next)
+        }
+        // One level of one reference. Appended, never replacing: the only
+        // second request for a reference is its next page, and a page that
+        // overwrote the one before it is a collection that never grows.
+        "variables" => {
+            let members: Vec<Member> = message["body"]["variables"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(member)
+                .collect();
+            let Phase::Paused(pause) = &mut session.phase else {
+                return Vec::new();
+            };
+            let held = pause.children.entry(reference).or_default();
+            held.extend(members);
+            let fetched = held.len();
+            pause.fetched.insert(reference, fetched);
+            Vec::new()
+        }
+        // The chosen Frame's scopes become the top rows, each open unless the
+        // adapter called it expensive — a scope it says costs something to
+        // read is one nobody asked to read.
+        "scopes" => {
+            let scopes: Vec<(Member, bool)> = message["body"]["scopes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|scope| (member(scope), scope["expensive"] == Value::Bool(true)))
+                .collect();
+            let Phase::Paused(pause) = &mut session.phase else {
+                return Vec::new();
+            };
+            pause.scopes = scopes.iter().map(|(scope, _)| scope.clone()).collect();
+            pause.children.clear();
+            pause.fetched.clear();
+            let opened: Vec<(i64, usize)> = scopes
+                .iter()
+                .filter(|(_, expensive)| !expensive)
+                .map(|(scope, _)| (scope.reference, scope.indexed))
+                .collect();
+            pause.open = opened.iter().map(|(reference, _)| *reference).collect();
+            opened
+                .into_iter()
+                .map(|(reference, indexed)| fetch(session, reference, paged(indexed, 0)))
+                .collect()
         }
         "threads" if session.pausing => {
             session.pausing = false;
@@ -486,7 +641,7 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
             // inspection: a second thread pausing leaves the view where it is,
             // and a session being stopped is not brought back.
             match &session.phase {
-                Phase::Running => {}
+                Phase::Running(_) => {}
                 Phase::Paused(pause) if pause.thread == thread => {}
                 _ => return Vec::new(),
             }
@@ -496,19 +651,27 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
                     Some("exception") => Why::Exception,
                     _ => Why::Paused,
                 },
+                exception: body["text"].as_str().map(printable),
                 frames: Vec::new(),
                 chosen: 0,
+                scopes: Vec::new(),
+                children: BTreeMap::new(),
+                open: BTreeSet::new(),
+                fetched: BTreeMap::new(),
             });
             let effect = ask(session, "stackTrace", json!({ "threadId": thread }));
-            // The Frames come forward; the keyboard stays where it was, since
-            // a pause is something the program did, not the reader.
+            // The Debug group and the Frames come forward; the keyboard stays
+            // where it was, since a pause is something the program did, not
+            // the reader. What the reader shows instead is not moved again
+            // until the next pause.
             next.corner = layout::Corner::Frames;
+            next.strip = layout::Group::Debug;
             vec![effect]
         }
         Some("continued") => {
             let session = next.debug.as_mut().expect("a session");
-            if matches!(session.phase, Phase::Paused(_)) {
-                session.phase = Phase::Running;
+            if let Phase::Paused(pause) = &session.phase {
+                session.phase = Phase::Running(Some(pause.clone()));
             }
             Vec::new()
         }
@@ -563,7 +726,7 @@ fn configured(next: &mut State) -> Vec<Effect> {
         json!({ "filters": [] }),
     ));
     effects.push(ask(session, "configurationDone", json!({})));
-    session.phase = Phase::Running;
+    session.phase = Phase::Running(None);
     effects
 }
 
@@ -576,13 +739,13 @@ pub fn resume(next: &mut State) -> Vec<Effect> {
     };
     match &session.phase {
         Phase::Paused(pause) => {
-            let thread = pause.thread;
-            session.phase = Phase::Running;
+            let (thread, last) = (pause.thread, pause.clone());
+            session.phase = Phase::Running(Some(last));
             vec![ask(session, "continue", json!({ "threadId": thread }))]
         }
         // Pausing needs a thread, and a program that has never paused has
         // named none, so the adapter is asked for them first.
-        Phase::Running if !session.pausing => {
+        Phase::Running(_) if !session.pausing => {
             session.pausing = true;
             vec![ask(session, "threads", json!({}))]
         }
@@ -604,13 +767,13 @@ pub fn step(next: &mut State, step: Step) -> Vec<Effect> {
     let Phase::Paused(pause) = &session.phase else {
         return Vec::new();
     };
-    let thread = pause.thread;
+    let (thread, last) = (pause.thread, pause.clone());
     let request = match step {
         Step::Over => "next",
         Step::Into => "stepIn",
         Step::Out => "stepOut",
     };
-    session.phase = Phase::Running;
+    session.phase = Phase::Running(Some(last));
     vec![ask(session, request, json!({ "threadId": thread }))]
 }
 
@@ -648,14 +811,201 @@ pub fn choose(next: &mut State, index: usize) -> Vec<Effect> {
     }
     pause.chosen = index;
     next.frames_selection = index;
-    shown(next)
+    inspect(next)
 }
 
-/// The Frames the Corner lists, empty while nothing is Paused.
-pub fn frames(state: &State) -> &[Frame] {
+/// What is on screen from the last pause: the pause itself while one holds,
+/// and the one it left behind while the program runs — the Frames and the
+/// Variables stay drawn, dimmed, so a program that runs on does not blank the
+/// panes the reader was reading.
+fn showing(state: &State) -> Option<&Pause> {
     match state.debug.as_ref().map(|session| &session.phase) {
-        Some(Phase::Paused(pause)) => &pause.frames,
-        _ => &[],
+        Some(Phase::Paused(pause)) => Some(pause),
+        Some(Phase::Running(last)) => last.as_ref(),
+        _ => None,
+    }
+}
+
+/// Whether what is on screen is the last pause rather than this one, which is
+/// what draws it dimmed: nothing dimmed is mistaken for current.
+pub fn stale(state: &State) -> bool {
+    matches!(
+        state.debug.as_ref().map(|session| &session.phase),
+        Some(Phase::Running(Some(_)))
+    )
+}
+
+/// What the Variables' title says: the mode the keyboard is in while Stepping
+/// mode is on — it is four letters acting without their Space, and a mode
+/// nobody can see they are in is a mode that swallows keys — then that the
+/// program is running, and otherwise the pane's own name.
+pub fn title(state: &State) -> &'static str {
+    match (state.stepping, stale(state)) {
+        (true, _) => "stepping",
+        (false, true) => "running",
+        (false, false) => "variables",
+    }
+}
+
+/// The Frames the Corner lists, empty while no pause has anything to show.
+pub fn frames(state: &State) -> &[Frame] {
+    showing(state).map_or(&[], |pause| &pause.frames)
+}
+
+/// The Variables as they are drawn: the exception that paused the program if
+/// one did, then the scopes, and under each open row the children that have
+/// arrived — the tree flattened to what is open, and nothing that is not.
+pub fn variables(state: &State) -> Vec<Row> {
+    let Some(pause) = showing(state) else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    if let Some(text) = &pause.exception {
+        rows.push(Row {
+            name: "exception".to_string(),
+            value: text.clone(),
+            depth: 0,
+            hint: Hint::Plain,
+            open: false,
+            opens: Opens::Nothing,
+        });
+    }
+    for scope in &pause.scopes {
+        draw(pause, scope, 0, &mut Vec::new(), &mut rows);
+    }
+    rows
+}
+
+/// One member and, while it is open, everything under it — then the row that
+/// stands for the rest of a collection whose page has not been asked for.
+///
+/// `walked` is what stands above this member, and a reference already on it is
+/// not opened again: the references are the adapter's, which is untrusted
+/// input, and one that holds itself would otherwise be a structure the reader
+/// could open into a stack overflow.
+fn draw(pause: &Pause, member: &Member, depth: usize, walked: &mut Vec<i64>, rows: &mut Vec<Row>) {
+    let open = member.reference != 0
+        && pause.open.contains(&member.reference)
+        && !walked.contains(&member.reference);
+    rows.push(Row {
+        name: member.name.clone(),
+        value: member.value.clone(),
+        depth,
+        hint: member.hint,
+        open,
+        opens: match member.reference {
+            0 => Opens::Nothing,
+            reference => Opens::Children {
+                reference,
+                indexed: member.indexed,
+            },
+        },
+    });
+    if !open {
+        return;
+    }
+    walked.push(member.reference);
+    for child in pause.children.get(&member.reference).into_iter().flatten() {
+        draw(pause, child, depth + 1, walked, rows);
+    }
+    walked.pop();
+    let fetched = pause
+        .fetched
+        .get(&member.reference)
+        .copied()
+        .unwrap_or_default();
+    if fetched < member.indexed {
+        rows.push(Row {
+            name: format!("{} more", member.indexed - fetched),
+            value: String::new(),
+            depth: depth + 1,
+            hint: Hint::Plain,
+            open: false,
+            opens: Opens::NextPage {
+                reference: member.reference,
+                start: fetched,
+            },
+        });
+    }
+}
+
+/// Enter on a Variables row, and a click on one: a member with children is
+/// opened or closed, and the row that stands for a collection's next page asks
+/// for it. Opening asks for one level — the children of that reference and
+/// nothing under them — so walking a deep structure asks for what is opened
+/// and nothing else.
+pub fn open(next: &mut State, index: usize) -> Vec<Effect> {
+    let Some(row) = variables(next).get(index).cloned() else {
+        return Vec::new();
+    };
+    let Some(session) = next.debug.as_mut() else {
+        return Vec::new();
+    };
+    let Phase::Paused(pause) = &mut session.phase else {
+        return Vec::new();
+    };
+    match row.opens {
+        Opens::Nothing => Vec::new(),
+        Opens::Children { reference, indexed } => {
+            if !pause.open.insert(reference) {
+                pause.open.remove(&reference);
+                return Vec::new();
+            }
+            // Asked for once: a row closed and opened again shows what already
+            // arrived, since the values have not changed while the program is
+            // stopped.
+            match pause.children.contains_key(&reference) {
+                true => Vec::new(),
+                false => vec![fetch(session, reference, paged(indexed, 0))],
+            }
+        }
+        // A next-page row exists only over a collection that is being read a
+        // page at a time, so where it carries on from is the page to ask for.
+        Opens::NextPage { reference, start } => vec![fetch(session, reference, Some(start))],
+    }
+}
+
+/// Which page of a collection of `indexed` members to ask for, starting at
+/// `start` — none at all for one small enough to come whole, since an adapter
+/// answering a whole small scope is one round trip rather than two.
+fn paged(indexed: usize, start: usize) -> Option<usize> {
+    (indexed > PAGE).then_some(start)
+}
+
+/// One level of `reference`: the page named, or everything it holds.
+fn fetch(session: &mut Session, reference: i64, page: Option<usize>) -> Effect {
+    let arguments = match page {
+        Some(start) => json!({ "variablesReference": reference, "start": start, "count": PAGE }),
+        None => json!({ "variablesReference": reference }),
+    };
+    ask(session, "variables", arguments)
+}
+
+/// One member of the Variables, as the adapter worded it — with nothing in it
+/// that could drive the terminal it is about to be drawn on, for the reason a
+/// Frame's name is stripped.
+fn member(value: &Value) -> Member {
+    let attributes = value["presentationHint"]["attributes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<&str>>();
+    let hint = if value["presentationHint"]["visibility"] == "private" {
+        Hint::Private
+    } else if attributes.contains(&"lazy") {
+        Hint::Lazy
+    } else if attributes.contains(&"readOnly") {
+        Hint::ReadOnly
+    } else {
+        Hint::Plain
+    };
+    Member {
+        name: printable(value["name"].as_str().unwrap_or_default()),
+        value: printable(value["value"].as_str().unwrap_or_default()),
+        reference: value["variablesReference"].as_i64().unwrap_or_default(),
+        hint,
+        indexed: value["indexedVariables"].as_u64().unwrap_or_default() as usize,
     }
 }
 
@@ -668,11 +1018,12 @@ pub fn paused_line(state: &State) -> Option<(&Path, usize, Why)> {
     Some((frame.file.as_deref()?, frame.line, pause.why))
 }
 
-/// The chosen Frame's file brought on screen at its line, unless it is the
-/// Buffer already there: the cursor of the file being typed in is the
-/// reader's, and a pause never moves it.
-fn shown(next: &State) -> Vec<Effect> {
-    match paused_line(next) {
+/// The whole inspection moved to the chosen Frame: its file brought on screen
+/// at its line — unless it is the Buffer already there, since the cursor of
+/// the file being typed in is the reader's and a pause never moves it — and
+/// its scopes asked for, which is what the Variables draw.
+fn inspect(next: &mut State) -> Vec<Effect> {
+    let mut effects = match paused_line(next) {
         Some((path, line, _)) if next.current_buffer.as_deref() != Some(path) => {
             vec![Effect::OpenAt {
                 path: path.to_path_buf(),
@@ -680,7 +1031,20 @@ fn shown(next: &State) -> Vec<Effect> {
             }]
         }
         _ => Vec::new(),
+    };
+    // Asked for here rather than at the pause, because choosing another Frame
+    // is the same question asked about another call.
+    let Some(session) = next.debug.as_mut() else {
+        return effects;
+    };
+    let Phase::Paused(pause) = &session.phase else {
+        return effects;
+    };
+    if let Some(frame) = pause.frames.get(pause.chosen) {
+        let id = frame.id;
+        effects.push(ask(session, "scopes", json!({ "frameId": id })));
     }
+    effects
 }
 
 /// What the Corner holds outside a session: what it held before one began,
@@ -699,9 +1063,17 @@ pub fn resting_corner(state: &State) -> layout::Corner {
 /// them for nothing would be a mode nobody could see they were in.
 fn end(next: &mut State) {
     next.corner = resting_corner(next);
+    // The Strip the same way, which is the whole of what a session borrowed:
+    // both slots go back to what they held before it began.
+    next.strip = next
+        .debug
+        .as_ref()
+        .map_or(next.strip, |session| session.strip);
     next.debug = None;
     next.stepping = false;
-    if next.focus == Pane::Frames {
+    // Both of the session's own panes go with it, so the keyboard is never
+    // left in one that is no longer on screen.
+    if matches!(next.focus, Pane::Frames | Pane::Variables) {
         next.focus = Pane::Editor;
     }
 }
@@ -717,7 +1089,16 @@ fn printable(text: &str) -> String {
 /// One request, numbered and remembered until its answer arrives.
 fn ask(session: &mut Session, command: &str, arguments: Value) -> Effect {
     session.seq += 1;
-    session.asked.insert(session.seq, command.to_string());
+    // Read off the request rather than passed beside it: the two could then
+    // name different references, and the answer would be filed under the one
+    // nobody asked.
+    session.asked.insert(
+        session.seq,
+        Ask {
+            command: command.to_string(),
+            reference: arguments["variablesReference"].as_i64().unwrap_or_default(),
+        },
+    );
     Effect::DapSend {
         json: json!({
             "seq": session.seq,
@@ -738,6 +1119,19 @@ fn reply(session: &mut Session, request: &Value, mut answer: Value) -> Effect {
     Effect::DapSend {
         json: answer.to_string(),
     }
+}
+
+/// The `seq` a request still waiting for its answer went out with, so a test
+/// can answer it the way the adapter would.
+#[cfg(test)]
+pub(crate) fn outstanding(state: &State, command: &str) -> i64 {
+    let session = state.debug.as_ref().expect("a session");
+    *session
+        .asked
+        .iter()
+        .find(|(_, asked)| asked.command == command)
+        .unwrap_or_else(|| panic!("nothing is waiting on {command:?}"))
+        .0
 }
 
 /// `state` with a session Paused on thread 1 in `main` at line 1 of
@@ -763,16 +1157,7 @@ pub(crate) fn paused(mut state: State) -> State {
     );
     start(&mut state, "app");
     started(&mut state);
-    let asked = |state: &State, command: &str| {
-        let session = state.debug.as_ref().expect("a session");
-        *session
-            .asked
-            .iter()
-            .find(|(_, asked)| *asked == command)
-            .expect("asked")
-            .0
-    };
-    let seq = asked(&state, "initialize");
+    let seq = outstanding(&state, "initialize");
     received(
         &mut state,
         &json!({"type": "response", "request_seq": seq, "success": true, "command": "initialize"})
@@ -783,7 +1168,7 @@ pub(crate) fn paused(mut state: State) -> State {
         &mut state,
         r#"{"type":"event","event":"stopped","body":{"threadId":1,"reason":"breakpoint"}}"#,
     );
-    let seq = asked(&state, "stackTrace");
+    let seq = outstanding(&state, "stackTrace");
     received(
         &mut state,
         &json!({"type": "response", "request_seq": seq, "success": true, "command": "stackTrace",
@@ -1076,6 +1461,30 @@ mod tests {
         });
         assert_eq!(state.corner, layout::Corner::Frames);
         assert_eq!(resting_corner(&state), layout::Corner::Buffers);
+    }
+
+    /// A reference that holds itself is the adapter's word and the adapter is
+    /// untrusted input: opened, it would be walked forever. It is drawn once
+    /// and its second appearance is a closed row.
+    #[test]
+    fn a_reference_that_holds_itself_is_drawn_once() {
+        let mut state = paused(State::default());
+        let seq = outstanding(&state, "scopes");
+        received(
+            &mut state,
+            &json!({"type": "response", "request_seq": seq, "success": true, "command": "scopes",
+                "body": {"scopes": [{"name": "Locals", "variablesReference": 1}]}})
+            .to_string(),
+        );
+        let seq = outstanding(&state, "variables");
+        received(
+            &mut state,
+            &json!({"type": "response", "request_seq": seq, "success": true, "command": "variables",
+                "body": {"variables": [{"name": "itself", "variablesReference": 1}]}})
+            .to_string(),
+        );
+        let rows: Vec<String> = variables(&state).into_iter().map(|row| row.name).collect();
+        assert_eq!(rows, ["Locals", "itself"]);
     }
 
     #[test]

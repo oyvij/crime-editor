@@ -2375,11 +2375,7 @@ fn route_mouse(state: &State, edge: &mut Edge, input: mouse::Input, queue: &mut 
         state.ai_width.map(|width| width as u16),
         story::band_height(state),
         story::step_menu_width(state),
-        layout::Shapes {
-            ai: state.ai_pane,
-            corner: state.corner,
-            strip: state.strip_height.map(|height| height as u16),
-        },
+        varde::shapes(state),
     );
     let outcome = mouse::on_mouse(state, &panes, &mut edge.pointer, input);
     queue.extend(outcome.events);
@@ -2424,7 +2420,8 @@ fn grid_lines(edge: &Edge, pane: Pane, split: usize, upto: usize) -> Option<Vec<
         | Pane::Buffers
         | Pane::History
         | Pane::Breakpoints
-        | Pane::Frames => return None,
+        | Pane::Frames
+        | Pane::Variables => return None,
     };
     let (rows, columns) = screen.size();
     // Absolutely indexed from the grid's first row, because that is what the
@@ -2533,7 +2530,8 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
             | Pane::Buffers
             | Pane::History
             | Pane::Breakpoints
-            | Pane::Frames => {}
+            | Pane::Frames
+            | Pane::Variables => {}
         },
         other => return Some(other),
     }

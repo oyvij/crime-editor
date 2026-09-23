@@ -112,6 +112,11 @@ pub enum Pane {
     /// The Frames of a Paused Debug session, in the same corner: a row names a
     /// call to inspect.
     Frames,
+    /// The Variables of the chosen Frame, in the Strip's Debug group — the
+    /// one place a pane takes the Strip's rectangle from the shells. Its own
+    /// variant for the reason the corner's four are each their own: a click in
+    /// it names a member to open, which is nothing a shell's grid holds.
+    Variables,
 }
 
 /// One control in a Transport (`docs/adr/0022-every-action-has-a-chip.md`):
@@ -605,6 +610,11 @@ pub enum Event {
     ClickBreakpointRow(usize),
     /// A click on a row of the Frames, the same shape again.
     ClickFrameRow(usize),
+    /// A click on a row of the Variables, the same shape again.
+    ClickVariablesRow(usize),
+    /// A Group tab on the Strip's top border, clicked or reached by its chord:
+    /// the Strip shows that group and nothing stops running in the other.
+    ShowGroup(layout::Group),
     Scroll {
         pane: Pane,
         direction: Direction,
@@ -2004,6 +2014,11 @@ pub struct State {
     /// The same two for the Frames.
     pub frames_selection: usize,
     pub frames_scroll: usize,
+    /// And for the Variables, which is a list in the Strip rather than in the
+    /// corner but is one all the same — a row to open, and a first row on
+    /// screen.
+    pub variables_selection: usize,
+    pub variables_scroll: usize,
     /// What runs each language's Debug adapter, and the Launch
     /// configurations, as configuration named them — data for the reason
     /// `servers` is (ADR 0021).
@@ -2296,6 +2311,8 @@ impl Default for State {
             breakpoints_scroll: 0,
             frames_selection: 0,
             frames_scroll: 0,
+            variables_selection: 0,
+            variables_scroll: 0,
             adapters: BTreeMap::new(),
             launches: BTreeMap::new(),
             debug: None,
@@ -2487,6 +2504,18 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
             next.breakpoints_selection,
             breakpoint_rows,
             corner_rows(&next),
+        );
+        // The Variables against the Strip's rows rather than the corner's,
+        // being the one list of the lot that does not live in the corner.
+        let variable_rows = debug::variables(&next).len();
+        next.variables_selection = next
+            .variables_selection
+            .min(variable_rows.saturating_sub(1));
+        next.variables_scroll = layout::viewport(
+            next.variables_scroll,
+            next.variables_selection,
+            variable_rows,
+            strip_rows(&next),
         );
         // The results box, against the same `search::rows` the renderer draws.
         // The row above the selection first and the selection itself second:
@@ -3927,7 +3956,8 @@ fn on_submit_review(state: &State, mut next: State, event: Event, wheeled: bool)
             | Pane::Buffers
             | Pane::History
             | Pane::Breakpoints
-            | Pane::Frames => vec![],
+            | Pane::Frames
+            | Pane::Variables => vec![],
         },
         Event::ClickLink { row, column } => editor::link_at(&row, column)
             .map(Effect::OpenUrl)
@@ -4137,7 +4167,8 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                     | Pane::Buffers
                     | Pane::History
                     | Pane::Breakpoints
-                    | Pane::Frames => {
+                    | Pane::Frames
+                    | Pane::Variables => {
                         vec![]
                     }
                 };
@@ -4212,6 +4243,15 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                         state.breakpoints_scroll,
                         state.breakpoints.len(),
                         corner_rows(state),
+                    );
+                    vec![]
+                }
+                Pane::Variables => {
+                    next.variables_scroll = wheeled_to(
+                        direction,
+                        state.variables_scroll,
+                        debug::variables(state).len(),
+                        strip_rows(state),
                     );
                     vec![]
                 }
@@ -7626,9 +7666,14 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
             vec![]
         }
 
+        // The Shell group comes forward with it: a split asked for while the
+        // Debug group is up is a shell nobody would see, and the Debug group
+        // never grows a split of its own — the Program output is the
+        // program's terminal, not another one of the reader's.
         Event::SplitTerminal => {
             let from = state.split();
             next.focus = Pane::Terminal;
+            next.strip = layout::Group::Shells;
             next.terminal_split = from + 1;
             vec![Effect::SplitTerminal { from }]
         }
@@ -7706,6 +7751,16 @@ fn on_move_selection(state: &State, mut next: State, event: Event, wheeled: bool
             // Another row means the icon you had stepped into is gone — the
             // same rule the tree's and the Risk list's motions follow.
             next.selected_action = None;
+            vec![]
+        }
+
+        Event::MoveSelection(direction) if state.focus == Pane::Variables => {
+            let last = debug::variables(state).len().saturating_sub(1);
+            next.variables_selection = match direction {
+                Direction::Down => (state.variables_selection + 1).min(last),
+                Direction::Up => state.variables_selection.saturating_sub(1),
+                _ => state.variables_selection.min(last),
+            };
             vec![]
         }
 
@@ -7911,6 +7966,12 @@ fn on_activate_2(state: &State, mut next: State, event: Event, wheeled: bool) ->
             debug::choose(&mut next, state.frames_selection)
         }
 
+        // Enter opens or closes the row the keyboard is on: the one gesture
+        // that walks the tree, which the click below goes through.
+        Event::Activate if state.focus == Pane::Variables => {
+            debug::open(&mut next, state.variables_selection)
+        }
+
         // The file opened if it is not, and the cursor put on the
         // Breakpoint's line either way — the Risk list's Enter below, for a
         // line rather than a Function.
@@ -7973,6 +8034,30 @@ fn on_activate_2(state: &State, mut next: State, event: Event, wheeled: bool) ->
             next.focus = Pane::Frames;
             next.frames_selection = index;
             debug::choose(&mut next, index)
+        }
+
+        // Through the arm Enter takes, for the reason the corner's rows go
+        // through theirs: a click on a row is the same gesture, and a second
+        // mapping is a second place for it to drift. The focus is not given
+        // away afterwards, since opening a row leaves the keyboard in the
+        // tree it opened.
+        Event::ClickVariablesRow(index) => {
+            next.focus = Pane::Variables;
+            next.variables_selection = index;
+            debug::open(&mut next, index)
+        }
+
+        // The keyboard follows the Strip when it was already in it — the pane
+        // it was in is the one going off screen, and keys landing in a pane
+        // nobody can see is the failure focus exists to prevent. From
+        // anywhere else it stays where it was: showing a group is not asking
+        // to leave the file being read.
+        Event::ShowGroup(group) => {
+            next.strip = group;
+            if state.focus == state.strip.pane() {
+                next.focus = group.pane();
+            }
+            vec![]
         }
 
         Event::ClickBreakpointRow(index) => {
@@ -8061,7 +8146,8 @@ fn on_bytes(state: &State, next: State, event: Event, wheeled: bool) -> Answered
             | Pane::Buffers
             | Pane::History
             | Pane::Breakpoints
-            | Pane::Frames => vec![],
+            | Pane::Frames
+            | Pane::Variables => vec![],
         },
 
         other => return Err((next, other)),
@@ -8086,7 +8172,8 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 | Pane::Buffers
                 | Pane::History
                 | Pane::Breakpoints
-                | Pane::Frames => None,
+                | Pane::Frames
+                | Pane::Variables => None,
             };
             match asked {
                 Some(paste) => vec![Effect::SendKeys {
@@ -8737,16 +8824,46 @@ fn mouse_encoding(state: &State, pane: Pane) -> mouse::Encoding {
         | Pane::Buffers
         | Pane::History
         | Pane::Breakpoints
-        | Pane::Frames => mouse::Encoding::None,
+        | Pane::Frames
+        | Pane::Variables => mouse::Encoding::None,
     }
 }
 
 /// The Group tabs on the Strip's top border, in the order they are drawn, and
 /// whether each is lit — the one lit being the group the Strip shows.
+/// The Debug group only while a session exists, for the reason its chords are
+/// offered only then: a tab that shows an empty Strip is a tab that lies.
 pub fn group_tabs(state: &State) -> Vec<(layout::Group, bool)> {
     [layout::Group::Shells]
         .into_iter()
+        .chain(state.debug.as_ref().map(|_| layout::Group::Debug))
         .map(|group| (group, group == state.strip))
+        .collect()
+}
+
+/// What the panes take out of the shell, as `state` has it: the AI pane's
+/// shape, the corner's occupant, the Strip's group and its height. One answer
+/// for the five places that ask `layout::panes` where the panes are — the
+/// renderer, the mouse, the two clamps here and the World — because the four
+/// travel together and a fifth of them added to one caller and not the others
+/// is a pane drawn where nothing hit-tests it.
+pub fn shapes(state: &State) -> layout::Shapes {
+    layout::Shapes {
+        ai: state.ai_pane,
+        corner: state.corner,
+        group: state.strip,
+        strip: state.strip_height.map(|height| height as u16),
+    }
+}
+
+/// The Group tabs as they are drawn, padded a column each side: `ui` draws
+/// these and `mouse` hit-tests them through `layout::strip_at`, so the two
+/// cannot disagree about which columns a tab is in — the reason a Transport's
+/// Chip labels are built in one place too.
+pub fn group_labels(state: &State) -> Vec<String> {
+    group_tabs(state)
+        .iter()
+        .map(|(group, _)| format!(" {} ", group.label()))
         .collect()
 }
 
@@ -8762,12 +8879,15 @@ fn panes_of(state: &State) -> layout::Layout {
         state.ai_width.map(|width| width as u16),
         story::band_height(state),
         story::step_menu_width(state),
-        layout::Shapes {
-            ai: state.ai_pane,
-            corner: state.corner,
-            strip: state.strip_height.map(|height| height as u16),
-        },
+        shapes(state),
     )
+}
+
+/// How many rows a pane in the Strip shows: its two border rows and nothing
+/// else, for the reason [`corner_rows`] is the one answer for every occupant
+/// of the corner.
+pub fn strip_rows(state: &State) -> usize {
+    panes_of(state).terminal.height.saturating_sub(2) as usize
 }
 
 /// How many rows the pane in the corner shows. One answer for every occupant,
@@ -9049,11 +9169,7 @@ pub fn preview_columns(state: &State) -> usize {
         state.ai_width.map(|width| width as u16),
         story::band_height(state),
         story::step_menu_width(state),
-        layout::Shapes {
-            ai: state.ai_pane,
-            corner: state.corner,
-            strip: state.strip_height.map(|height| height as u16),
-        },
+        shapes(state),
     );
     // Borders only. A Preview has no gutter at all — `layout::gutter` is where
     // that is said once, for the renderer and the hit-test both.

@@ -236,12 +236,13 @@ pub const CHORDS: [(&str, &str, &[View]); 1] = [("␣b", "breakpoint", &[View::E
 /// The chords a Debug session answers, offered only while one exists for the
 /// reason [`DEBUG_KEYS`] are listed only while one does: with no session they
 /// do nothing, and a hint offering them would teach keys that are not there.
-pub const DEBUG_CHORDS: [(&str, &str, &[View]); 5] = [
+pub const DEBUG_CHORDS: [(&str, &str, &[View]); 6] = [
     ("␣n", "step over", &[View::Edit]),
     ("␣i", "step into", &[View::Edit]),
     ("␣o", "step out", &[View::Edit]),
     ("␣c", "continue / pause", &[View::Edit]),
     ("␣q", "stop debugging", &[View::Edit]),
+    ("␣s", "switch the Strip's group", &[View::Edit]),
 ];
 
 /// The keys a Debug session reserves, listed while one exists and absent while
@@ -449,6 +450,12 @@ pub fn chord(state: &State, key: char) -> Option<Event> {
             crate::current_buffer(state).map_or(0, |buffer| buffer.line),
         )),
         'q' => Some(Event::DebugStop),
+        // The Group tab from the keyboard: whichever group the Strip is not
+        // showing, since there are two and the gesture is "the other one".
+        's' if state.debug.is_some() => Some(Event::ShowGroup(match state.strip {
+            crate::layout::Group::Shells => crate::layout::Group::Debug,
+            crate::layout::Group::Debug => crate::layout::Group::Shells,
+        })),
         letter => stepping_letter(letter),
     }
 }
@@ -835,7 +842,8 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
             | Pane::Buffers
             | Pane::History
             | Pane::Breakpoints
-            | Pane::Frames => false,
+            | Pane::Frames
+            | Pane::Variables => false,
         }
 }
 
@@ -1473,7 +1481,12 @@ fn claims_colon(state: &State) -> bool {
         Pane::Tree => true,
         Pane::Editor => !crate::editor_inserting(state),
         // Varde's own panes, so the colon is Varde's.
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => true,
+        Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Variables => true,
         Pane::Ai | Pane::Terminal => false,
     }
 }
@@ -1504,9 +1517,12 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
         // rows have one action, so Right steps into the icon the mouse clicks.
         (Pane::History, false) => list_arrow(direction),
         (Pane::History, true) => vec![],
-        // The fourth, and its rows have one action too.
-        (Pane::Breakpoints | Pane::Frames, false) => list_arrow(direction),
-        (Pane::Breakpoints | Pane::Frames, true) => vec![],
+        // The fourth, and its rows have one action too. The Variables are a
+        // list as well, in the Strip rather than the corner: the arrows reach
+        // a tree the same way they reach a flat list, because what they move
+        // is the selection either way.
+        (Pane::Breakpoints | Pane::Frames | Pane::Variables, false) => list_arrow(direction),
+        (Pane::Breakpoints | Pane::Frames | Pane::Variables, true) => vec![],
         // A hosted pane's arrows went to its child; see below.
         (Pane::Ai | Pane::Terminal, _) => vec![],
     })
@@ -1533,9 +1549,12 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         // where they differ. The panes' routing lives here rather than at the
         // edge for the reason every other pane's does: what a key means is a
         // decision, and `main.rs` has no test.
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
-            list_pane_key(event)
-        }
+        Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Variables => list_pane_key(event),
         // A hosted pane never arrives here: with nothing of Varde's own
         // collecting, `child_owns_keys` sent the key to `to_child`, and with
         // something collecting one of the returns above took it. Every pane is

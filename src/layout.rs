@@ -215,9 +215,13 @@ impl Corner {
 /// Which group the Strip is showing. One slot naming its occupant, for the
 /// reason [`Corner`] is one: the Debug group joins it, and "both at once" must
 /// stay a state nobody can write down.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Group {
+    #[default]
     Shells,
+    /// The Variables, while a Debug session exists. Offered only then: a tab
+    /// for a group nothing can be in is a tab that shows an empty Strip.
+    Debug,
 }
 
 impl Group {
@@ -225,6 +229,17 @@ impl Group {
     pub fn label(self) -> &'static str {
         match self {
             Group::Shells => "Shells",
+            Group::Debug => "Debug",
+        }
+    }
+
+    /// Which pane the Strip is holding. One answer, read by the hit-test, by
+    /// the focus geometry and by the Group tabs, for the reason
+    /// [`Corner::pane`] is one.
+    pub fn pane(self) -> Pane {
+        match self {
+            Group::Shells => Pane::Terminal,
+            Group::Debug => Pane::Variables,
         }
     }
 }
@@ -254,6 +269,10 @@ pub fn strip_height(screen_height: u16, asked: u16) -> u16 {
 pub struct Shapes {
     pub ai: AiPane,
     pub corner: Corner,
+    /// Which group the Strip is showing, carried here for the reason
+    /// `corner` is: the rectangle is the same either way, and what is in it
+    /// is what a hit-test has to answer from the layout alone.
+    pub group: Group,
     /// `None` until the border above the Strip is dragged: a share of the
     /// screen until somebody names a height, as the AI pane's width is.
     pub strip: Option<u16>,
@@ -313,6 +332,9 @@ pub struct Layout {
     /// from the layout alone — the alternative is every hit-test taking the
     /// occupant as a second argument and one of them forgetting.
     pub occupant: Corner,
+    /// The same for the Strip, whose one rectangle is the shells or the Debug
+    /// group: `terminal` is where it is, and this is whose it is.
+    pub group: Group,
 }
 
 /// Tree, editor and AI across the top; terminal beneath. The terminal takes 30%
@@ -409,6 +431,7 @@ pub fn panes(
             height: terminal_height,
         },
         occupant: shapes.corner,
+        group: shapes.group,
         band: Area {
             x: tree_width + step_menu_width,
             y: editor_height,
@@ -504,7 +527,7 @@ pub fn pane_at(layout: &Layout, column: u16, row: u16) -> Option<Pane> {
     } else if layout.ai.holds(column, row) {
         Some(Pane::Ai)
     } else if layout.terminal.holds(column, row) {
-        Some(Pane::Terminal)
+        Some(layout.group.pane())
     } else {
         None
     }
@@ -614,7 +637,7 @@ mod frame_tests {
 mod tests {
     use super::{
         chip_labels, inset, pane_at, panes, strip_at, strip_height, strip_width, AiPane, Area,
-        Corner, Shapes, EDITOR_TITLE, STEP_MENU_WIDTH, STRIP_LEAST, TOP_LEAST,
+        Corner, Group, Shapes, EDITOR_TITLE, STEP_MENU_WIDTH, STRIP_LEAST, TOP_LEAST,
     };
 
     /// Nine columns, the Breakpoint column leftmost and the fold toggle right
@@ -972,6 +995,7 @@ mod tests {
             0,
             0,
             Shapes {
+                group: Group::Shells,
                 ai: AiPane::Tall,
                 corner: Corner::Risk,
                 strip: None,
@@ -999,6 +1023,7 @@ mod tests {
                 0,
                 0,
                 Shapes {
+                    group: Group::Shells,
                     ai,
                     corner: Corner::Risk,
                     strip: None,
@@ -1127,6 +1152,7 @@ mod tests {
                     ..Shapes::default()
                 }),
                 (Shapes {
+                    group: Group::Shells,
                     ai: AiPane::Tall,
                     corner: Corner::Risk,
                     strip: None,

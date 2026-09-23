@@ -309,6 +309,21 @@ struct FakeAdapter {
     /// The call stack each thread answers `stackTrace` with: name, file, line
     /// and presentation hint.
     stacks: BTreeMap<i64, Vec<(String, PathBuf, usize)>>,
+    /// The scopes the chosen Frame answers `scopes` with, by name, and the
+    /// reference each is asked for its members by.
+    scopes: Vec<(String, i64)>,
+    /// What each reference answers `variables` with. A scenario plants
+    /// members here; the adapter hands back whichever page was asked for.
+    members: BTreeMap<i64, Vec<Value>>,
+    /// How many requests had been sent when the last pause brought the
+    /// Variables up, which is what "since the pause" counts from.
+    since_pause: usize,
+    /// The `stopped` event that brought the last pause, kept so a scenario
+    /// that plants a member can drive the same pause again and have the
+    /// Variables hold it.
+    stopped: Option<Value>,
+    /// What the next `stopped` event says paused the program.
+    text: Option<String>,
 }
 
 impl VardeWorld {
@@ -499,11 +514,7 @@ impl VardeWorld {
             self.state.ai_width.map(|width| width as u16),
             story::band_height(&self.state),
             story::step_menu_width(&self.state),
-            layout::Shapes {
-                ai: self.state.ai_pane,
-                corner: self.state.corner,
-                strip: self.state.strip_height.map(|height| height as u16),
-            },
+            varde::shapes(&self.state),
         )
     }
 
@@ -568,6 +579,7 @@ impl VardeWorld {
             | Pane::History
             | Pane::Breakpoints
             | Pane::Frames
+            | Pane::Variables
             | Pane::Terminal => self.screen.clone(),
         }
     }
@@ -659,6 +671,37 @@ impl VardeWorld {
                 json!({ "stackFrames": frames })
             }
             Some("disconnect") => json!({}),
+            Some("scopes") => {
+                let scopes: Vec<Value> = self
+                    .dap
+                    .scopes
+                    .iter()
+                    .map(|(name, reference)| {
+                        json!({ "name": name, "variablesReference": reference })
+                    })
+                    .collect();
+                json!({ "scopes": scopes })
+            }
+            // The page asked for, or everything the reference holds when no
+            // page was named — which is what a real adapter does with a
+            // request carrying no `start`.
+            Some("variables") => {
+                let reference = message["arguments"]["variablesReference"]
+                    .as_i64()
+                    .unwrap_or_default();
+                let held = self
+                    .dap
+                    .members
+                    .get(&reference)
+                    .cloned()
+                    .unwrap_or_default();
+                let start = message["arguments"]["start"].as_u64().unwrap_or_default() as usize;
+                let count = message["arguments"]["count"]
+                    .as_u64()
+                    .map_or(held.len(), |count| count as usize);
+                let page: Vec<Value> = held.into_iter().skip(start).take(count).collect();
+                json!({ "variables": page })
+            }
             _ => return,
         };
         self.adapter_says(json!({
@@ -2100,7 +2143,7 @@ fn pointer_at(
         Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
             (panes.corner, 0, 0)
         }
-        Pane::Terminal => (panes.terminal, 0, 0),
+        Pane::Terminal | Pane::Variables => (panes.terminal, 0, 0),
     };
     (
         area.x + 1 + gutter + (column - 1) as u16,
@@ -4429,6 +4472,17 @@ fn terminal_busy(world: &mut VardeWorld, split: usize) {
     world.state.terminals[split - 1] = varde::Shell::Busy;
 }
 
+/// The same two as claims: what the Debug group hides, it does not stop.
+#[then(expr = "the terminal holds {int} shell(s)")]
+fn terminal_should_hold(world: &mut VardeWorld, shells: usize) {
+    assert_eq!(world.state.terminals.len(), shells);
+}
+
+#[then(expr = "terminal {int} is running a process")]
+fn terminal_should_be_busy(world: &mut VardeWorld, split: usize) {
+    assert_eq!(world.state.terminals[split - 1], varde::Shell::Busy);
+}
+
 #[when(expr = "terminal {int} prints its prompt")]
 fn terminal_spoke(world: &mut VardeWorld, split: usize) {
     world.send(Event::ShellSpoke(split - 1));
@@ -5246,7 +5300,7 @@ fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
         Pane::Tree => world.panes().tree,
         Pane::Editor => world.panes().editor,
         Pane::Ai => world.panes().ai,
-        Pane::Terminal => world.panes().terminal,
+        Pane::Terminal | Pane::Variables => world.panes().terminal,
         Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
             world.panes().corner
         }
@@ -8422,11 +8476,7 @@ fn editor_pane_is_columns_wide(world: &mut VardeWorld, columns: u16) {
                 world.state.ai_width.map(|width| width as u16),
                 0,
                 0,
-                layout::Shapes {
-                    ai: world.state.ai_pane,
-                    corner: world.state.corner,
-                    strip: world.state.strip_height.map(|height| height as u16),
-                },
+                varde::shapes(&world.state),
             )
             .editor
             .width
@@ -13942,10 +13992,16 @@ fn stopped_at(world: &mut VardeWorld, thread: i64, file: &str, line: usize, reas
         .stacks
         .entry(thread)
         .or_insert_with(|| vec![("main".to_string(), path, line)]);
-    adapter_event(
-        world,
-        json!({ "type": "event", "event": "stopped", "body": { "threadId": thread, "reason": reason } }),
-    );
+    let mut body = json!({ "threadId": thread, "reason": reason });
+    if let Some(text) = world.dap.text.clone() {
+        body["text"] = json!(text);
+    }
+    let stopped = json!({ "type": "event", "event": "stopped", "body": body });
+    world.dap.stopped = Some(stopped.clone());
+    adapter_event(world, stopped);
+    // What the pause itself asked for is the pause, so "since the pause"
+    // counts from after it has brought the Variables up.
+    world.dap.since_pause = world.dap.sent.len();
 }
 
 /// The requests the adapter was sent, by command, in order.
@@ -14003,6 +14059,7 @@ fn launch_palette_offers(world: &mut VardeWorld, name: String) {
 }
 
 #[given(expr = "a Debug session was started from the Launch configuration {string}")]
+#[when(expr = "a Debug session was started from the Launch configuration {string}")]
 fn session_was_started(world: &mut VardeWorld, name: String) {
     world.dap.ready = true;
     start_launch_from_palette(world, name);
@@ -14254,7 +14311,7 @@ fn stepping_mode_should_be_off(world: &mut VardeWorld) {
 #[then(expr = "the Debug session is {string}")]
 fn debug_session_is(world: &mut VardeWorld, phase: String) {
     let actual = match world.state.debug.as_ref().map(|session| &session.phase) {
-        Some(varde::debug::Phase::Running) => "running",
+        Some(varde::debug::Phase::Running(_)) => "running",
         Some(varde::debug::Phase::Paused(_)) => "paused",
         other => panic!("the session is {other:?}"),
     };
@@ -14344,6 +14401,385 @@ fn tools_list_is_shown(world: &mut VardeWorld) {
     }
     world.send(Event::FallbackBinding);
     route_key(world, &palette_key("Tools").to_string(), 0);
+}
+
+// ---- F45: the Strip's Debug group, and the Variables in it ----
+
+/// The reference the world's one scope answers its members by. A number of its
+/// own, so a scenario's own references cannot collide with it.
+const LOCALS: i64 = 1000;
+
+#[given(expr = "the Strip shows the {word} group")]
+fn strip_shows(world: &mut VardeWorld, group: String) {
+    world.state.strip = parse_group(&group);
+}
+
+#[then(expr = "the Strip shows the Debug group")]
+fn strip_should_show_debug(world: &mut VardeWorld) {
+    assert_eq!(world.state.strip, layout::Group::Debug);
+}
+
+fn parse_group(name: &str) -> layout::Group {
+    match name {
+        "Shell" => layout::Group::Shells,
+        "Debug" => layout::Group::Debug,
+        other => panic!("unknown group {other:?}"),
+    }
+}
+
+/// Whether a tab is drawn as the one showing — the same pairs `ui` draws from.
+fn tab_is_lit(world: &VardeWorld, label: &str) -> bool {
+    varde::group_tabs(&world.state)
+        .into_iter()
+        .find(|(group, _)| group.label() == label)
+        .unwrap_or_else(|| panic!("no Group tab {label:?}"))
+        .1
+}
+
+#[then(expr = "the Group tab {string} is lit")]
+fn group_tab_is_lit(world: &mut VardeWorld, label: String) {
+    assert!(tab_is_lit(world, &label));
+}
+
+#[then(expr = "the Group tab {string} is not lit")]
+fn group_tab_is_not_lit(world: &mut VardeWorld, label: String) {
+    assert!(!tab_is_lit(world, &label));
+}
+
+/// Through the hit-test, on the tab's own columns of the Strip's top border —
+/// the columns `layout::strip_at` names and `ui` draws into.
+#[when(expr = "I click the Group tab {string}")]
+fn click_group_tab(world: &mut VardeWorld, label: String) {
+    let strip = world.panes().terminal;
+    let labels = varde::group_labels(&world.state);
+    let index = varde::group_tabs(&world.state)
+        .iter()
+        .position(|(group, _)| group.label() == label)
+        .unwrap_or_else(|| panic!("no Group tab {label:?}"));
+    let column = (strip.x + strip.width - 1 - varde::layout::strip_width(&labels)
+        + labels[..index]
+            .iter()
+            .map(|label| label.chars().count() as u16 + 1)
+            .sum::<u16>())
+        + 1;
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, strip.y);
+    world.report(mouse::Kind::LeftUp, column, strip.y);
+}
+
+#[then(expr = "the Variables have focus")]
+fn variables_have_focus(world: &mut VardeWorld) {
+    assert_eq!(world.state.focus, Pane::Variables);
+}
+
+#[then(expr = "the Variables title says {string}")]
+fn variables_title_says(world: &mut VardeWorld, said: String) {
+    assert_eq!(varde::debug::title(&world.state), said);
+}
+
+/// What the last pause left on screen is drawn dimmed — one answer for both
+/// panes, because it is one fact about the session rather than two.
+#[then(expr = "the Variables are drawn dimmed")]
+#[then(expr = "the Frames are drawn dimmed")]
+fn debug_panes_are_dimmed(world: &mut VardeWorld) {
+    assert!(varde::debug::stale(&world.state));
+}
+
+fn variable_row(world: &VardeWorld, name: &str) -> varde::debug::Row {
+    varde::debug::variables(&world.state)
+        .into_iter()
+        .find(|row| row.name == name)
+        .unwrap_or_else(|| {
+            panic!(
+                "no Variables row {name:?}; rows are {:?}",
+                varde::debug::variables(&world.state)
+                    .iter()
+                    .map(|row| row.name.clone())
+                    .collect::<Vec<String>>()
+            )
+        })
+}
+
+/// The pause driven again, so the Variables hold what a scenario has just
+/// planted in the adapter: what they show is what the adapter answered at the
+/// pause, and a member planted after it was answered would be a member nobody
+/// asked for. What "since the pause" counts from is reset here for the same
+/// reason — the requests the pause itself makes are the pause, not something
+/// done in it.
+fn repause(world: &mut VardeWorld) {
+    let stop = world.dap.stopped.clone().expect("a pause");
+    adapter_event(world, stop);
+    world.dap.since_pause = world.dap.sent.len();
+}
+
+/// A member the adapter answers with, in the one scope the world gives a
+/// Frame that has none of its own.
+fn plant_member(world: &mut VardeWorld, member: Value) {
+    if world.dap.scopes.is_empty() {
+        world.dap.scopes.push(("Locals".to_string(), LOCALS));
+    }
+    world.dap.members.entry(LOCALS).or_default().push(member);
+    repause(world);
+}
+
+#[given(expr = "the Variables show {string}")]
+#[when(expr = "the Variables show {string}")]
+fn variables_show(world: &mut VardeWorld, name: String) {
+    plant_member(world, json!({ "name": name, "value": "3" }));
+}
+
+#[then(expr = "the Variables show {string}")]
+fn variables_should_show(world: &mut VardeWorld, name: String) {
+    variable_row(world, &name);
+}
+
+#[given(expr = "the Variables show {string} with reference {int}")]
+#[when(expr = "the Variables show {string} with reference {int}")]
+fn variables_show_reference(world: &mut VardeWorld, name: String, reference: i64) {
+    plant_member(
+        world,
+        json!({ "name": name, "value": "[…]", "variablesReference": reference }),
+    );
+}
+
+#[given(expr = "the Variables show {string} with reference {int} holding {int} indexed children")]
+fn variables_show_collection(
+    world: &mut VardeWorld,
+    name: String,
+    reference: i64,
+    children: usize,
+) {
+    world.dap.members.insert(
+        reference,
+        (0..children)
+            .map(|index| json!({ "name": format!("[{index}]"), "value": "0" }))
+            .collect(),
+    );
+    plant_member(
+        world,
+        json!({
+            "name": name,
+            "value": "[…]",
+            "variablesReference": reference,
+            "indexedVariables": children,
+        }),
+    );
+}
+
+#[given(expr = "the Variables show {string} with the presentation hint {string}")]
+#[when(expr = "the Variables show {string} with the presentation hint {string}")]
+fn variables_show_hint(world: &mut VardeWorld, name: String, hint: String) {
+    plant_member(world, hinted(&name, 0, &hint));
+}
+
+#[given(
+    expr = "the Variables show {string} with reference {int} and the presentation hint {string}"
+)]
+fn variables_show_reference_hint(
+    world: &mut VardeWorld,
+    name: String,
+    reference: i64,
+    hint: String,
+) {
+    plant_member(world, hinted(&name, reference, &hint));
+}
+
+/// One member carrying the adapter's hint in the field the protocol puts it
+/// in: visibility for who may see it, attributes for what may be done to it.
+fn hinted(name: &str, reference: i64, hint: &str) -> Value {
+    let presentation = match hint {
+        "private" => json!({ "visibility": "private" }),
+        attribute => json!({ "attributes": [attribute] }),
+    };
+    json!({
+        "name": name,
+        "value": "…",
+        "variablesReference": reference,
+        "presentationHint": presentation,
+    })
+}
+
+#[when(expr = "the Debug adapter answers {string} with the scopes:")]
+fn adapter_answers_scopes(world: &mut VardeWorld, command: String, step: &Step) {
+    assert_eq!(command, "scopes");
+    world.dap.scopes = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| (row[0].clone(), LOCALS + index as i64))
+        .collect();
+    repause(world);
+}
+
+#[then(expr = "the Variables' top rows are:")]
+fn variables_top_rows_are(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let tops: Vec<String> = varde::debug::variables(&world.state)
+        .into_iter()
+        .filter(|row| row.depth == 0)
+        .map(|row| row.name)
+        .collect();
+    assert_eq!(tops, expected);
+}
+
+#[then(expr = "the Variables row {string} is drawn as {string}")]
+fn variables_row_drawn_as(world: &mut VardeWorld, name: String, drawn: String) {
+    assert_eq!(variable_row(world, &name).hint.as_str(), drawn);
+}
+
+/// Through the hit-test, on the row's own line of the Strip — the gesture
+/// Enter is, which is why opening by mouse and by key are one arm.
+fn open_variables_row(world: &mut VardeWorld, index: usize) {
+    let strip = world.panes().terminal;
+    let row = strip.y + 1 + (index - world.state.variables_scroll) as u16;
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, strip.x + 2, row);
+    world.report(mouse::Kind::LeftUp, strip.x + 2, row);
+}
+
+#[given(expr = "I open the Variables row {string}")]
+#[when(expr = "I open the Variables row {string}")]
+fn open_row_named(world: &mut VardeWorld, name: String) {
+    let index = varde::debug::variables(&world.state)
+        .iter()
+        .position(|row| row.name == name)
+        .unwrap_or_else(|| panic!("no Variables row {name:?}"));
+    open_variables_row(world, index);
+}
+
+/// The row that stands for the rest of `name`'s children: the one whose next
+/// page is that member's reference.
+fn next_page_row(world: &VardeWorld, name: &str) -> Option<usize> {
+    let reference = match variable_row(world, name).opens {
+        varde::debug::Opens::Children { reference, .. } => reference,
+        other => panic!("the row {name:?} opens {other:?}"),
+    };
+    varde::debug::variables(&world.state).iter().position(|row| {
+        matches!(row.opens, varde::debug::Opens::NextPage { reference: next, .. } if next == reference)
+    })
+}
+
+#[then(expr = "the Variables show a row for the next page of {string}")]
+fn variables_show_next_page(world: &mut VardeWorld, name: String) {
+    assert!(
+        next_page_row(world, &name).is_some(),
+        "no next-page row for {name:?}"
+    );
+}
+
+/// By keyboard rather than by pointer: the row that stands for the rest of a
+/// ten thousand element collection is a hundred rows past the Strip's last
+/// line, and a row nothing has scrolled to is a row no pointer can reach. The
+/// arrows are what scroll it into view, and Enter is what every list in Varde
+/// opens a row with.
+#[when(expr = "I open the next page of {string}")]
+fn open_next_page(world: &mut VardeWorld, name: String) {
+    let index = next_page_row(world, &name).unwrap_or_else(|| panic!("no next page of {name:?}"));
+    world.state.focus = Pane::Variables;
+    while world.state.variables_selection < index {
+        world.send(Event::MoveSelection(Direction::Down));
+    }
+    world.send(Event::Activate);
+}
+
+/// The `variables` requests that named a reference, in order.
+fn for_reference<'a>(world: &'a VardeWorld, command: &str, reference: i64) -> Vec<&'a Value> {
+    dap_requests(world, command)
+        .into_iter()
+        .filter(|message| message["arguments"]["variablesReference"] == reference)
+        .collect()
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for reference {int}")]
+fn adapter_sent_for_reference(world: &mut VardeWorld, command: String, reference: i64) {
+    assert!(
+        !for_reference(world, &command, reference).is_empty(),
+        "{:?}",
+        world.dap.sent
+    );
+}
+
+#[then(expr = "the Debug adapter was sent no {string} request for reference {int}")]
+fn adapter_sent_none_for_reference(world: &mut VardeWorld, command: String, reference: i64) {
+    assert!(
+        for_reference(world, &command, reference).is_empty(),
+        "{:?}",
+        world.dap.sent
+    );
+}
+
+#[then(
+    expr = "the Debug adapter was sent a {string} request for reference {int} starting at {int} counting {int}"
+)]
+fn adapter_sent_page(
+    world: &mut VardeWorld,
+    command: String,
+    reference: i64,
+    start: u64,
+    count: u64,
+) {
+    let asked = for_reference(world, &command, reference);
+    assert!(
+        asked.iter().any(|message| {
+            message["arguments"]["start"] == start && message["arguments"]["count"] == count
+        }),
+        "{asked:?}"
+    );
+}
+
+#[then(expr = "the Debug adapter was sent exactly {int} {string} request(s) since the pause")]
+fn adapter_sent_exactly_since(world: &mut VardeWorld, count: usize, command: String) {
+    let sent: Vec<&Value> = world.dap.sent[world.dap.since_pause..]
+        .iter()
+        .filter(|message| message["type"] == "request" && message["command"] == command)
+        .collect();
+    assert_eq!(sent.len(), count, "{sent:?}");
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for the Frame {string}")]
+fn adapter_sent_for_frame(world: &mut VardeWorld, command: String, name: String) {
+    let frame = varde::debug::frames(&world.state)
+        .iter()
+        .find(|frame| frame.name == name)
+        .unwrap_or_else(|| panic!("no Frame {name:?}"));
+    assert_eq!(
+        last_request(world, &command)["arguments"]["frameId"],
+        frame.id
+    );
+}
+
+#[when(
+    expr = "the Debug adapter sends the {string} event for thread {int} at {string} line {int} with reason {string} and the text {string}"
+)]
+fn adapter_sends_stopped_with_text(
+    world: &mut VardeWorld,
+    event: String,
+    thread: i64,
+    file: String,
+    line: usize,
+    reason: String,
+    text: String,
+) {
+    assert_eq!(event, "stopped");
+    world.dap.text = Some(text);
+    stopped_at(world, thread, &file, line, &reason);
+}
+
+#[then(expr = "the first Variables row is the exception {string}")]
+fn first_variables_row_is_the_exception(world: &mut VardeWorld, text: String) {
+    let first = varde::debug::variables(&world.state)
+        .into_iter()
+        .next()
+        .expect("a row");
+    assert_eq!((first.name.as_str(), first.value), ("exception", text));
 }
 
 #[then(expr = "the Debug adapter row for {string} is {string}")]

@@ -131,11 +131,7 @@ pub fn areas(area: Rect, state: &State) -> Areas {
         state.ai_width.map(|width| width as u16),
         story::band_height(state),
         story::step_menu_width(state),
-        layout::Shapes {
-            ai: state.ai_pane,
-            corner: state.corner,
-            strip: state.strip_height.map(|height| height as u16),
-        },
+        varde::shapes(state),
     );
     Areas {
         tree: rect(panes.tree),
@@ -210,16 +206,26 @@ pub fn draw(
     minimap(frame, state, &areas, chrome.tokens);
     cheatsheet(frame, state, areas.editor);
     place_cursor(frame, state, &areas, typing.as_deref());
-    for (k, (shell, area)) in shells.iter().zip(&areas.splits).enumerate() {
-        let title = match shells.len() {
-            1 => "terminal".to_string(),
-            _ => format!("terminal {}", k + 1),
-        };
-        let focused = state.focus == Pane::Terminal && k == state.split();
-        frame.render_widget(
-            terminal_widget(shell, &title, focused, state, Pane::Terminal),
-            *area,
-        );
+    // One occupant at a time, exhaustively: the Strip is one rectangle, and a
+    // group drawn over the one beside it is two panes claiming the same rows.
+    match state.strip {
+        layout::Group::Shells => {
+            for (k, (shell, area)) in shells.iter().zip(&areas.splits).enumerate() {
+                let title = match shells.len() {
+                    1 => "terminal".to_string(),
+                    _ => format!("terminal {}", k + 1),
+                };
+                let focused = state.focus == Pane::Terminal && k == state.split();
+                frame.render_widget(
+                    terminal_widget(shell, &title, focused, state, Pane::Terminal),
+                    *area,
+                );
+            }
+        }
+        layout::Group::Debug => frame.render_widget(
+            variables_widget(state, areas.panes.terminal.width),
+            rect(areas.panes.terminal),
+        ),
     }
     group_tabs(frame, state, areas.panes.terminal);
     // Zero-width while the corner is empty, so there is nothing to draw and
@@ -247,8 +253,9 @@ pub fn draw(
         }
     }
     let caret_is_free = state.modal == Modal::None && typing.is_none();
-    if let (Pane::Terminal, true, Some((shell, area))) = (
+    if let (Pane::Terminal, layout::Group::Shells, true, Some((shell, area))) = (
         state.focus,
+        state.strip,
         caret_is_free,
         shells.iter().zip(&areas.splits).nth(state.split()),
     ) {
@@ -847,9 +854,22 @@ fn breakpoints_lines(state: &State, width: u16) -> Vec<Line<'static>> {
 
 /// One row per Frame of the Paused thread, the inspected one marked.
 fn frames_widget(state: &State, width: u16) -> Paragraph<'static> {
-    Paragraph::new(frames_lines(state, width))
+    let widget = Paragraph::new(frames_lines(state, width))
         .scroll((state.frames_scroll as u16, 0))
-        .block(pane_block("frames", state, Pane::Frames))
+        .block(pane_block("frames", state, Pane::Frames));
+    dimmed_while_running(state, widget)
+}
+
+/// What the last pause left on screen is drawn dimmed while the program runs,
+/// so nothing stale is mistaken for current. One answer for the two panes that
+/// show it, because it is one fact about the session rather than two about the
+/// panes — the scenarios assert that fact, and which panes read it is edge
+/// work, verified by running it.
+fn dimmed_while_running(state: &State, widget: Paragraph<'static>) -> Paragraph<'static> {
+    match varde::debug::stale(state) {
+        true => widget.style(Style::default().add_modifier(Modifier::DIM)),
+        false => widget,
+    }
 }
 
 /// Split out of `frames_widget` for the reason `risk_lines` is: a `Paragraph`
@@ -885,6 +905,55 @@ fn frames_lines(state: &State, width: u16) -> Vec<Line<'static>> {
             Line::from(vec![
                 Span::styled(format!(" {name:<room$}"), style),
                 Span::styled(place, style.fg(Color::DarkGray)),
+            ])
+        })
+        .collect()
+}
+
+/// The Variables of the chosen Frame, in the Strip's Debug group. Its title
+/// says which of the two it is drawing: this pause, or the last one.
+fn variables_widget(state: &State, width: u16) -> Paragraph<'static> {
+    let widget = Paragraph::new(variables_lines(state, width))
+        .scroll((state.variables_scroll as u16, 0))
+        .block(pane_block(
+            varde::debug::title(state),
+            state,
+            Pane::Variables,
+        ));
+    dimmed_while_running(state, widget)
+}
+
+/// Split out of `variables_widget` for the reason `frames_lines` is. One row
+/// per member the tree has open: its depth as indentation, whether it opens,
+/// its name, what the adapter's presentation hint says about it, and its
+/// value.
+fn variables_lines(state: &State, width: u16) -> Vec<Line<'static>> {
+    let inner = width.saturating_sub(2) as usize;
+    varde::debug::variables(state)
+        .into_iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let style = match index == state.variables_selection {
+                true => Style::default().add_modifier(Modifier::REVERSED),
+                false => Style::default(),
+            };
+            let marker = match (row.opens, row.open) {
+                (varde::debug::Opens::Nothing, _) => "  ",
+                (_, true) => "\u{25be} ",
+                (_, false) => "\u{25b8} ",
+            };
+            let hint = match row.hint {
+                varde::debug::Hint::Plain => String::new(),
+                hint => format!(" {}", hint.as_str()),
+            };
+            let name = format!(" {}{marker}{}{hint}", " ".repeat(row.depth * 2), row.name);
+            let room = inner.saturating_sub(name.width().min(inner));
+            Line::from(vec![
+                Span::styled(truncate(&name, inner), style),
+                Span::styled(
+                    format!(" {}", truncate(&row.value, room.saturating_sub(1))),
+                    style.fg(Color::DarkGray),
+                ),
             ])
         })
         .collect()
@@ -2503,10 +2572,7 @@ fn right_title(state: &State, room: usize, width: u16) -> Line<'static> {
 
 fn group_tabs(frame: &mut Frame, state: &State, strip: Area) {
     let tabs = varde::group_tabs(state);
-    let labels: Vec<String> = tabs
-        .iter()
-        .map(|(group, _)| format!(" {} ", group.label()))
-        .collect();
+    let labels = varde::group_labels(state);
     let width = layout::strip_width(&labels);
     let Some(mut x) = strip.right().saturating_sub(1).checked_sub(width) else {
         return;

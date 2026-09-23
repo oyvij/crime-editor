@@ -265,6 +265,15 @@ pub fn on_mouse(state: &State, panes: &Layout, pointer: &mut Pointer, input: Inp
     if let Some(direction) = wheel.filter(|_| on_hover(state, panes, input)) {
         return Outcome::of(vec![Event::ScrollHover(direction)]);
     }
+    // Ahead of the border handle below, which the Group tabs are drawn into
+    // the columns of: a handle that swallowed them would be tabs nobody could
+    // click. Ahead of the pane dispatch too, because the border row a tab sits
+    // on is neither a shell's grid nor a Variables row.
+    if input.kind == Kind::LeftDown && input.row == panes.terminal.y {
+        if let Some(group) = group_tab_at(state, panes, input.column) {
+            return Outcome::of(vec![Event::ShowGroup(group)]);
+        }
+    }
     if let Some(outcome) = divider_drag(panes, pointer, input) {
         return outcome;
     }
@@ -309,6 +318,19 @@ fn result_click(state: &State, search: &crate::Search, input: Input) -> Vec<Even
     }
 }
 
+/// Which Group tab is under a column of the Strip's top border, if any — the
+/// labels `ui` draws, hit-tested by the `layout::strip_at` every other strip
+/// of labels on a border is hit-tested by. Nothing at all off the Strip's own
+/// columns: the corner's top border is on the same row and carries its icons.
+fn group_tab_at(state: &State, panes: &Layout, column: u16) -> Option<crate::layout::Group> {
+    if !panes.terminal.holds(column, panes.terminal.y) {
+        return None;
+    }
+    let labels = crate::group_labels(state);
+    let index = crate::layout::strip_at(panes.terminal, &labels, column)?;
+    Some(crate::group_tabs(state)[index].0)
+}
+
 /// A pane's border is the handle. Checked before anything else, because those
 /// columns belong to a pane and would otherwise read as clicking a row. Only
 /// where the border is, though: the terminal spans every column underneath, so
@@ -327,7 +349,8 @@ fn divider_drag(panes: &Layout, pointer: &mut Pointer, input: Input) -> Option<O
     let beside_ai = input.row < panes.ai.bottom();
     // The Strip's own top border across the shell's columns, and nothing
     // else: the row above it is the editor's bottom border, where the buffer
-    // dots are, and the Corner's top border carries its icons.
+    // dots are, and the Corner's top border carries its icons. Its Group tabs
+    // have already been answered above.
     let above_strip =
         input.row == panes.terminal.y && panes.terminal.holds(input.column, input.row);
     match input.kind {
@@ -568,6 +591,18 @@ fn pressed(state: &State, panes: &Layout, pane: Pane, input: Input) -> Vec<Event
                 false => vec![Event::ClickPane(Pane::Frames)],
             }
         }
+        // A Variables row, through the Strip's rectangle and the Variables'
+        // own scroll offset — the Frames' hit-test, one pane over.
+        (Pane::Variables, _) => {
+            let index = list_row(panes.terminal, input.row, state.variables_scroll);
+            let on_a_row = input.row > panes.terminal.y
+                && input.row < panes.terminal.bottom().saturating_sub(1)
+                && index < crate::debug::variables(state).len();
+            match on_a_row {
+                true => vec![Event::ClickVariablesRow(index)],
+                false => vec![Event::ClickPane(Pane::Variables)],
+            }
+        }
         // Which of the strip's shells was pressed, so a click in a split is
         // the keyboard moving to it — the one gesture that tells them apart.
         (Pane::Terminal, _) => vec![Event::FocusSplit(crate::layout::split_at(
@@ -711,9 +746,12 @@ fn dragged(
         // to rather than text somebody picked: there is nothing in them to
         // copy, and nothing to copy is not the same as copying whatever the
         // pane behind them holds.
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
-            Outcome::default()
-        }
+        Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Variables => Outcome::default(),
         Pane::Editor => {
             // A drag that began in the mirror stays a travel however far the
             // pointer wanders, and a selection that wanders into the mirror
@@ -980,7 +1018,8 @@ fn place_in(state: &State, panes: &Layout, pane: Pane, (column, row): (u16, u16)
         | Pane::Buffers
         | Pane::History
         | Pane::Breakpoints
-        | Pane::Frames => (0, 0),
+        | Pane::Frames
+        | Pane::Variables => (0, 0),
     };
     Place {
         // Through `line_at_row`, not straight off the row: Story view draws
@@ -1039,6 +1078,9 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
         Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
             interior(panes.corner)
         }
+        // The Strip's own rectangle, which the Debug group has instead of the
+        // shells: the same rectangle, a different pane in it.
+        Pane::Variables => interior(panes.terminal),
     }
 }
 
