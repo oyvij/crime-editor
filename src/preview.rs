@@ -161,6 +161,9 @@ pub enum Refusal {
     DebugAdapterExited,
     /// The adapter said no to starting the program, in its own words.
     LaunchFailed(String),
+    /// Restart with nothing to rerun: no Launch configuration has been
+    /// started this session, so there is no last one.
+    NoLastSession,
 }
 
 impl Refusal {
@@ -178,6 +181,7 @@ impl Refusal {
             Refusal::DebugAdapterFailed => "debug-adapter-failed",
             Refusal::DebugAdapterExited => "debug-adapter-exited",
             Refusal::LaunchFailed(_) => "launch-failed",
+            Refusal::NoLastSession => "no-last-session",
         }
     }
 }

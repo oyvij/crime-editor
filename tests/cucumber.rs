@@ -15052,3 +15052,201 @@ fn nothing_reached_the_output(world: &mut VardeWorld) {
         world.keys_sent
     );
 }
+
+// ---- #56: the debug Transport ----
+
+/// The spawn `debug::start` asked the edge for, named by the command the
+/// adapter row gives — which is what a scenario means by "asked for": whether
+/// a process exists is the edge's to say.
+#[then(expr = "the Debug adapter for {string} is asked for")]
+fn adapter_is_asked_for(world: &mut VardeWorld, language: String) {
+    let command = world
+        .state
+        .adapters
+        .get(&language)
+        .unwrap_or_else(|| panic!("no adapter configured for {language:?}"))
+        .command
+        .clone();
+    assert!(
+        world.dap.spawned.contains(&command),
+        "spawned: {:?}",
+        world.dap.spawned
+    );
+}
+
+#[then("no Debug adapter is asked for")]
+fn no_adapter_is_asked_for(world: &mut VardeWorld) {
+    assert_eq!(world.dap.spawned, Vec::<String>::new());
+}
+
+/// The program ended, which is the state restart is reached for from.
+#[given("the Debug session has ended")]
+#[when("the Debug session has ended")]
+fn session_has_ended(world: &mut VardeWorld) {
+    adapter_sends_event(world, "terminated".to_string());
+    assert!(world.state.debug.is_none(), "the session is still going");
+    world.dap.spawned.clear();
+}
+
+/// What the named Launch configuration carries, as configuration gave it —
+/// so a restart that reran a different one, or reached the adapter with
+/// arguments of its own, fails here.
+#[then(expr = "the Debug adapter's launch arguments are those of {string}")]
+fn launch_arguments_are_those_of(world: &mut VardeWorld, name: String) {
+    let expected = world
+        .state
+        .launches
+        .get(&name)
+        .unwrap_or_else(|| panic!("no Launch configuration {name:?}"))
+        .args
+        .clone();
+    assert_eq!(
+        last_request(world, "launch")["arguments"],
+        Value::Object(expected)
+    );
+}
+
+/// The Variables' Transport, by the names that say what pressing each Chip
+/// does — never the glyphs or the colours, which are `ui`'s.
+#[then("the Transport's Chips are:")]
+fn transport_chips_are(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("a table of Chips")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let drawn: Vec<&str> = varde::debug::strip_transport(&world.state)
+        .iter()
+        .map(|chip| chip.name)
+        .collect();
+    assert_eq!(drawn, expected);
+}
+
+#[then(expr = "the Transport's first Chip is {string}")]
+fn transport_first_chip_is(world: &mut VardeWorld, name: String) {
+    let chips = varde::debug::strip_transport(&world.state);
+    assert_eq!(chips.first().expect("a Chip").name, name);
+}
+
+/// Every key the Chip teaches, in the spelling the cheatsheet uses: a Chip
+/// that named one of its two routes would say the other is not there.
+#[then(expr = "the {string} Chip names the keys:")]
+fn chip_names_the_keys(world: &mut VardeWorld, name: String, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("a table of keys")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let named: Vec<String> = chip(world, &name)
+        .keys
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(named, expected);
+}
+
+/// The Chip that says what pressing it does, found by that name.
+fn chip(world: &VardeWorld, name: &str) -> varde::Chip {
+    varde::debug::strip_transport(&world.state)
+        .into_iter()
+        .find(|offered| offered.name == name)
+        .unwrap_or_else(|| panic!("no {name:?} Chip"))
+}
+
+#[then(expr = "the {string} Chip is dimmed")]
+fn chip_is_dimmed(world: &mut VardeWorld, name: String) {
+    assert_eq!(chip(world, &name).tone, varde::Tone::Dimmed);
+}
+
+#[then(expr = "the {string} Chip is not dimmed")]
+fn chip_is_not_dimmed(world: &mut VardeWorld, name: String) {
+    assert_ne!(chip(world, &name).tone, varde::Tone::Dimmed);
+}
+
+#[then(expr = "the {string} Chip is lit")]
+fn chip_is_lit(world: &mut VardeWorld, name: String) {
+    assert_eq!(chip(world, &name).tone, varde::Tone::Lit);
+}
+
+#[then(expr = "the {string} Chip is not lit")]
+fn chip_is_not_lit(world: &mut VardeWorld, name: String) {
+    assert_ne!(chip(world, &name).tone, varde::Tone::Lit);
+}
+
+/// Time passing is the ticks that would have arrived — the one event nobody
+/// pressed, on `main`'s own 80ms cadence. Nothing else can pass here, which
+/// is the assertion: a lit Chip that faded would need a timer, and ADR 0009
+/// allows a Tick only while work is in flight.
+#[when(expr = "{int} seconds pass")]
+fn seconds_pass(world: &mut VardeWorld, seconds: u64) {
+    for _ in 0..(seconds * 1_000 / 80) {
+        world.send(Event::Tick);
+    }
+}
+
+/// The Transport is drawn across the Strip's top border, so the Variables'
+/// width is the room its Chips have. Driven by the screen rather than set: the
+/// panes are the layout's to decide, and a width written into `State` would be
+/// a width nothing draws.
+#[when(expr = "the Variables are {int} columns wide")]
+fn variables_are_wide(world: &mut VardeWorld, columns: u16) {
+    let (width, height) = world.screen();
+    let wanted = width + columns - world.panes().terminal.width;
+    world.send(Event::Resized {
+        width: wanted,
+        height,
+    });
+    assert_eq!(world.panes().terminal.width, columns);
+}
+
+/// The labels `ui` draws and `mouse` hit-tests, at the width the Transport
+/// really has.
+fn transport_labels(world: &VardeWorld) -> Vec<String> {
+    let chips = varde::debug::strip_transport(&world.state);
+    let area = varde::transport_area(&world.state, world.panes().strip());
+    layout::chip_labels(&chips, area.width, layout::CORNER_TITLE)
+}
+
+/// Each label pinned exactly, never "contains its keys": a Chip that names no
+/// key yet would pass a containment test whichever shape it was drawn in, and
+/// a `Then` that cannot fail is worse than no `Then`.
+#[then("every Chip shows its keys")]
+fn every_chip_shows_its_keys(world: &mut VardeWorld) {
+    let chips = varde::debug::strip_transport(&world.state);
+    for (chip, label) in chips.iter().zip(transport_labels(world)) {
+        assert_eq!(
+            label,
+            format!(" {} {} ", chip.glyph, chip.keys),
+            "{:?}",
+            chip.name
+        );
+    }
+}
+
+#[then("no Chip shows its keys")]
+fn no_chip_shows_its_keys(world: &mut VardeWorld) {
+    let chips = varde::debug::strip_transport(&world.state);
+    for (chip, label) in chips.iter().zip(transport_labels(world)) {
+        assert_eq!(label, format!(" {} ", chip.glyph), "{:?}", chip.name);
+    }
+}
+
+/// None dropped, none cut and none wrapped: every Chip still has a label, and
+/// each one holds that Chip's whole glyph and nothing of another's.
+#[then("every Chip is drawn whole")]
+fn every_chip_is_drawn_whole(world: &mut VardeWorld) {
+    let chips = varde::debug::strip_transport(&world.state);
+    let labels = transport_labels(world);
+    assert_eq!(labels.len(), chips.len());
+    for (chip, label) in chips.iter().zip(&labels) {
+        assert!(
+            label.starts_with(&format!(" {} ", chip.glyph)),
+            "{:?} is drawn {label:?}",
+            chip.name
+        );
+    }
+}

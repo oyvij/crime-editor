@@ -70,6 +70,14 @@ pub fn selected(state: &crate::State) -> Option<&Breakpoint> {
 pub const REMOVE: &str = "remove-breakpoint";
 pub const TOGGLE_OUTPUT: &str = "toggle-output";
 pub const CLEAR_ALL: &str = "clear-all-breakpoints";
+pub const RESUME: &str = "debug-resume";
+pub const STEP_OVER: &str = "debug-step-over";
+pub const STEP_INTO: &str = "debug-step-into";
+pub const STEP_OUT: &str = "debug-step-out";
+pub const STOP: &str = "debug-stop";
+pub const RESTART: &str = "debug-restart";
+pub const ASK_AI: &str = "debug-ask-ai";
+pub const NEXT_THREAD: &str = "debug-next-thread";
 
 /// What the focused row offers: removing the Breakpoint it names.
 pub fn row_actions(state: &crate::State) -> Vec<&'static str> {
@@ -96,32 +104,143 @@ pub fn transport(state: &crate::State) -> Vec<crate::Chip> {
     }]
 }
 
-/// The Chips on the Variables' top border. One so far: hiding the Program
-/// output and showing it again are one control, so they are one Chip, named
-/// for what pressing it does — the Reading Transport's play and pause, one
-/// pane over. None at all with no program running, for the reason the `Debug`
-/// Group tab is offered only while a session exists.
+/// The Chips on the Variables' top border: every debug action, then the
+/// Program output's. One control per action and never two — continue and
+/// pause are one Chip named for what pressing it does, the way the Reading's
+/// play is and for the same reason.
+///
+/// The Debug group's border carries the whole set while a session exists,
+/// since that is when their keys are reserved. With the Shell group up — which
+/// is where a session that ended leaves the Strip — one Chip is left: restart,
+/// while there is a configuration to rerun. A control reachable only while
+/// the thing it restarts is running is a control nobody can press, and the
+/// keyboard's own `C-F5` has the same reach.
+///
+/// What the Transport holds, never where it is drawn: `crate::showing_transport`
+/// is that, and `ui` and `mouse` read the one answer.
+///
+/// Glyphs are geometric and one cell wide in every font (ADR 0022): no emoji,
+/// whose width terminals disagree about, and every column to the right of a
+/// two-cell glyph is a click landing where nobody pointed.
 pub fn strip_transport(state: &crate::State) -> Vec<crate::Chip> {
-    if !state.output_running {
-        return Vec::new();
+    use crate::{Chip, Hue, Tone};
+    let chip = |action, name, glyph: &str, keys, hue, dimmed| Chip {
+        action,
+        name,
+        glyph: glyph.to_string(),
+        keys,
+        hue,
+        // Lit ahead of dimmed: a step taken leaves the program running, so the
+        // Chip that was just pressed is dimmed the instant it acts and would
+        // otherwise never be seen lit at all.
+        tone: match (state.transport_lit == Some(action), dimmed) {
+            (true, _) => Tone::Lit,
+            (false, true) => Tone::Dimmed,
+            (false, false) => Tone::Plain,
+        },
+    };
+    let restart = |dimmed| {
+        chip(
+            RESTART,
+            "restart",
+            "\u{21bb}",
+            "C-F5 \u{2423}r",
+            Hue::Go,
+            dimmed,
+        )
+    };
+    let mut chips = Vec::new();
+    if let Some(session) = state.debug.as_ref() {
+        let running = matches!(session.phase, Phase::Running(_));
+        let stepping = !matches!(session.phase, Phase::Paused(_));
+        // Nothing to continue or pause until the program is one of the two:
+        // a session still spawning or already stopping answers neither.
+        let between = !matches!(session.phase, Phase::Paused(_) | Phase::Running(_));
+        chips.extend([
+            match running {
+                true => chip(
+                    RESUME,
+                    "pause",
+                    "\u{2016}",
+                    "F9 \u{2423}c",
+                    Hue::Hold,
+                    between,
+                ),
+                false => chip(
+                    RESUME,
+                    "continue",
+                    "\u{25ba}",
+                    "F9 \u{2423}c",
+                    Hue::Go,
+                    between,
+                ),
+            },
+            // Stepping is only ever asked of a stopped thread: an adapter sent
+            // a step while the program runs answers with an error, so the
+            // Chips say so rather than the reader finding out from the footer.
+            chip(
+                STEP_OVER,
+                "step-over",
+                "\u{293c}",
+                "F8 \u{2423}n",
+                Hue::Step,
+                stepping,
+            ),
+            chip(
+                STEP_INTO,
+                "step-into",
+                "\u{2913}",
+                "F7 \u{2423}i",
+                Hue::Step,
+                stepping,
+            ),
+            chip(
+                STEP_OUT,
+                "step-out",
+                "\u{2912}",
+                "S-F8 \u{2423}o",
+                Hue::Step,
+                stepping,
+            ),
+            chip(STOP, "stop", "\u{25a0}", "C-F2 \u{2423}q", Hue::Halt, false),
+            // Dimmed while a session exists: restarting a live one is stop
+            // and start again, which nothing specifies yet, so today it would
+            // refuse with `debug-session-running` — and a Chip that refuses is
+            // a Chip that lies. What it is for is the session that ended,
+            // below.
+            restart(true),
+            // The last two name no key and do nothing yet: `\u{2423}a` is issue
+            // #70's to bind and the thread to jump to is #65's to count, and a
+            // Chip teaching a key nobody bound is the cheatsheet contract
+            // broken from the other end. Dimmed until then, because a dimmed
+            // Chip does nothing and that is exactly what these do.
+            chip(ASK_AI, "ask-ai", "\u{2736}", "", Hue::Plain, true),
+            chip(NEXT_THREAD, "next-thread", "\u{21c9}", "", Hue::Plain, true),
+        ]);
     }
-    vec![crate::Chip {
-        action: TOGGLE_OUTPUT,
-        name: match state.output_hidden {
-            true => "show-output",
-            false => "hide-output",
-        },
-        glyph: match state.output_hidden {
-            true => "\u{25a3}".to_string(),
-            false => "\u{25a2}".to_string(),
-        },
-        keys: "\u{2423}h",
-        hue: crate::Hue::Plain,
-        tone: match state.output_unseen {
-            true => crate::Tone::Marked,
-            false => crate::Tone::Plain,
-        },
-    }]
+    if state.debug.is_none() && state.last_launch.is_some() {
+        chips.push(restart(false));
+    }
+    if state.output_running {
+        chips.push(Chip {
+            action: TOGGLE_OUTPUT,
+            name: match state.output_hidden {
+                true => "show-output",
+                false => "hide-output",
+            },
+            glyph: match state.output_hidden {
+                true => "\u{25a3}".to_string(),
+                false => "\u{25a2}".to_string(),
+            },
+            keys: "\u{2423}h",
+            hue: Hue::Plain,
+            tone: match state.output_unseen {
+                true => Tone::Marked,
+                false => Tone::Plain,
+            },
+        });
+    }
+    chips
 }
 
 /// What 1-based `line` of `text` holds, trimmed — the text a Breakpoint is
@@ -432,6 +551,9 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
         command: adapter.command.clone(),
         args: adapter.args.clone(),
     };
+    // Remembered before the session exists and kept after it ends: what
+    // restart reruns is the configuration, not the session.
+    next.last_launch = Some(name.to_string());
     next.debug = Some(Session {
         adapter: launch.adapter.clone(),
         command: adapter.command.clone(),
@@ -812,7 +934,7 @@ pub fn resume(next: &mut State) -> Vec<Effect> {
     let Some(session) = next.debug.as_mut() else {
         return Vec::new();
     };
-    match &session.phase {
+    let effects = match &session.phase {
         Phase::Paused(pause) => {
             let (thread, last) = (pause.thread, pause.clone());
             session.phase = Phase::Running(Some(last));
@@ -825,6 +947,17 @@ pub fn resume(next: &mut State) -> Vec<Effect> {
             vec![ask(session, "threads", json!({}))]
         }
         _ => Vec::new(),
+    };
+    lit(next, RESUME, &effects);
+    effects
+}
+
+/// The Chip the action just taken belongs to, lit until another is taken —
+/// but only where it acted: a Chip lit for a request that never went out says
+/// something happened.
+fn lit(next: &mut State, action: &'static str, effects: &[Effect]) {
+    if !effects.is_empty() {
+        next.transport_lit = Some(action);
     }
 }
 
@@ -849,7 +982,17 @@ pub fn step(next: &mut State, step: Step) -> Vec<Effect> {
         Step::Out => "stepOut",
     };
     session.phase = Phase::Running(Some(last));
-    vec![ask(session, request, json!({ "threadId": thread }))]
+    let effects = vec![ask(session, request, json!({ "threadId": thread }))];
+    lit(
+        next,
+        match step {
+            Step::Over => STEP_OVER,
+            Step::Into => STEP_INTO,
+            Step::Out => STEP_OUT,
+        },
+        &effects,
+    );
+    effects
 }
 
 /// Ctrl+F2: a launched program is terminated and an attached one left
@@ -858,7 +1001,7 @@ pub fn stop(next: &mut State) -> Vec<Effect> {
     let Some(session) = next.debug.as_mut() else {
         return Vec::new();
     };
-    match session.phase {
+    let effects = match session.phase {
         Phase::Stopping | Phase::Spawning => {
             end(next);
             vec![Effect::StopDap]
@@ -872,7 +1015,22 @@ pub fn stop(next: &mut State) -> Vec<Effect> {
                 json!({ "terminateDebuggee": terminate }),
             )]
         }
-    }
+    };
+    lit(next, STOP, &effects);
+    effects
+}
+
+/// Ctrl+F5, the `r` chord and the restart Chip: the last Launch configuration
+/// started again. Refused by name with none — a key that quietly did nothing
+/// would read as a key that failed.
+pub fn restart(next: &mut State) -> Vec<Effect> {
+    let Some(name) = next.last_launch.clone() else {
+        next.refusal = Some(Refusal::NoLastSession);
+        return Vec::new();
+    };
+    let effects = start(next, &name);
+    lit(next, RESTART, &effects);
+    effects
 }
 
 /// The Frame at `index` of the Frames becomes the inspected one, and the

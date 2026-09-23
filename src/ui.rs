@@ -2520,6 +2520,9 @@ fn refusal_spans(state: &State) -> Vec<Span<'static>> {
         }
         varde::preview::Refusal::DebugAdapterExited => " the debug adapter stopped ".to_string(),
         varde::preview::Refusal::LaunchFailed(why) => format!(" could not start: {why} "),
+        varde::preview::Refusal::NoLastSession => {
+            " nothing to restart — start a launch configuration first ".to_string()
+        }
     };
     vec![Span::styled(wording, Style::default().fg(WARNING))]
 }
@@ -2600,7 +2603,7 @@ fn right_title(state: &State, room: usize, width: u16) -> Line<'static> {
 /// flush to the right would sit under them.
 fn strip_chips(frame: &mut Frame, state: &State, strip: Area) {
     let chips = varde::debug::strip_transport(state);
-    if chips.is_empty() || state.strip != layout::Group::Debug {
+    if chips.is_empty() || !varde::showing_transport(state) {
         return;
     }
     let area = varde::transport_area(state, strip);

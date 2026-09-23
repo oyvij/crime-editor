@@ -72,7 +72,7 @@ pub struct Drafts {
 /// surface does not. It lives
 /// here rather than in the renderer so a test can hold it to the bindings
 /// above; `ui` only draws it, filtered to the view on screen.
-pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
+pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
     ("i a o O x", "edit", &[View::Edit]),
     ("w b e", "word", &[View::Edit]),
     ("gg G", "file ends", &[View::Edit]),
@@ -194,6 +194,11 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
     ),
     (":dim", "darker editor", &[View::Edit]),
     (":minimap", "mirror of the file", &[View::Edit]),
+    // The key alone where the chord cannot follow: a Space chord needs Edit
+    // view's buffer, so the read-only surfaces get a row naming only the
+    // spelling that works there — split by view for the reason
+    // `C-p C-n gp gn` is, and the chord's own row is in [`CHORDS`].
+    ("C-F5", "restart debugging", &[View::Review, View::Story]),
     // Said again where the reader is already looking, which is what puts them
     // here rather than above the fold: the palette draws `(f) Find`, and the
     // `buffer-diverged` and `unsaved-changes` notices name `D`, `:w`, `:e` and
@@ -228,10 +233,20 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
 /// What a tapped Space can be followed by whatever else is going on — the
 /// chords that need no Debug session. With [`DEBUG_CHORDS`] it is the one list
 /// both the Chord hint and the cheatsheet draw, so the two cannot disagree:
-/// each row is spelled as the chord, and the hint reads its key off the
-/// spelling's second character. Space is shared — other features may claim
-/// other letters later.
-pub const CHORDS: [(&str, &str, &[View]); 1] = [("␣b", "breakpoint", &[View::Edit])];
+/// every row spells its chord, and the hint reads the key off that spelling —
+/// beside which a row may name the other ways to the same thing. Space is
+/// shared — other features may claim other letters later.
+pub const CHORDS: [(&str, &str, &[View]); 2] = [
+    ("␣b", "breakpoint", &[View::Edit]),
+    // Here rather than in [`DEBUG_CHORDS`] because it is the one debug chord
+    // that answers with no session: rerunning the last one is what it is for.
+    // Both spellings on one row, the way `C-p C-n gp gn` carries two: the key
+    // and the chord are one gesture, and a row apiece would say "restart"
+    // twice in a box that truncates from the bottom. [`chord_rows`] reads the
+    // hint's letter off the token spelled with the Space glyph, so a row may
+    // name the other ways to the same thing.
+    ("C-F5 ␣r", "restart debugging", &[View::Edit]),
+];
 
 /// The chords a Debug session answers, offered only while one exists for the
 /// reason [`DEBUG_KEYS`] are listed only while one does: with no session they
@@ -292,7 +307,13 @@ pub fn cheatsheet(
 pub fn chord_rows(state: &State) -> Vec<(Option<char>, String)> {
     let mut rows: Vec<(Option<char>, String)> = chords(state)
         .filter_map(|(keys, what, _)| {
-            let key = keys.chars().nth(1)?;
+            // The token spelled with the Space glyph, since a row may name the
+            // key that does the same thing beside its chord.
+            let key = keys
+                .split_whitespace()
+                .find_map(|token| token.strip_prefix('\u{2423}'))?
+                .chars()
+                .next()?;
             Some((Some(key), format!("   ({key}) {what}")))
         })
         .collect();
@@ -451,6 +472,7 @@ pub fn chord(state: &State, key: char) -> Option<Event> {
             crate::current_buffer(state).map_or(0, |buffer| buffer.line),
         )),
         'q' => Some(Event::DebugStop),
+        'r' => Some(Event::DebugRestart),
         // The Group tab from the keyboard: whichever group the Strip is not
         // showing, since there are two and the gesture is "the other one".
         // Hiding the Program output and showing it again are one gesture, so
@@ -543,6 +565,12 @@ fn claimed_everywhere(state: &State, event: KeyEvent) -> Option<Vec<Event>> {
         match event.code {
             KeyCode::Char('q') => return Some(vec![Event::Quit]),
             KeyCode::Char('f') => return Some(vec![Event::OpenSearch]),
+            // The one debug key that answers with no session — rerunning the
+            // last one is what it is for. So it is claimed here rather than
+            // beside the reserved F-keys above, and a hosted pane's child
+            // keeps it whether or not a session exists, and every view
+            // answers it the way `C-q` and `C-f` above are answered anywhere.
+            KeyCode::F(5) => return Some(vec![Event::DebugRestart]),
             _ => {}
         }
     }

@@ -343,7 +343,7 @@ fn group_tab_at(state: &State, panes: &Layout, column: u16) -> Option<crate::lay
 /// `crate::transport_area`, for the reason the Group tabs above read one
 /// `strip_at`.
 fn strip_chip_at(state: &State, panes: &Layout, column: u16) -> Option<&'static str> {
-    if state.strip != crate::layout::Group::Debug {
+    if !crate::showing_transport(state) {
         return None;
     }
     let chips = crate::debug::strip_transport(state);

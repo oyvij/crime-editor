@@ -1059,6 +1059,9 @@ pub enum Event {
     DebugStep(debug::Step),
     /// Ctrl+F2: stop the Debug session.
     DebugStop,
+    /// Ctrl+F5 and the `r` chord: the last Launch configuration started
+    /// again. Answered with no session, which is the point of it.
+    DebugRestart,
     /// A key Stepping mode does not claim, so the mode ends here and the key
     /// does what it always does — the events queued behind this one. Its own
     /// event because only the router knows a key was not one of the mode's,
@@ -2071,6 +2074,10 @@ pub struct State {
     /// `servers` is (ADR 0021).
     pub adapters: BTreeMap<String, startup::Adapter>,
     pub launches: BTreeMap<String, startup::Launch>,
+    /// The Launch configuration the last session was started from, which
+    /// restart reruns. Outlives the session on purpose: rerunning is what the
+    /// reader reaches for once a program has ended.
+    pub last_launch: Option<String>,
     /// The Debug session, if one exists.
     pub debug: Option<debug::Session>,
     /// Stepping mode: a Space chord has just run, so the stepping letters act
@@ -2362,6 +2369,7 @@ impl Default for State {
             variables_scroll: 0,
             adapters: BTreeMap::new(),
             launches: BTreeMap::new(),
+            last_launch: None,
             debug: None,
             stepping: false,
             output_running: false,
@@ -6257,7 +6265,7 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
 }
 
 /// DapReceived, DapStarted, DapGone, StartLaunch, MoveLaunchRow, DebugResume,
-/// DebugStep, DebugStop, LeaveStepping
+/// DebugStep, DebugStop, DebugRestart, LeaveStepping
 fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::DapReceived { json } => debug::received(&mut next, &json),
@@ -6278,6 +6286,7 @@ fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answ
         Event::DebugResume => debug::resume(&mut next),
         Event::DebugStep(step) => debug::step(&mut next, step),
         Event::DebugStop => debug::stop(&mut next),
+        Event::DebugRestart => debug::restart(&mut next),
         Event::LeaveStepping => {
             next.stepping = false;
             vec![]
@@ -7704,6 +7713,24 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
                 Event::SetSpeed(reading::next_speed(state.speech.speed)),
             ));
         }
+        // The Variables' Transport, each Chip straight through to the event
+        // its key already had, for the reason the Reading's are: a click and
+        // the key are one gesture, so they are one event and not two paths
+        // that can drift. `ask-ai` and `next-thread` have Chips and no arm
+        // yet — their actions are issues #70 and #65, and a name from nowhere
+        // does nothing rather than guessing.
+        Event::PaneAction(debug::RESUME) => return Ok(update(state, Event::DebugResume)),
+        Event::PaneAction(debug::STEP_OVER) => {
+            return Ok(update(state, Event::DebugStep(debug::Step::Over)));
+        }
+        Event::PaneAction(debug::STEP_INTO) => {
+            return Ok(update(state, Event::DebugStep(debug::Step::Into)));
+        }
+        Event::PaneAction(debug::STEP_OUT) => {
+            return Ok(update(state, Event::DebugStep(debug::Step::Out)));
+        }
+        Event::PaneAction(debug::STOP) => return Ok(update(state, Event::DebugStop)),
+        Event::PaneAction(debug::RESTART) => return Ok(update(state, Event::DebugRestart)),
         // Dimmed with nothing to clear, and a dimmed Chip does nothing.
         Event::PaneAction(debug::TOGGLE_OUTPUT) => return Ok(update(state, Event::ToggleOutput)),
         Event::PaneAction(debug::CLEAR_ALL) if !state.breakpoints.is_empty() => {
@@ -9011,6 +9038,16 @@ pub fn shapes(state: &State) -> layout::Shapes {
             false => layout::Output::Away,
         },
     }
+}
+
+/// Whether the Strip's Transport is on screen. The Debug group's border
+/// carries it; with the Shell group up — where a session that ended leaves the
+/// Strip — the lone restart Chip is still drawn, because a control reachable
+/// only while the thing it restarts is running is one nobody can press. One
+/// answer for `ui`, which draws it, and `mouse`, which hit-tests it: two would
+/// be a click landing on a Chip nobody can see.
+pub fn showing_transport(state: &State) -> bool {
+    state.strip == layout::Group::Debug || state.debug.is_none()
 }
 
 /// Where the Variables' Transport is drawn and hit-tested: the Strip's own
