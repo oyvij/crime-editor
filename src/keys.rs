@@ -2249,6 +2249,7 @@ mod tests {
                 },
                 first: 0,
                 focused: true,
+                value: None,
             }),
             ..editing()
         };

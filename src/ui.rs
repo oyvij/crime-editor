@@ -1886,6 +1886,21 @@ fn editor_widget(
             true,
         );
     }
+    // The expression the Hover is a claim about, washed for as long as the
+    // box is up: a box floating over the code says what a value is without
+    // saying what it was read off, and the reader is left to guess whether
+    // the field or the whole chain was evaluated.
+    if let Some((at, width)) = varde::debug::hover_span(state) {
+        if let Some(line) = lines.get_mut(at.line - 1) {
+            *line = picked(
+                line,
+                at.column - 1,
+                at.column - 1 + width,
+                Style::default().bg(word_tint(dark)),
+                true,
+            );
+        }
+    }
     // Without this a visual selection is invisible, which reads as V not
     // working at all.
     if let Some((from, to)) = buffer.selected_lines() {
@@ -3317,21 +3332,66 @@ fn cheatsheet(frame: &mut Frame, state: &State, area: Rect) {
 /// into a screen row, off the same `editor_scroll` the code lines are drawn
 /// from, and keeping the box inside the pane.
 fn hover(frame: &mut Frame, state: &State, panes: &layout::Layout) {
-    let Some(hover) = state.hover.as_ref() else {
+    let (Some(hover), Some(placement)) = (state.hover.as_ref(), lsp::placement(state)) else {
         return;
     };
     let dark = state.editor_theme != "light";
-    let placement = hover.placement();
     // The box's inside: `lsp::measured` adds the two columns its border sits
     // on, so a rule drawn at the full placement would run through them.
     let columns = placement.width.saturating_sub(2);
-    let lines = hover
-        .lines
+    let lines = lsp::sections(state)
         .iter()
         .skip(hover.first)
-        .map(|row| preview_line(row, dark, columns))
+        .map(|said| match said {
+            // What the program holds, above what the server says it is: the
+            // reader stopped in their program reads this first.
+            varde::lsp::Said::Value(row) => Line::from(vec![
+                Span::styled(
+                    format!(
+                        "{}{}{} ",
+                        " ".repeat(row.depth * 2),
+                        match (row.opens, row.open) {
+                            (varde::debug::Opens::Nothing, _) => "",
+                            (_, true) => "\u{25be} ",
+                            (_, false) => "\u{25b8} ",
+                        },
+                        row.name
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw(row.value.clone()),
+            ]),
+            // Said out loud rather than left blank: a box with nothing where
+            // the value goes reads as a debugger that failed, and this one
+            // declined on purpose.
+            varde::lsp::Said::Needs => Line::from(Span::styled(
+                varde::lsp::NEEDS_EVALUATE,
+                Style::default().fg(Color::Yellow),
+            )),
+            varde::lsp::Said::Docs(row) => preview_line(row, dark, columns),
+        })
         .collect();
     over_buffer_line(frame, state, panes, placement, lines);
+    hover_chips(frame, state, placement.spot(state, panes));
+}
+
+/// The Hover's Chips along its top border, at the columns
+/// `mouse::pressed_in_hover` hit-tests them at — flush right, as every other
+/// strip of Chips on a border is.
+fn hover_chips(frame: &mut Frame, state: &State, spot: varde::layout::Area) {
+    let chips = varde::debug::hover_chips(state);
+    let labels = varde::debug::hover_labels(state, spot.width);
+    let Some(mut x) = spot.right().checked_sub(layout::strip_width(&labels)) else {
+        return;
+    };
+    for (chip, label) in chips.iter().zip(labels) {
+        let width = label.width() as u16;
+        frame.render_widget(
+            Line::from(chip_spans(state, chip, label).to_vec()),
+            Rect::new(x, spot.y, width, 1),
+        );
+        x += width;
+    }
 }
 
 /// What is wrong with the characters the pointer rests on, beside the line they

@@ -809,8 +809,13 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
             // as false rather than as unanswerable.
             "evaluate" => {
                 let why = adapter_error(message, &command);
-                if let Some(watch) = watch_asked(next, &arguments) {
-                    watch.answer = Answer::Failed(why);
+                match hover_asked(next, &arguments) {
+                    Some(hovered) => hovered.held = Held::Failed(why),
+                    None => {
+                        if let Some(watch) = watch_asked(next, &arguments) {
+                            watch.answer = Answer::Failed(why);
+                        }
+                    }
                 }
                 Vec::new()
             }
@@ -901,11 +906,31 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
                 .map(|(reference, indexed)| fetch(session, reference, paged(indexed, 0)))
                 .collect()
         }
-        // A Watch's value, filed under the expression that asked for it.
+        // A Watch's value, filed under the expression that asked for it — or
+        // the Hover's, told apart by the context the request went out in and
+        // never by the expression, since a Watch on what the pointer is
+        // resting on is one expression with two places to be.
         "evaluate" => {
             let value = printable(message["body"]["result"].as_str().unwrap_or_default());
-            if let Some(watch) = watch_asked(next, &arguments) {
-                watch.answer = Answer::Value(value);
+            let reference = message["body"]["variablesReference"]
+                .as_i64()
+                .unwrap_or_default();
+            let indexed = message["body"]["indexedVariables"]
+                .as_u64()
+                .unwrap_or_default() as usize;
+            match hover_asked(next, &arguments) {
+                Some(hovered) => {
+                    hovered.held = Held::Value {
+                        value,
+                        reference,
+                        indexed,
+                    }
+                }
+                None => {
+                    if let Some(watch) = watch_asked(next, &arguments) {
+                        watch.answer = Answer::Value(value);
+                    }
+                }
             }
             Vec::new()
         }
@@ -1256,7 +1281,7 @@ pub fn variables(state: &State) -> Vec<Row> {
             parent: 0,
             of: Of::Watch {
                 index,
-                calling: calls(state, &watch.expression),
+                calling: calls(&paused_in(state), &watch.expression),
                 failed: matches!(watch.answer, Answer::Failed(_)),
             },
         })
@@ -1285,16 +1310,31 @@ pub fn variables(state: &State) -> Vec<Row> {
 
 /// Whether an expression calls something, read off the same syntax `ui`
 /// colours the editor with — never by handing it to the adapter to try, which
-/// is the call the mark exists to warn about. The language is the one the
-/// Paused Frame is in, since a Watch is written in the program's language and
-/// `f(x)` is a call in some of them and an index in others.
-fn calls(state: &State, expression: &str) -> bool {
-    let named = paused_line(state)
-        .and_then(|(file, _, _)| file.file_name())
+/// is the call the mark exists to warn about. `named` is the file whose
+/// language the expression is written in, and `f(x)` is a call in some
+/// languages and an index in others, so the wrong one answers no and the
+/// caller runs the call it was asking about.
+///
+/// The two callers name two different files on purpose: a Watch is written in
+/// the Paused Frame's language, while a Hover's expression was read out of
+/// the Buffer under the pointer — which need not be the file the program
+/// stopped in.
+fn paused_in(state: &State) -> String {
+    file_named(paused_line(state).map(|(file, _, _)| file))
+}
+
+/// A path's last component, which is all [`crate::highlight`] reads a
+/// language off. Empty for no path at all, which is the one plain token per
+/// line an unknown extension already gets.
+fn file_named(path: Option<&Path>) -> String {
+    path.and_then(Path::file_name)
         .and_then(std::ffi::OsStr::to_str)
         .unwrap_or_default()
-        .to_string();
-    crate::highlight::highlight(&named, expression)
+        .to_string()
+}
+
+fn calls(named: &str, expression: &str) -> bool {
+    crate::highlight::highlight(named, expression)
         .into_iter()
         .flatten()
         .any(|token| token.kind == crate::highlight::Kind::Function)
@@ -1456,7 +1496,7 @@ pub fn add_watch(next: &mut State, expression: String) -> Vec<Effect> {
     // Only the one just added: the Watches above it have been answered for
     // this pause already, and asking for all of them again would blank every
     // value on screen because somebody added a sixth.
-    evaluate(next, &[expression])
+    evaluate(next, &[expression], WATCH_CONTEXT)
 }
 
 /// The remove-watch Chip on a Watch's row.
@@ -1483,13 +1523,13 @@ fn evaluate_watches(next: &mut State) -> Vec<Effect> {
     for watch in next.watches.iter_mut() {
         watch.answer = Answer::Waiting;
     }
-    evaluate(next, &watches)
+    evaluate(next, &watches, WATCH_CONTEXT)
 }
 
 /// The `evaluate` requests for `watches`, or none at all while the program is
 /// not stopped in a Frame to evaluate them in: an adapter asked to evaluate
 /// in a Frame that is running answers with an error.
-fn evaluate(next: &mut State, watches: &[String]) -> Vec<Effect> {
+fn evaluate(next: &mut State, watches: &[String], context: &str) -> Vec<Effect> {
     let Some(session) = next.debug.as_mut() else {
         return Vec::new();
     };
@@ -1506,7 +1546,7 @@ fn evaluate(next: &mut State, watches: &[String]) -> Vec<Effect> {
             ask(
                 session,
                 "evaluate",
-                json!({ "expression": expression, "frameId": id, "context": "watch" }),
+                json!({ "expression": expression, "frameId": id, "context": context }),
             )
         })
         .collect()
@@ -1538,9 +1578,16 @@ pub fn set_value(next: &mut State, value: String) -> Vec<Effect> {
 /// nothing under them — so walking a deep structure asks for what is opened
 /// and nothing else.
 pub fn open(next: &mut State, index: usize) -> Vec<Effect> {
-    let Some(row) = variables(next).get(index).cloned() else {
-        return Vec::new();
-    };
+    match variables(next).get(index).cloned() {
+        Some(row) => opened(next, row),
+        None => Vec::new(),
+    }
+}
+
+/// What opening a row asks for, whichever list the row came from: the
+/// Variables' and the Hover's are rows of one tree, so a reference opened in
+/// one is opened in the other.
+fn opened(next: &mut State, row: Row) -> Vec<Effect> {
     let Some(session) = next.debug.as_mut() else {
         return Vec::new();
     };
@@ -1621,6 +1668,315 @@ fn member(value: &Value) -> Member {
         reference: value["variablesReference"].as_i64().unwrap_or_default(),
         hint,
         indexed: value["indexedVariables"].as_u64().unwrap_or_default() as usize,
+    }
+}
+
+/// What a Hover asked the Debug adapter while Paused: the expression the
+/// syntax under the pointer named, where it starts so the editor can mark it,
+/// and what came back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hovered {
+    pub expression: String,
+    pub at: Place,
+    pub held: Held,
+}
+
+/// What the Hover's expression holds, as far as the adapter has said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Held {
+    /// The expression calls something, so the adapter was never asked: a
+    /// pointer crossing `delete_order()` on its way somewhere else must not
+    /// delete an order. Only the Evaluator runs a call, because somebody
+    /// pressed a key for it.
+    NeedsEvaluate,
+    /// Asked and not yet answered.
+    Waiting,
+    Failed(String),
+    Value {
+        value: String,
+        reference: i64,
+        indexed: usize,
+    },
+}
+
+/// The Hover's value section while Paused, and the `evaluate` that asks for
+/// it. Nothing at all outside a session and while the program runs, where a
+/// Hover is the language server's answer and nothing more.
+pub fn hovered(next: &mut State, at: Place) -> (Option<Hovered>, Vec<Effect>) {
+    if !matches!(
+        next.debug.as_ref().map(|session| &session.phase),
+        Some(Phase::Paused(_))
+    ) {
+        return (None, Vec::new());
+    }
+    let Some((expression, column)) = expression_at(next, at) else {
+        return (None, Vec::new());
+    };
+    // The Buffer the expression was read out of, not the file the program
+    // stopped in: they need not be the same file, and a call parsed under
+    // another language's grammar is a call this is about to run.
+    let named = file_named(next.current_buffer.as_deref());
+    let at = Place {
+        line: at.line,
+        column,
+    };
+    if calls(&named, &expression) {
+        return (
+            Some(Hovered {
+                expression,
+                at,
+                held: Held::NeedsEvaluate,
+            }),
+            Vec::new(),
+        );
+    }
+    let effects = evaluate(next, std::slice::from_ref(&expression), HOVER);
+    (
+        Some(Hovered {
+            expression,
+            at,
+            held: Held::Waiting,
+        }),
+        effects,
+    )
+}
+
+/// The protocol's contexts an `evaluate` goes out in. Both what tells the
+/// adapter how its answer will be used — `hover` is the one that asks it to
+/// answer cheaply and without side effects — and, since a reply names nothing
+/// of its question, how [`hover_asked`] tells a Hover's answer from a Watch's.
+/// Named rather than written at each call site: a literal mistyped at one of
+/// the three still compiles and silently files the answer against the wrong
+/// thing.
+const HOVER: &str = "hover";
+const WATCH_CONTEXT: &str = "watch";
+
+/// The expression the syntax under a place names, and the column it starts
+/// at: `order.total` where the pointer is on `total`, and the whole call where
+/// it is on the name of one. Character by character over the line the Buffer
+/// holds rather than over [`crate::highlight`]'s tokens, because a token is
+/// grouped by scope and not by name — `mentioned` splits them again for the
+/// same reason.
+///
+/// A place that is not in a name is no expression at all: the `7` of `load(7)`
+/// is a literal, and the only expression around it is the call it is an
+/// argument to — which is the one thing a Hover may not ask about.
+fn expression_at(state: &State, at: Place) -> Option<(String, usize)> {
+    let path = state.current_buffer.as_ref()?;
+    let line: Vec<char> = state
+        .buffers
+        .get(path)?
+        .shown()
+        .split('\n')
+        .nth(at.line.checked_sub(1)?)?
+        .chars()
+        .collect();
+    let on = at.column.checked_sub(1)?;
+    if !line.get(on).is_some_and(|character| named(*character)) {
+        return None;
+    }
+    let mut from = on;
+    while from > 0 && named(line[from - 1]) {
+        from -= 1;
+    }
+    let mut to = on + 1;
+    while to < line.len() && named(line[to]) {
+        to += 1;
+    }
+    // A name no language lets start with a digit is a literal, and a literal
+    // has nothing the program could be asked about.
+    if line[from].is_ascii_digit() {
+        return None;
+    }
+    // Back through the receivers a field is read off: `total` on its own is
+    // not a name the program knows, and asking for it would either fail or —
+    // worse — answer about some other `total` in scope. A receiver that is
+    // itself a call or an index comes too, closer first, which is what makes
+    // `get().total` an expression that calls something rather than a bare
+    // `total` the adapter would happily evaluate.
+    while from > 1 && line[from - 1] == '.' {
+        let Some(receiver) = ends_at(&line, from - 2) else {
+            break;
+        };
+        from = receiver;
+    }
+    // And on over the call the name opens, if it opens one: a call's name
+    // alone evaluates to the function, which is not what is being pointed at.
+    // Balanced, so a call taking a call is one expression.
+    if line.get(to) == Some(&'(') {
+        let mut depth = 0;
+        for (index, character) in line.iter().enumerate().skip(to) {
+            match character {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        to = index + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Some((line[from..to].iter().collect(), from + 1))
+}
+
+fn named(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
+}
+
+/// Where the expression ending at `last` begins: a name, or a name followed by
+/// as many bracketed groups as it carries — `a.b()[0]` read right to left.
+/// `None` where what ends there is not an expression at all, which leaves the
+/// chain broken and the walk above stopping where it stands.
+fn ends_at(line: &[char], last: usize) -> Option<usize> {
+    let mut at = last;
+    loop {
+        let opener = match line.get(at)? {
+            ')' => '(',
+            ']' => '[',
+            character if named(*character) => break,
+            _ => return None,
+        };
+        let closer = line[at];
+        let mut depth = 0usize;
+        loop {
+            let character = *line.get(at)?;
+            if character == closer {
+                depth += 1;
+            } else if character == opener {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            at = at.checked_sub(1)?;
+        }
+        // Past the group, onto whatever it hangs off: another group, or the
+        // name the whole chain starts at.
+        at = at.checked_sub(1)?;
+    }
+    while at > 0 && named(line[at - 1]) {
+        at -= 1;
+    }
+    Some(at)
+}
+
+/// The expression the Hover describes, and how many characters of the line it
+/// spans: the editor washes it while the box is up, so what was evaluated is
+/// never left for the reader to guess from a box floating over the code.
+pub fn hover_span(state: &State) -> Option<(Place, usize)> {
+    let hovered = state.hover.as_ref()?.value.as_ref()?;
+    Some((hovered.at, hovered.expression.chars().count()))
+}
+
+/// The Hover's value as rows, the tree flattened exactly as the Variables' is
+/// — the same [`draw`], so a structure opens the same way in both places and
+/// opening it in one is opening it in the other. Empty until the adapter has
+/// answered: what a Hover says while it waits, and what it says about a call
+/// it will not run, are [`crate::lsp::Said`]'s to draw.
+pub fn hovered_rows(state: &State) -> Vec<Row> {
+    let Some(hovered) = state.hover.as_ref().and_then(|hover| hover.value.as_ref()) else {
+        return Vec::new();
+    };
+    let Some(pause) = showing(state) else {
+        return Vec::new();
+    };
+    let member = match &hovered.held {
+        Held::NeedsEvaluate => return Vec::new(),
+        // The expression with nothing beside it yet, exactly as a Watch waits:
+        // a box that showed nothing at all until the adapter answered would
+        // open two columns wide and jump to its real size a moment later.
+        Held::Waiting => Member {
+            name: hovered.expression.clone(),
+            value: String::new(),
+            reference: 0,
+            hint: Hint::Plain,
+            indexed: 0,
+        },
+        Held::Failed(why) => Member {
+            name: hovered.expression.clone(),
+            value: why.clone(),
+            reference: 0,
+            hint: Hint::Plain,
+            indexed: 0,
+        },
+        Held::Value {
+            value,
+            reference,
+            indexed,
+        } => Member {
+            name: hovered.expression.clone(),
+            value: value.clone(),
+            reference: *reference,
+            hint: Hint::Plain,
+            indexed: *indexed,
+        },
+    };
+    let mut rows = Vec::new();
+    draw(pause, &member, 0, "", &mut Vec::new(), &mut rows);
+    rows
+}
+
+/// The Chips on the Hover's top border: the Evaluator, which is the only way
+/// to know what a call returns, and a Watch, which keeps the expression on the
+/// Variables once the pointer has moved on. Their own Chips and not the
+/// Variables row's, because the two act on different expressions.
+pub fn hover_chips(state: &State) -> Vec<crate::Chip> {
+    use crate::{Chip, Hue, Tone};
+    if state
+        .hover
+        .as_ref()
+        .and_then(|hover| hover.value.as_ref())
+        .is_none()
+    {
+        return Vec::new();
+    }
+    let chip = |action, name, glyph: &str, hue, tone| Chip {
+        action,
+        name,
+        glyph: glyph.to_string(),
+        keys: "",
+        hue,
+        tone,
+    };
+    vec![
+        // Dimmed until the Evaluator exists — issue #60 — and drawn rather
+        // than hidden, for the reason the Variables row's own is.
+        chip(EVALUATE, "evaluate", "\u{2261}", Hue::Plain, Tone::Dimmed),
+        chip(WATCH, "watch", "\u{25c9}", Hue::Go, Tone::Plain),
+    ]
+}
+
+/// The Hover's Chips as they are drawn and hit-tested — the renderer, the
+/// mouse and the box's own width read this one list, for the reason every
+/// other strip of Chips has one. Nothing reserved for a title, unlike a pane's
+/// border: the box has no name written on it.
+pub fn hover_labels(state: &State, width: u16) -> Vec<String> {
+    crate::layout::chip_labels(&hover_chips(state), width, 0)
+}
+
+/// The Watch Chip on the Hover: the expression the box describes joins the
+/// Watches, so a value worth a second look outlives the pointer that found it.
+pub fn watch_hovered(next: &mut State) -> Vec<Effect> {
+    let Some(expression) = next
+        .hover
+        .as_ref()
+        .and_then(|hover| hover.value.as_ref())
+        .map(|hovered| hovered.expression.clone())
+    else {
+        return Vec::new();
+    };
+    add_watch(next, expression)
+}
+
+/// A click on a row of the Hover's value, which opens it exactly as the same
+/// row of the Variables opens.
+pub fn open_hovered(next: &mut State, index: usize) -> Vec<Effect> {
+    match hovered_rows(next).get(index).cloned() {
+        Some(row) => opened(next, row),
+        None => Vec::new(),
     }
 }
 
@@ -1865,6 +2221,22 @@ fn end(next: &mut State) {
     }
 }
 
+/// The Hover an `evaluate` was sent for, if this one was: the `hover` context
+/// is what names it, and the expression has to still be the one the box is a
+/// claim about — a reply for an expression the pointer has moved off belongs
+/// to nothing on screen.
+fn hover_asked<'a>(next: &'a mut State, arguments: &Value) -> Option<&'a mut Hovered> {
+    if arguments["context"] != json!(HOVER) {
+        return None;
+    }
+    let expression = arguments["expression"].as_str()?;
+    next.hover
+        .as_mut()?
+        .value
+        .as_mut()
+        .filter(|hovered| hovered.expression == expression)
+}
+
 /// The Watch an `evaluate` was sent for, found by the expression the request
 /// carried rather than by whichever row the keyboard has reached since.
 fn watch_asked<'a>(next: &'a mut State, arguments: &Value) -> Option<&'a mut Watch> {
@@ -1991,6 +2363,131 @@ pub(crate) fn paused(mut state: State) -> State {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// What the pointer names, branch by branch. The scenarios drive four
+    /// places in one file; these are the shapes a real line has that no
+    /// scenario would be readable enumerating.
+    #[test]
+    fn a_place_names_the_expression_the_syntax_around_it_makes() {
+        let named = |line: &str, column: usize| {
+            let mut state = State::default();
+            let path = PathBuf::from("/w/one.rs");
+            state
+                .buffers
+                .insert(path.clone(), crate::editor::Buffer::open(line, false, 4));
+            state.current_buffer = Some(path);
+            expression_at(&state, Place { line: 1, column })
+        };
+        // A name, and the receivers a field is read off — however many.
+        assert_eq!(
+            named("    let order = load(7);", 9),
+            Some(("order".to_string(), 9))
+        );
+        assert_eq!(
+            named("    one.two.three = 1", 13),
+            Some(("one.two.three".to_string(), 5))
+        );
+        // The call a name opens, balanced, so a call taking a call is one
+        // expression — and the receiver in front of it comes too.
+        assert_eq!(
+            named("    delete_order(order.id);", 5),
+            Some(("delete_order(order.id)".to_string(), 5))
+        );
+        assert_eq!(
+            named("    let n = a.count(b(c));", 15),
+            Some(("a.count(b(c))".to_string(), 13))
+        );
+        // A receiver that is itself a call or an index comes too, closer
+        // first — which is what makes the first of these an expression that
+        // calls something rather than a bare `total` the adapter would
+        // happily evaluate.
+        assert_eq!(
+            named("    let n = get().total;", 19),
+            Some(("get().total".to_string(), 13))
+        );
+        assert_eq!(
+            named("    let n = v[i].total;", 18),
+            Some(("v[i].total".to_string(), 13))
+        );
+        assert_eq!(
+            named("    let n = a.b()[0].c;", 22),
+            Some(("a.b()[0].c".to_string(), 13))
+        );
+        // A chain broken by something that is not an expression stops where
+        // it stands rather than reaching past it.
+        assert_eq!(
+            named("    let n = 1 + .total;", 18),
+            Some(("total".to_string(), 18))
+        );
+        // A literal is no expression: the only one around the `7` below is
+        // the call it is an argument to, which is what a Hover may not ask.
+        assert_eq!(named("    let order = load(7);", 22), None);
+        // And neither is whitespace, punctuation, or a column past the line.
+        assert_eq!(named("    let order = load(7);", 15), None);
+        assert_eq!(named("    let order = load(7);", 90), None);
+    }
+
+    /// An adapter that refuses an `evaluate` the Hover sent: its reason
+    /// stands in the box, for the reason a Watch's does. Left waiting, the
+    /// box would show the expression with nothing beside it forever, which
+    /// reads as a debugger that lost the question.
+    #[test]
+    fn a_refused_hover_evaluate_says_why_in_the_box() {
+        let mut state = paused(State::default());
+        let path = PathBuf::from("/w/one.rs");
+        state.buffers.insert(
+            path.clone(),
+            crate::editor::Buffer::open("    let order = load(7);\n", false, 4),
+        );
+        state.current_buffer = Some(path.clone());
+        let at = Place { line: 1, column: 9 };
+        crate::lsp::value_hover(&mut state, at);
+        let seq = outstanding(&state, "evaluate");
+        received(
+            &mut state,
+            &json!({"type": "response", "request_seq": seq, "success": false,
+                "command": "evaluate", "message": "not available"})
+            .to_string(),
+        );
+        assert_eq!(
+            state
+                .hover
+                .as_ref()
+                .and_then(|hover| hover.value.as_ref())
+                .map(|hovered| hovered.held.clone()),
+            Some(Held::Failed("not available".to_string()))
+        );
+    }
+
+    /// A Hover over a call is the absence this feature exists for, and the
+    /// branch that decides it is [`calls`] — driven here over the shapes the
+    /// scenarios' one file does not have.
+    #[test]
+    fn a_hover_asks_for_everything_but_a_call() {
+        let mut state = paused(State::default());
+        let path = PathBuf::from("/w/one.rs");
+        state.buffers.insert(
+            path.clone(),
+            crate::editor::Buffer::open("    delete_order(order.id);\n", false, 4),
+        );
+        state.current_buffer = Some(path);
+        let (over_call, effects) = hovered(&mut state, Place { line: 1, column: 5 });
+        assert_eq!(over_call.map(|box_| box_.held), Some(Held::NeedsEvaluate));
+        assert_eq!(effects, Vec::new(), "the adapter was asked to run a call");
+        // The argument inside it is asked for, and for itself alone.
+        let (over_argument, effects) = hovered(
+            &mut state,
+            Place {
+                line: 1,
+                column: 24,
+            },
+        );
+        assert_eq!(
+            over_argument.map(|box_| box_.expression),
+            Some("order.id".to_string())
+        );
+        assert_eq!(effects.len(), 1);
+    }
 
     /// The route a real adapter takes to the set-value capability: its
     /// `initialize` reply, which no scenario drives because every scenario

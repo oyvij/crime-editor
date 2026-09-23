@@ -680,6 +680,13 @@ pub enum Event {
     Pasted(String),
     /// An action icon on the selected row, or its keyboard shortcut.
     RowAction(&'static str),
+    /// A Chip on the Hover box, by what pressing it does. Its own event and
+    /// not the Variables row's: the two act on different expressions, and one
+    /// event reading the row under the keyboard would watch whatever the
+    /// Variables happened to be on.
+    HoverChip(&'static str),
+    /// A row of the Hover's value section, opened or closed.
+    OpenHoverRow(usize),
     /// An action a *pane* offers, not a row: the Risk pane's recompute and its
     /// loop. Its own event because `RowAction` falls through to the tree's
     /// actions on a row, and a pane action stands on no row.
@@ -4434,10 +4441,11 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
         // up to the bottom border and no further.
         Event::ScrollHover(direction) => {
             let panes = panes_of(state);
-            if let Some(hover) = next.hover.as_mut() {
-                let spot = hover.placement().spot(state, &panes);
+            let spot = lsp::placement(state).map(|placement| placement.spot(state, &panes));
+            let said = lsp::sections(state).len();
+            if let (Some(spot), Some(hover)) = (spot, next.hover.as_mut()) {
                 let shown = usize::from(spot.height).saturating_sub(2);
-                let last = hover.lines.len().saturating_sub(shown);
+                let last = said.saturating_sub(shown);
                 hover.first = match direction {
                     Direction::Down => (hover.first + 1).min(last),
                     Direction::Up | Direction::Left | Direction::Right => {
@@ -5766,7 +5774,17 @@ fn on_editor_key_4(state: &State, mut next: State, event: Event, wheeled: bool) 
             }
             vec![]
         }
-        Event::EditorKey('K') if normal_mode(state) => lsp::ask(&mut next, lsp::About::Hover),
+        // The adapter is asked alongside the server, from the cursor's place:
+        // what a Hover says while Paused is the same box asked for two ways,
+        // and the key reaching only one of them is a `K` that tells the
+        // reader less than resting the pointer does.
+        Event::EditorKey('K') if normal_mode(state) => {
+            let mut effects = lsp::ask(&mut next, lsp::About::Hover);
+            if let Some(at) = cursor_place(state) {
+                effects.extend(lsp::value_hover(&mut next, at));
+            }
+            effects
+        }
 
         // `/` searches the file being edited, on the line the editor already
         // owns for `:` commands rather than in the floating modal — finding
@@ -6397,7 +6415,11 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         }
         Event::HoverDue => {
             let effects = match state.pointed_at {
-                Pointed::Text(at) => lsp::ask_at(&mut next, lsp::About::Hover, Some(at)),
+                Pointed::Text(at) => {
+                    let mut effects = lsp::ask_at(&mut next, lsp::About::Hover, Some(at));
+                    effects.extend(lsp::value_hover(&mut next, at));
+                    effects
+                }
                 Pointed::Hover | Pointed::Elsewhere => Vec::new(),
             };
             return Ok((next, effects));
@@ -8420,6 +8442,12 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
         // because `Event::RowAction` has no catch-all: every name it carries
         // is one some pane offers.
         Event::RowAction(debug::EVALUATE | debug::ROW_ASK_AI) => vec![],
+        // The Hover's own Chips. `evaluate` is dimmed for the reason the
+        // row's is — the Evaluator is issue #60 — so it has no arm, and a
+        // name from nowhere does nothing rather than guessing.
+        Event::HoverChip(debug::WATCH) => debug::watch_hovered(&mut next),
+        Event::HoverChip(debug::EVALUATE) => vec![],
+        Event::OpenHoverRow(index) => debug::open_hovered(&mut next, index),
         Event::RowAction(debug::COPY_VALUE) => match debug::row(state) {
             Some(row) => to_clipboard(state, row.value),
             None => vec![],
@@ -12024,6 +12052,7 @@ mod tests {
             },
             first: 0,
             focused: false,
+            value: None,
         });
         state.pointed_at = Pointed::Hover;
         state

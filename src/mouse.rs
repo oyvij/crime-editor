@@ -549,6 +549,9 @@ fn hovered(state: &State, panes: &Layout, input: Input) -> Vec<Event> {
 }
 
 fn pressed(state: &State, panes: &Layout, pane: Pane, input: Input) -> Vec<Event> {
+    if let Some(events) = pressed_in_hover(state, panes, input) {
+        return events;
+    }
     if let Some(key) = palette_entry_at(state, panes, input.column, input.row) {
         return vec![Event::ClickPaletteEntry(key)];
     }
@@ -1035,15 +1038,52 @@ fn resting(state: &State, panes: &Layout, input: Input) -> Pointed {
     ))
 }
 
+/// A Chip on the Hover's top border, or one of its value rows. `None` where
+/// the pointer is not on the box at all, which is what leaves the press to the
+/// pane underneath — the box floats over the text and over the panes beside
+/// it, so it is asked first, the order `resting` asks in and for its reason.
+fn pressed_in_hover(state: &State, panes: &Layout, input: Input) -> Option<Vec<Event>> {
+    let spot = hover_spot(state, panes).filter(|spot| spot.holds(input.column, input.row))?;
+    let chips = crate::debug::hover_chips(state);
+    // A box with nothing to act on does not take the press at all: outside a
+    // session it carries no Chips and no value, and a box that swallowed a
+    // click there would be a change to the Hover this feature promised to
+    // leave alone.
+    if chips.is_empty() {
+        return None;
+    }
+    if input.row == spot.y {
+        let labels = crate::debug::hover_labels(state, spot.width);
+        return Some(match crate::layout::strip_at(spot, &labels, input.column) {
+            Some(at) => vec![Event::HoverChip(chips[at].action)],
+            None => Vec::new(),
+        });
+    }
+    // Through the box's own scroll, for the reason every list's rows are read
+    // through theirs: a box scrolled down and hit-tested from its first row
+    // opens whatever has moved into the row that was clicked.
+    let first = state.hover.as_ref()?.first;
+    let row = usize::from(input.row.saturating_sub(spot.y + 1)) + first;
+    Some(match crate::lsp::sections(state).get(row) {
+        Some(crate::lsp::Said::Value(_)) => vec![Event::OpenHoverRow(row)],
+        // The border, the docs and the line that declines to evaluate are all
+        // read: a box swallows the press rather than letting it place a caret
+        // under itself.
+        _ => Vec::new(),
+    })
+}
+
 /// Whether the pointer is on the Hover box, border and all, against the
 /// rectangle the renderer draws it in.
 fn on_hover(state: &State, panes: &Layout, input: Input) -> bool {
-    state.hover.as_ref().is_some_and(|hover| {
-        hover
-            .placement()
-            .spot(state, panes)
-            .holds(input.column, input.row)
-    })
+    hover_spot(state, panes).is_some_and(|spot| spot.holds(input.column, input.row))
+}
+
+/// The rectangle the Hover box is drawn in, which the press below is
+/// hit-tested against for the reason every other one is: one derivation, or a
+/// Chip is clicked a column away from where it was drawn.
+fn hover_spot(state: &State, panes: &Layout) -> Option<crate::layout::Area> {
+    Some(crate::lsp::placement(state)?.spot(state, panes))
 }
 
 /// Where a screen position sits in the pane's own text, 1-based like the

@@ -11133,8 +11133,9 @@ fn hover_code_token_is_a_keyword(world: &mut VardeWorld, text: String) {
 /// happen.
 #[then(expr = "the hover is no taller than {int} rows")]
 fn hover_is_no_taller_than(world: &mut VardeWorld, rows: usize) {
-    let hover = world.state.hover.as_ref().expect("a hover");
-    assert!(hover.rows() <= rows, "the box is {} rows", hover.rows());
+    world.state.hover.as_ref().expect("a hover");
+    let count = varde::lsp::rows(&world.state);
+    assert!(count <= rows, "the box is {count} rows");
 }
 
 #[then(expr = "the last hover row says it was cut short")]
@@ -11176,7 +11177,7 @@ fn hover_fits(world: &mut VardeWorld, columns: usize) {
 fn hover_does_not_cover(world: &mut VardeWorld, line: usize) {
     let hover = world.state.hover.as_ref().expect("a hover");
     assert!(
-        !hover.covers(line),
+        !varde::lsp::covers(&world.state, line),
         "the hover covers {} lines from line {}",
         hover.lines.len(),
         hover.from
@@ -11247,8 +11248,9 @@ fn pointer_rests_on(world: &mut VardeWorld, line: usize, column: usize) {
 /// border.
 fn on_the_hover(world: &VardeWorld) -> (u16, u16) {
     let panes = world.panes();
-    let hover = world.state.hover.as_ref().expect("a hover");
-    let spot = hover.placement().spot(&world.state, &panes);
+    let spot = varde::lsp::placement(&world.state)
+        .expect("a hover")
+        .spot(&world.state, &panes);
     (spot.x + 1, spot.y + 1)
 }
 
@@ -15888,4 +15890,170 @@ fn inline_values_end_within_the_width(world: &mut VardeWorld, line: usize) {
         text + drawn <= columns,
         "{text} + {drawn} columns drawn in {columns}",
     );
+}
+
+// ---- #59: a Hover while Paused ----
+
+#[then("the hover's first section is the value")]
+fn hover_first_section_is_the_value(world: &mut VardeWorld) {
+    assert!(
+        matches!(
+            varde::lsp::sections(&world.state).first(),
+            Some(varde::lsp::Said::Value(_) | varde::lsp::Said::Needs)
+        ),
+        "the box opens with {:?}",
+        varde::lsp::sections(&world.state).first()
+    );
+}
+
+/// Under the value and never interleaved with it: the two sections are one
+/// box, so "second" is a claim about every row above the first doc row.
+#[then("the hover's second section is the type and docs")]
+fn hover_second_section_is_the_type_and_docs(world: &mut VardeWorld) {
+    let said = varde::lsp::sections(&world.state);
+    let first = said
+        .iter()
+        .position(|row| matches!(row, varde::lsp::Said::Docs(_)))
+        .expect("no type and docs in the box");
+    assert!(first > 0, "the box has no value above the docs");
+    assert!(
+        said[first..]
+            .iter()
+            .all(|row| matches!(row, varde::lsp::Said::Docs(_))),
+        "the two sections interleave"
+    );
+}
+
+#[then(expr = "the hover's value section says {string}")]
+fn hover_value_section_says(world: &mut VardeWorld, expected: String) {
+    let says = match varde::lsp::sections(&world.state).first() {
+        Some(varde::lsp::Said::Needs) => "needs-evaluate",
+        Some(varde::lsp::Said::Value(_)) => "a-value",
+        _ => "nothing",
+    };
+    assert_eq!(says, expected);
+}
+
+#[then(expr = "the hover carries the {string} Chip")]
+fn hover_carries_the_chip(world: &mut VardeWorld, name: String) {
+    assert!(
+        varde::debug::hover_chips(&world.state)
+            .iter()
+            .any(|chip| chip.name == name),
+        "the box carries {:?}",
+        varde::debug::hover_chips(&world.state)
+            .iter()
+            .map(|chip| chip.name)
+            .collect::<Vec<&str>>()
+    );
+}
+
+/// Through the hit-test, on the box's own top border and at the columns `ui`
+/// draws the Chips into — never driven as an event, so a Chip no pointer
+/// could reach fails here.
+#[when(expr = "I click the hover's {string} Chip")]
+fn click_the_hovers_chip(world: &mut VardeWorld, name: String) {
+    let panes = world.panes();
+    let spot = varde::lsp::placement(&world.state)
+        .expect("a hover")
+        .spot(&world.state, &panes);
+    let chips = varde::debug::hover_chips(&world.state);
+    let at = chips
+        .iter()
+        .position(|chip| chip.name == name)
+        .unwrap_or_else(|| panic!("no {name:?} Chip on the hover"));
+    let labels = varde::debug::hover_labels(&world.state, spot.width);
+    let column = (spot.x..spot.right())
+        .find(|&column| layout::strip_at(spot, &labels, column) == Some(at))
+        .expect("the Chip on screen");
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, spot.y);
+    world.report(mouse::Kind::LeftUp, column, spot.y);
+}
+
+/// The box's first row of value, clicked where it is drawn.
+#[when("I open the hover's value")]
+fn open_the_hovers_value(world: &mut VardeWorld) {
+    let panes = world.panes();
+    let spot = varde::lsp::placement(&world.state)
+        .expect("a hover")
+        .spot(&world.state, &panes);
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, spot.x + 1, spot.y + 1);
+    world.report(mouse::Kind::LeftUp, spot.x + 1, spot.y + 1);
+}
+
+/// The span the editor washes, read back out of the buffer it names: a step
+/// that trusted the columns would pass on a span naming the wrong characters.
+#[then(expr = "the editor highlights {string} on line {int}")]
+fn editor_highlights_on_line(world: &mut VardeWorld, text: String, line: usize) {
+    let (at, width) = varde::debug::hover_span(&world.state).expect("nothing is highlighted");
+    assert_eq!(at.line, line, "highlighted on line {}", at.line);
+    let path = world.state.current_buffer.clone().expect("a buffer");
+    let source = world.state.buffers[&path].shown().to_string();
+    let held: String = source
+        .split('\n')
+        .nth(line - 1)
+        .expect("a line")
+        .chars()
+        .skip(at.column - 1)
+        .take(width)
+        .collect();
+    assert_eq!(held, text);
+}
+
+#[when(expr = "the Debug adapter answers the {string} for {string} with the value {string}")]
+fn adapter_answers_evaluate_with_value(
+    world: &mut VardeWorld,
+    command: String,
+    expression: String,
+    value: String,
+) {
+    answer_evaluate(world, &command, &expression, json!({ "result": value }));
+}
+
+#[given(expr = "the Debug adapter answers the {string} for {string} with reference {int}")]
+#[when(expr = "the Debug adapter answers the {string} for {string} with reference {int}")]
+fn adapter_answers_evaluate_with_reference(
+    world: &mut VardeWorld,
+    command: String,
+    expression: String,
+    reference: i64,
+) {
+    answer_evaluate(
+        world,
+        &command,
+        &expression,
+        json!({ "result": expression, "variablesReference": reference }),
+    );
+}
+
+/// The reply to the last request for that expression, which is the one the
+/// box is still waiting on.
+fn answer_evaluate(world: &mut VardeWorld, command: &str, expression: &str, body: Value) {
+    let seq = dap_requests(world, command)
+        .into_iter()
+        .rev()
+        .find(|message| message["arguments"]["expression"] == json!(expression))
+        .unwrap_or_else(|| panic!("no {command:?} for {expression:?}"))["seq"]
+        .clone();
+    adapter_event(
+        world,
+        json!({
+            "type": "response",
+            "request_seq": seq,
+            "success": true,
+            "command": command,
+            "body": body,
+        }),
+    );
+}
+
+#[then(expr = "the Debug adapter was sent no {string} request for {string}")]
+fn adapter_sent_no_request_for(world: &mut VardeWorld, command: String, expression: String) {
+    let asked: Vec<&Value> = dap_requests(world, &command)
+        .into_iter()
+        .filter(|message| message["arguments"]["expression"] == json!(expression))
+        .collect();
+    assert!(asked.is_empty(), "sent: {asked:?}");
 }
