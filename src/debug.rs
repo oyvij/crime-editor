@@ -77,6 +77,15 @@ pub const STEP_OUT: &str = "debug-step-out";
 pub const STOP: &str = "debug-stop";
 pub const RESTART: &str = "debug-restart";
 pub const ASK_AI: &str = "debug-ask-ai";
+pub const SET_VALUE: &str = "debug-set-value";
+pub const COPY_VALUE: &str = "debug-copy-value";
+pub const COPY_EXPRESSION: &str = "debug-copy-expression";
+pub const WATCH: &str = "debug-watch";
+pub const REMOVE_WATCH: &str = "debug-remove-watch";
+pub const EVALUATE: &str = "debug-evaluate";
+/// The row's own, not the Transport's: one asks the AI about the whole pause
+/// and the other about one value, so they are two actions wearing one name.
+pub const ROW_ASK_AI: &str = "debug-ask-ai-value";
 pub const NEXT_THREAD: &str = "debug-next-thread";
 
 /// What the focused row offers: removing the Breakpoint it names.
@@ -340,6 +349,10 @@ pub struct Session {
     /// A pause asked for before any thread was known, so it waits on the
     /// `threads` answer that names one.
     pausing: bool,
+    /// Whether the adapter said it can write a member back. Its word, never
+    /// a try: a set-value Chip that looked enabled and failed teaches the
+    /// reader nothing, so the capability dims it instead.
+    can_set: bool,
     /// What the Corner and the Strip held when the session began, given back
     /// when it ends.
     corner: layout::Corner,
@@ -347,13 +360,17 @@ pub struct Session {
 }
 
 /// A request waiting for its answer: the command, which is how the response is
-/// read, and the Variables reference it asked about — which a `variables`
-/// response carries nowhere in itself, so an answer would otherwise be a list
-/// of members belonging to nothing.
+/// read, and the arguments it went out with. The whole arguments and not the
+/// one field each arm wants, because a response carries almost nothing of its
+/// question — a `variables` answer is a list of members belonging to nothing,
+/// an `evaluate` answer is a string belonging to no expression, and a
+/// `setVariable` answer names neither the member it wrote nor what held it.
+/// One field per arm is three fields that travel together and a fourth on the
+/// next command; the request already says all of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Ask {
     command: String,
-    reference: i64,
+    arguments: Value,
 }
 
 /// Where a session has got to. An enum rather than flags, for the reason
@@ -454,6 +471,34 @@ pub struct Row {
     pub hint: Hint,
     pub open: bool,
     pub opens: Opens,
+    /// The path to this row in the program's own language — `orders[0].id`
+    /// rather than `id` — which is what copying it as an expression puts on
+    /// the clipboard and what watching it adds. Built as the tree is
+    /// flattened, because only the walk knows what stands above a row; empty
+    /// for a scope, which is a heading and not an expression.
+    pub expression: String,
+    /// The reference of whatever holds this row, which is how `setVariable`
+    /// names a member: the protocol asks for the container and the member's
+    /// name, never for the member's own reference.
+    pub parent: i64,
+    pub of: Of,
+}
+
+/// What a row stands for, which is what its Chips act on: a member is
+/// watched where a Watch is removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Of {
+    /// A member of the adapter's tree, or the exception that paused the
+    /// program: both are the adapter's word about the program.
+    Member,
+    /// A Watch, by its place in the Watches — and whether its expression
+    /// calls something, since a Watch runs that call again at every pause,
+    /// and whether the last pause could not evaluate it.
+    Watch {
+        index: usize,
+        calling: bool,
+        failed: bool,
+    },
 }
 
 /// What opening a row asks the adapter for.
@@ -478,6 +523,27 @@ pub enum Opens {
 /// answers at once; the alternative — asking for all of them — is a ten
 /// thousand element vector serialized into a pane twenty rows tall.
 const PAGE: usize = 100;
+
+/// One expression kept at the top of the Variables and re-evaluated at every
+/// pause. Core state rather than the session's: a Watch is a question the
+/// reader is asking of the program, and the next session is asked the same
+/// one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Watch {
+    pub expression: String,
+    pub answer: Answer,
+}
+
+/// What the last pause's `evaluate` said about a Watch. The adapter's reason
+/// is kept apart from a value because a reason drawn as a value reads as the
+/// program's own answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    /// Asked and not yet answered, which is also where a Watch starts.
+    Waiting,
+    Value(String),
+    Failed(String),
+}
 
 /// Why the program paused, as far as the Paused line is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -563,6 +629,7 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
         seq: 0,
         asked: BTreeMap::new(),
         pausing: false,
+        can_set: false,
         corner: next.corner,
         strip: next.strip,
     });
@@ -699,7 +766,7 @@ pub fn received(next: &mut State, json: &str) -> Vec<Effect> {
 
 fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
     let session = next.debug.as_mut().expect("a session");
-    let Some(Ask { command, reference }) = message["request_seq"]
+    let Some(Ask { command, arguments }) = message["request_seq"]
         .as_i64()
         .and_then(|seq| session.asked.remove(&seq))
     else {
@@ -708,16 +775,7 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
     if message["success"] != Value::Bool(true) {
         return match command.as_str() {
             "initialize" | "launch" | "attach" => {
-                // The adapter's words, stripped of anything that could drive
-                // the terminal they are about to be drawn on.
-                // The readable text is the error's `format` where the
-                // adapter sent one; `message` is often only a short code.
-                let why = printable(
-                    message["body"]["error"]["format"]
-                        .as_str()
-                        .or(message["message"].as_str())
-                        .unwrap_or(&command),
-                );
+                let why = adapter_error(message, &command);
                 end(next);
                 next.refusal = Some(Refusal::LaunchFailed(why.clone()));
                 // And in the status line, for the reason `gone` says it twice.
@@ -734,11 +792,29 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
                 session.pausing = false;
                 Vec::new()
             }
+            // The adapter's reason, kept against the Watch that asked: a
+            // Watch that silently showed nothing is a Watch the reader reads
+            // as false rather than as unanswerable.
+            "evaluate" => {
+                let why = adapter_error(message, &command);
+                if let Some(watch) = watch_asked(next, &arguments) {
+                    watch.answer = Answer::Failed(why);
+                }
+                Vec::new()
+            }
+            // Said out loud, for the reason a launch that failed is: a value
+            // the program would not take and nothing on screen to say so is
+            // a set that looks as though it worked.
+            "setVariable" => {
+                next.refusal = Some(Refusal::SetValueFailed(adapter_error(message, &command)));
+                Vec::new()
+            }
             _ => Vec::new(),
         };
     }
     match command.as_str() {
         "initialize" => {
+            session.can_set = message["body"]["supportsSetVariable"] == Value::Bool(true);
             session.phase = Phase::Starting;
             let (request, args) = (session.request.clone(), session.args.clone());
             vec![ask(session, &request, Value::Object(args))]
@@ -779,6 +855,7 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
             let Phase::Paused(pause) = &mut session.phase else {
                 return Vec::new();
             };
+            let reference = arguments["variablesReference"].as_i64().unwrap_or_default();
             let held = pause.children.entry(reference).or_default();
             held.extend(members);
             let fetched = held.len();
@@ -811,6 +888,39 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
                 .into_iter()
                 .map(|(reference, indexed)| fetch(session, reference, paged(indexed, 0)))
                 .collect()
+        }
+        // A Watch's value, filed under the expression that asked for it.
+        "evaluate" => {
+            let value = printable(message["body"]["result"].as_str().unwrap_or_default());
+            if let Some(watch) = watch_asked(next, &arguments) {
+                watch.answer = Answer::Value(value);
+            }
+            Vec::new()
+        }
+        // The adapter's new value replaces the row's, rather than Varde
+        // assuming what it wrote: an adapter is free to coerce what it was
+        // given, and the row has to show what the program now holds.
+        // Filed against the member the request named, in the container it
+        // named: matching on the name alone rewrites every `id` in the tree,
+        // and reading the selection back would file the answer wherever the
+        // keyboard has got to since.
+        "setVariable" => {
+            let value = printable(message["body"]["value"].as_str().unwrap_or_default());
+            let reference = arguments["variablesReference"].as_i64().unwrap_or_default();
+            let name = arguments["name"].as_str().unwrap_or_default();
+            let Some(Phase::Paused(pause)) = next.debug.as_mut().map(|s| &mut s.phase) else {
+                return Vec::new();
+            };
+            let held = match pause.children.get_mut(&reference) {
+                Some(held) => held,
+                // A member of a scope rather than of an opened row: the
+                // scopes are the one list that is not under a reference.
+                None => &mut pause.scopes,
+            };
+            if let Some(member) = held.iter_mut().find(|member| member.name == name) {
+                member.value = value;
+            }
+            Vec::new()
         }
         "threads" if session.pausing => {
             session.pausing = false;
@@ -864,6 +974,17 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
             next.corner = layout::Corner::Frames;
             next.strip = layout::Group::Debug;
             vec![effect]
+        }
+        // An adapter may learn what it can do after `initialize` answered —
+        // a language plugin loading, a program attached to — and says so with
+        // this event. Read into the same field the initialize reply sets, so
+        // the set-value Chip has one author.
+        Some("capabilities") => {
+            let session = next.debug.as_mut().expect("a session");
+            if let Some(can_set) = body["capabilities"]["supportsSetVariable"].as_bool() {
+                session.can_set = can_set;
+            }
+            Vec::new()
         }
         Some("continued") => {
             let session = next.debug.as_mut().expect("a session");
@@ -1089,10 +1210,32 @@ pub fn frames(state: &State) -> &[Frame] {
 /// one did, then the scopes, and under each open row the children that have
 /// arrived — the tree flattened to what is open, and nothing that is not.
 pub fn variables(state: &State) -> Vec<Row> {
+    let mut rows: Vec<Row> = state
+        .watches
+        .iter()
+        .enumerate()
+        .map(|(index, watch)| Row {
+            name: watch.expression.clone(),
+            value: match &watch.answer {
+                Answer::Waiting => String::new(),
+                Answer::Value(value) | Answer::Failed(value) => value.clone(),
+            },
+            depth: 0,
+            hint: Hint::Plain,
+            open: false,
+            opens: Opens::Nothing,
+            expression: watch.expression.clone(),
+            parent: 0,
+            of: Of::Watch {
+                index,
+                calling: calls(state, &watch.expression),
+                failed: matches!(watch.answer, Answer::Failed(_)),
+            },
+        })
+        .collect();
     let Some(pause) = showing(state) else {
-        return Vec::new();
+        return rows;
     };
-    let mut rows = Vec::new();
     if let Some(text) = &pause.exception {
         rows.push(Row {
             name: "exception".to_string(),
@@ -1101,12 +1244,32 @@ pub fn variables(state: &State) -> Vec<Row> {
             hint: Hint::Plain,
             open: false,
             opens: Opens::Nothing,
+            expression: String::new(),
+            parent: 0,
+            of: Of::Member,
         });
     }
     for scope in &pause.scopes {
-        draw(pause, scope, 0, &mut Vec::new(), &mut rows);
+        draw(pause, scope, 0, "", &mut Vec::new(), &mut rows);
     }
     rows
+}
+
+/// Whether an expression calls something, read off the same syntax `ui`
+/// colours the editor with — never by handing it to the adapter to try, which
+/// is the call the mark exists to warn about. The language is the one the
+/// Paused Frame is in, since a Watch is written in the program's language and
+/// `f(x)` is a call in some of them and an index in others.
+fn calls(state: &State, expression: &str) -> bool {
+    let named = paused_line(state)
+        .and_then(|(file, _, _)| file.file_name())
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or_default()
+        .to_string();
+    crate::highlight::highlight(&named, expression)
+        .into_iter()
+        .flatten()
+        .any(|token| token.kind == crate::highlight::Kind::Function)
 }
 
 /// One member and, while it is open, everything under it — then the row that
@@ -1116,10 +1279,23 @@ pub fn variables(state: &State) -> Vec<Row> {
 /// not opened again: the references are the adapter's, which is untrusted
 /// input, and one that holds itself would otherwise be a structure the reader
 /// could open into a stack overflow.
-fn draw(pause: &Pause, member: &Member, depth: usize, walked: &mut Vec<i64>, rows: &mut Vec<Row>) {
+fn draw(
+    pause: &Pause,
+    member: &Member,
+    depth: usize,
+    path: &str,
+    walked: &mut Vec<i64>,
+    rows: &mut Vec<Row>,
+) {
     let open = member.reference != 0
         && pause.open.contains(&member.reference)
         && !walked.contains(&member.reference);
+    // A scope is a heading rather than a name the program knows, so it has no
+    // expression of its own and its members start from theirs.
+    let expression = match depth {
+        0 => String::new(),
+        _ => joined(path, &member.name),
+    };
     rows.push(Row {
         name: member.name.clone(),
         value: member.value.clone(),
@@ -1133,13 +1309,16 @@ fn draw(pause: &Pause, member: &Member, depth: usize, walked: &mut Vec<i64>, row
                 indexed: member.indexed,
             },
         },
+        expression: expression.clone(),
+        parent: walked.last().copied().unwrap_or_default(),
+        of: Of::Member,
     });
     if !open {
         return;
     }
     walked.push(member.reference);
     for child in pause.children.get(&member.reference).into_iter().flatten() {
-        draw(pause, child, depth + 1, walked, rows);
+        draw(pause, child, depth + 1, &expression, walked, rows);
     }
     walked.pop();
     let fetched = pause
@@ -1158,8 +1337,171 @@ fn draw(pause: &Pause, member: &Member, depth: usize, walked: &mut Vec<i64>, row
                 reference: member.reference,
                 start: fetched,
             },
+            expression: String::new(),
+            parent: member.reference,
+            of: Of::Member,
         });
     }
+}
+
+/// The row the keyboard is on in the Variables, if it names one.
+pub fn row(state: &State) -> Option<Row> {
+    variables(state).into_iter().nth(state.variables_selection)
+}
+
+/// The Chips the row at `index` carries: its own actions, and only on the row
+/// the keyboard is on — a pane drawing every row's actions is a pane of
+/// icons with one row's worth of meaning.
+///
+/// Dimmed, never hidden, so the reader learns the action exists and why it
+/// cannot run here: setting a value needs an adapter that said it can, and
+/// the last two are issues #60 and #70 — a Chip teaching a key nobody bound
+/// is the cheatsheet contract broken from the other end.
+pub fn row_chips(state: &State, index: usize) -> Vec<crate::Chip> {
+    use crate::{Chip, Hue, Tone};
+    // The cheap question first: `ui` asks this of every row it draws, and
+    // flattening the tree per row is the pane's whole cost squared.
+    if index != state.variables_selection {
+        return Vec::new();
+    }
+    let Some(row) = variables(state).into_iter().nth(index) else {
+        return Vec::new();
+    };
+    let chip = |action, name, glyph: &str, keys, hue, dimmed| Chip {
+        action,
+        name,
+        glyph: glyph.to_string(),
+        keys,
+        hue,
+        tone: match dimmed {
+            true => Tone::Dimmed,
+            false => Tone::Plain,
+        },
+    };
+    // A scope is a heading, and the row that stands for a collection's next
+    // page is a place in the list — neither is a member the program could be
+    // asked about, so what acts on a member is dimmed on both. `parent` is
+    // the container `setVariable` writes into and `expression` is what a
+    // Watch would carry: a row with neither is a row those two cannot act on.
+    let nothing_to_write = row.parent == 0;
+    let nothing_to_watch = row.expression.is_empty();
+    let cannot_set =
+        nothing_to_write || !state.debug.as_ref().is_some_and(|session| session.can_set);
+    vec![
+        chip(
+            SET_VALUE,
+            "set-value",
+            "\u{270e}",
+            "s",
+            Hue::Step,
+            cannot_set,
+        ),
+        chip(COPY_VALUE, "copy", "\u{29c9}", "y", Hue::Plain, false),
+        match row.of {
+            Of::Watch { .. } => chip(
+                REMOVE_WATCH,
+                "remove-watch",
+                "\u{2715}",
+                "d",
+                Hue::Halt,
+                false,
+            ),
+            Of::Member => chip(WATCH, "watch", "\u{25c9}", "w", Hue::Go, nothing_to_watch),
+        },
+        chip(EVALUATE, "evaluate", "\u{2261}", "", Hue::Plain, true),
+        chip(ROW_ASK_AI, "ask-ai", "\u{2736}", "", Hue::Plain, true),
+    ]
+}
+
+/// The watch Chip on a member's row, and a Watch typed into the box the `a`
+/// key opens: the expression joins the Watches and is evaluated at the next
+/// pause — and at this one, if the program is stopped, since a Watch added
+/// while Paused with nothing to show is a Watch that looks broken.
+pub fn add_watch(next: &mut State, expression: String) -> Vec<Effect> {
+    if expression.is_empty() || next.watches.iter().any(|w| w.expression == expression) {
+        return Vec::new();
+    }
+    next.watches.push(Watch {
+        expression: expression.clone(),
+        answer: Answer::Waiting,
+    });
+    // Only the one just added: the Watches above it have been answered for
+    // this pause already, and asking for all of them again would blank every
+    // value on screen because somebody added a sixth.
+    evaluate(next, &[expression])
+}
+
+/// The remove-watch Chip on a Watch's row.
+pub fn remove_watch(next: &mut State, index: usize) {
+    if index < next.watches.len() {
+        next.watches.remove(index);
+    }
+}
+
+/// One `evaluate` per Watch, in the protocol's `watch` context and against
+/// the Frame being inspected — asked at every pause and again whenever
+/// another Frame is chosen, since the same expression means something else
+/// one call up. Nothing at all while the program runs: an adapter asked to
+/// evaluate in a Frame that is no longer stopped answers with an error.
+fn evaluate_watches(next: &mut State) -> Vec<Effect> {
+    let watches: Vec<String> = next
+        .watches
+        .iter()
+        .map(|watch| watch.expression.clone())
+        .collect();
+    // Every answer goes back to waiting first: they are about the pause that
+    // has just ended, and a value left standing under a new pause is a value
+    // the reader has no way to tell is stale.
+    for watch in next.watches.iter_mut() {
+        watch.answer = Answer::Waiting;
+    }
+    evaluate(next, &watches)
+}
+
+/// The `evaluate` requests for `watches`, or none at all while the program is
+/// not stopped in a Frame to evaluate them in: an adapter asked to evaluate
+/// in a Frame that is running answers with an error.
+fn evaluate(next: &mut State, watches: &[String]) -> Vec<Effect> {
+    let Some(session) = next.debug.as_mut() else {
+        return Vec::new();
+    };
+    let Phase::Paused(pause) = &session.phase else {
+        return Vec::new();
+    };
+    let Some(frame) = pause.frames.get(pause.chosen) else {
+        return Vec::new();
+    };
+    let id = frame.id;
+    watches
+        .iter()
+        .map(|expression| {
+            ask(
+                session,
+                "evaluate",
+                json!({ "expression": expression, "frameId": id, "context": "watch" }),
+            )
+        })
+        .collect()
+}
+
+/// The text typed into the row's box, sent to the adapter exactly as it was
+/// written: it is an expression in the program's language, which Varde does
+/// not parse and must not rewrite. Refused by the capability rather than by
+/// trying it, which is what the dimmed Chip already says.
+pub fn set_value(next: &mut State, value: String) -> Vec<Effect> {
+    let Some(row) = row(next) else {
+        return Vec::new();
+    };
+    let name = row.name.clone();
+    let parent = row.parent;
+    let Some(session) = next.debug.as_mut().filter(|session| session.can_set) else {
+        return Vec::new();
+    };
+    vec![ask(
+        session,
+        "setVariable",
+        json!({ "variablesReference": parent, "name": name, "value": value }),
+    )]
 }
 
 /// Enter on a Variables row, and a click on one: a member with children is
@@ -1195,6 +1537,18 @@ pub fn open(next: &mut State, index: usize) -> Vec<Effect> {
         // A next-page row exists only over a collection that is being read a
         // page at a time, so where it carries on from is the page to ask for.
         Opens::NextPage { reference, start } => vec![fetch(session, reference, Some(start))],
+    }
+}
+
+/// A member's expression under whatever holds it: an indexed member carries
+/// on from its container's own spelling, so `orders` and `[0]` read as
+/// `orders[0]`, and anything else is reached through a dot. A scope has no
+/// expression at all, so its members start from their own names.
+fn joined(path: &str, name: &str) -> String {
+    match (path.is_empty(), name.starts_with('[')) {
+        (true, _) => name.to_string(),
+        (false, true) => format!("{path}{name}"),
+        (false, false) => format!("{path}.{name}"),
     }
 }
 
@@ -1277,6 +1631,10 @@ fn inspect(next: &mut State) -> Vec<Effect> {
         let id = frame.id;
         effects.push(ask(session, "scopes", json!({ "frameId": id })));
     }
+    // The Watches with them: the same question asked of the same Frame, so
+    // they go where the scopes go rather than at the `stopped` event, which
+    // has no Frame to evaluate in yet.
+    effects.extend(evaluate_watches(next));
     effects
 }
 
@@ -1315,6 +1673,28 @@ fn end(next: &mut State) {
     }
 }
 
+/// The Watch an `evaluate` was sent for, found by the expression the request
+/// carried rather than by whichever row the keyboard has reached since.
+fn watch_asked<'a>(next: &'a mut State, arguments: &Value) -> Option<&'a mut Watch> {
+    let expression = arguments["expression"].as_str()?;
+    next.watches
+        .iter_mut()
+        .find(|watch| watch.expression == expression)
+}
+
+/// Why the adapter refused, in its own words and stripped of anything that
+/// could drive the terminal they are about to be drawn on. The readable text
+/// is the error's `format` where the adapter sent one; `message` is often
+/// only a short code, and the command it answered is the last resort.
+fn adapter_error(message: &Value, command: &str) -> String {
+    printable(
+        message["body"]["error"]["format"]
+            .as_str()
+            .or(message["message"].as_str())
+            .unwrap_or(command),
+    )
+}
+
 /// The adapter's words with nothing left in them that could drive the
 /// terminal they are about to be drawn on.
 fn printable(text: &str) -> String {
@@ -1326,14 +1706,14 @@ fn printable(text: &str) -> String {
 /// One request, numbered and remembered until its answer arrives.
 fn ask(session: &mut Session, command: &str, arguments: Value) -> Effect {
     session.seq += 1;
-    // Read off the request rather than passed beside it: the two could then
-    // name different references, and the answer would be filed under the one
-    // nobody asked.
+    // The request itself rather than a copy of the parts of it somebody
+    // expected to need: the two could then say different things, and the
+    // answer would be filed under the question nobody asked.
     session.asked.insert(
         session.seq,
         Ask {
             command: command.to_string(),
-            reference: arguments["variablesReference"].as_i64().unwrap_or_default(),
+            arguments: arguments.clone(),
         },
     );
     Effect::DapSend {
@@ -1419,6 +1799,161 @@ pub(crate) fn paused(mut state: State) -> State {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// The route a real adapter takes to the set-value capability: its
+    /// `initialize` reply, which no scenario drives because every scenario
+    /// reaches the same field through the `capabilities` event. Both write
+    /// the one field, so the Chip cannot be dimmed by one and lit by the
+    /// other.
+    #[test]
+    fn the_initialize_reply_is_where_the_set_value_capability_comes_from() {
+        let plain = paused(State::default());
+        assert!(!plain.debug.as_ref().expect("a session").can_set);
+        let mut can = State::default();
+        can.adapters.insert(
+            "rust".to_string(),
+            crate::startup::Adapter {
+                command: "adapter".to_string(),
+                args: Vec::new(),
+                install: BTreeMap::new(),
+            },
+        );
+        can.launches.insert(
+            "app".to_string(),
+            crate::startup::Launch {
+                adapter: "rust".to_string(),
+                request: "launch".to_string(),
+                args: serde_json::Map::new(),
+            },
+        );
+        start(&mut can, "app");
+        started(&mut can);
+        let seq = outstanding(&can, "initialize");
+        received(
+            &mut can,
+            &json!({"type": "response", "request_seq": seq, "success": true,
+                "command": "initialize", "body": {"supportsSetVariable": true}})
+            .to_string(),
+        );
+        assert!(can.debug.as_ref().expect("a session").can_set);
+        // And the event may take it away again, which is the same field.
+        received(
+            &mut can,
+            r#"{"type":"event","event":"capabilities","body":{"capabilities":{"supportsSetVariable":false}}}"#,
+        );
+        assert!(!can.debug.as_ref().expect("a session").can_set);
+    }
+
+    /// A Watch typed rather than taken off a row — the `a` key's box, which
+    /// is the half of "added from a row or typed" no scenario drives. The
+    /// same `add_watch` either way, so a Watch typed twice is still one.
+    #[test]
+    fn a_typed_watch_joins_the_watches_once() {
+        let mut state = State::default();
+        add_watch(&mut state, "orders.len()".to_string());
+        add_watch(&mut state, "orders.len()".to_string());
+        add_watch(&mut state, String::new());
+        assert_eq!(
+            state
+                .watches
+                .iter()
+                .map(|watch| watch.expression.as_str())
+                .collect::<Vec<&str>>(),
+            ["orders.len()"]
+        );
+        remove_watch(&mut state, 5);
+        assert_eq!(state.watches.len(), 1);
+        remove_watch(&mut state, 0);
+        assert!(state.watches.is_empty());
+    }
+
+    /// The bug this closes: the answer used to be filed against whichever row
+    /// the keyboard had reached by the time it arrived, and then against
+    /// every member of that name anywhere in the tree — so setting
+    /// `first.count` rewrote `second.count` too. No scenario reaches it,
+    /// because `variables.feature` sets a member of the one flat scope.
+    #[test]
+    fn a_set_value_is_filed_against_the_member_that_was_written() {
+        let mut state = paused(State::default());
+        state.debug.as_mut().expect("a session").can_set = true;
+        let seq = outstanding(&state, "scopes");
+        received(
+            &mut state,
+            &json!({"type": "response", "request_seq": seq, "success": true, "command": "scopes",
+                "body": {"scopes": [{"name": "Locals", "variablesReference": 1}]}})
+            .to_string(),
+        );
+        let seq = outstanding(&state, "variables");
+        received(
+            &mut state,
+            &json!({"type": "response", "request_seq": seq, "success": true, "command": "variables",
+                "body": {"variables": [
+                    {"name": "first", "value": "…", "variablesReference": 2},
+                    {"name": "second", "value": "…", "variablesReference": 3},
+                    {"name": "other", "value": "7", "variablesReference": 0}]}})
+            .to_string(),
+        );
+        // Both structs opened, each holding a member called `count`.
+        for (row, reference) in [(1, 2), (3, 3)] {
+            open(&mut state, row);
+            let seq = outstanding(&state, "variables");
+            received(
+                &mut state,
+                &json!({"type": "response", "request_seq": seq, "success": true,
+                    "command": "variables", "body": {"variables":
+                        [{"name": "count", "value": "0", "variablesReference": 0}]}})
+                .to_string(),
+            );
+            assert_eq!(
+                variables(&state)[row].opens,
+                Opens::Children {
+                    reference,
+                    indexed: 0
+                }
+            );
+        }
+        // The first struct's `count` is written, and then the selection moves
+        // away before the answer lands — which is what used to decide it.
+        state.variables_selection = 2;
+        let effects = set_value(&mut state, "9".to_string());
+        assert_eq!(effects.len(), 1, "one setVariable");
+        // Onto a row of another name entirely, which is what the selection
+        // read at reply time would have written instead.
+        state.variables_selection = 5;
+        let seq = outstanding(&state, "setVariable");
+        received(
+            &mut state,
+            &json!({"type": "response", "request_seq": seq, "success": true,
+                "command": "setVariable", "body": {"value": "9"}})
+            .to_string(),
+        );
+        let written: Vec<(String, String)> = variables(&state)
+            .into_iter()
+            .map(|row| (row.expression, row.value))
+            .collect();
+        assert_eq!(
+            written,
+            [
+                // The scope heading, which has a name and no value.
+                (String::new(), String::new()),
+                ("first".to_string(), "…".to_string()),
+                ("first.count".to_string(), "9".to_string()),
+                ("second".to_string(), "…".to_string()),
+                ("second.count".to_string(), "0".to_string()),
+                ("other".to_string(), "7".to_string()),
+            ]
+        );
+    }
+
+    /// A member's expression is the path a reader could type: an index
+    /// carries on from its container, a field is reached through a dot, and a
+    /// scope is neither — it is a heading the program does not know.
+    #[test]
+    fn an_expression_is_the_path_to_the_member() {
+        assert_eq!(joined("", "orders"), "orders");
+        assert_eq!(joined("orders", "[0]"), "orders[0]");
+        assert_eq!(joined("orders[0]", "id"), "orders[0].id");
+    }
 
     fn on(line: usize, text: &str) -> Breakpoint {
         Breakpoint {

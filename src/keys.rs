@@ -652,7 +652,11 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
             }
         }
         Modal::Comment => comment_picker(drafts, event),
-        Modal::NameBox { .. } => name_box(drafts, event),
+        // The same box, three uses: a file's name, a Variables row's new
+        // value and a new Watch. One routing arm because the typing is
+        // identical — Enter is where they part, and that is `update`'s to
+        // tell from the modal it is in.
+        Modal::NameBox { .. } | Modal::SetValue | Modal::NewWatch => name_box(drafts, event),
         Modal::Candidates(_) => candidate_list(state, drafts, event),
         // Two keys, and everything else goes on to the buffer: typing at a tab
         // stop is ordinary typing, so this passes keys through for the same
@@ -732,6 +736,8 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         Modal::Restart => yes_no(Event::Restart, event),
         Modal::None
         | Modal::NameBox { .. }
+        | Modal::SetValue
+        | Modal::NewWatch
         | Modal::Palette
         | Modal::Chord
         | Modal::Tools { .. }

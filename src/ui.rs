@@ -225,7 +225,7 @@ pub fn draw(
         }
         layout::Group::Debug => {
             frame.render_widget(
-                variables_widget(state, areas.panes.terminal.width),
+                variables_widget(state, areas.panes.terminal.width, chrome.name_draft),
                 rect(areas.panes.terminal),
             );
             // Zero-width while it is hidden, so there is nothing to draw and
@@ -444,6 +444,9 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
             "NAME",
             vec![Line::from(chrome.name_draft.to_string())],
         ),
+        // Drawn by `variables_lines`, in the row being acted on: an overlay
+        // would cover the very row whose value is being written.
+        Modal::SetValue | Modal::NewWatch => {}
         Modal::Comment => overlay(frame, "COMMENT", comment_lines(state, chrome)),
         Modal::ConfirmSubmit => overlay(
             frame,
@@ -935,8 +938,8 @@ fn frames_lines(state: &State, width: u16) -> Vec<Line<'static>> {
 
 /// The Variables of the chosen Frame, in the Strip's Debug group. Its title
 /// says which of the two it is drawing: this pause, or the last one.
-fn variables_widget(state: &State, width: u16) -> Paragraph<'static> {
-    let widget = Paragraph::new(variables_lines(state, width))
+fn variables_widget(state: &State, width: u16, draft: &str) -> Paragraph<'static> {
+    let widget = Paragraph::new(variables_lines(state, width, draft))
         .scroll((state.variables_scroll as u16, 0))
         .block(pane_block(
             varde::debug::title(state),
@@ -950,7 +953,7 @@ fn variables_widget(state: &State, width: u16) -> Paragraph<'static> {
 /// per member the tree has open: its depth as indentation, whether it opens,
 /// its name, what the adapter's presentation hint says about it, and its
 /// value.
-fn variables_lines(state: &State, width: u16) -> Vec<Line<'static>> {
+fn variables_lines(state: &State, width: u16, draft: &str) -> Vec<Line<'static>> {
     let inner = width.saturating_sub(2) as usize;
     varde::debug::variables(state)
         .into_iter()
@@ -960,6 +963,24 @@ fn variables_lines(state: &State, width: u16) -> Vec<Line<'static>> {
                 true => Style::default().add_modifier(Modifier::REVERSED),
                 false => Style::default(),
             };
+            // The box is the row: what is being typed stands where the value
+            // or the new Watch will, so the eye never leaves the row it is
+            // acting on.
+            if index == state.variables_selection {
+                if let Some(box_name) = match state.modal {
+                    Modal::SetValue => Some(row.name.as_str()),
+                    Modal::NewWatch => Some("watch"),
+                    _ => None,
+                } {
+                    return Line::from(vec![
+                        Span::styled(format!(" {box_name} "), style),
+                        Span::styled(
+                            truncate(draft, inner.saturating_sub(box_name.width() + 2)),
+                            Style::default().add_modifier(Modifier::UNDERLINED),
+                        ),
+                    ]);
+                }
+            }
             let marker = match (row.opens, row.open) {
                 (varde::debug::Opens::Nothing, _) => "  ",
                 (_, true) => "\u{25be} ",
@@ -969,15 +990,47 @@ fn variables_lines(state: &State, width: u16) -> Vec<Line<'static>> {
                 varde::debug::Hint::Plain => String::new(),
                 hint => format!(" {}", hint.as_str()),
             };
-            let name = format!(" {}{marker}{}{hint}", " ".repeat(row.depth * 2), row.name);
-            let room = inner.saturating_sub(name.width().min(inner));
-            Line::from(vec![
+            let mark = match row.of {
+                // A Watch that calls something runs that call again at every
+                // pause, which is the one thing about a Watch a reader has to
+                // be told before they add it.
+                varde::debug::Of::Watch { calling: true, .. } => " calls",
+                _ => "",
+            };
+            let name = format!(
+                " {}{marker}{}{hint}{mark}",
+                " ".repeat(row.depth * 2),
+                row.name
+            );
+            let chips = varde::debug::row_chips(state, index);
+            let room = inner
+                .saturating_sub(name.width().min(inner))
+                .saturating_sub(chips.len() * 2);
+            let mut spans = vec![
                 Span::styled(truncate(&name, inner), style),
+                // Padded to the columns left over, so the Chips sit hard
+                // against the right-hand border — the very columns
+                // `mouse::icon_at` hit-tests them from.
                 Span::styled(
-                    format!(" {}", truncate(&row.value, room.saturating_sub(1))),
-                    style.fg(Color::DarkGray),
+                    format!(
+                        " {:<pad$}",
+                        truncate(&row.value, room.saturating_sub(1)),
+                        pad = room.saturating_sub(1)
+                    ),
+                    style.fg(match row.of {
+                        varde::debug::Of::Watch { failed: true, .. } => WARNING,
+                        _ => Color::DarkGray,
+                    }),
                 ),
-            ])
+            ];
+            for (at, chip) in chips.iter().enumerate() {
+                spans.push(Span::styled(
+                    chip.glyph.clone(),
+                    chip_style(state, chip, state.selected_action == Some(at)),
+                ));
+                spans.push(Span::raw(" "));
+            }
+            Line::from(spans)
         })
         .collect()
 }
@@ -2523,6 +2576,7 @@ fn refusal_spans(state: &State) -> Vec<Span<'static>> {
         varde::preview::Refusal::NoLastSession => {
             " nothing to restart — start a launch configuration first ".to_string()
         }
+        varde::preview::Refusal::SetValueFailed(why) => format!(" could not set: {why} "),
     };
     vec![Span::styled(wording, Style::default().fg(WARNING))]
 }
@@ -2692,6 +2746,28 @@ fn chip_spans(state: &State, chip: &varde::Chip, label: String) -> [Span<'static
             Style::default().fg(keys).add_modifier(lift),
         ),
     ]
+}
+
+/// A row's Chip, which is its glyph alone: a row has no room for the keys a
+/// Transport's Chip carries, and the row's keys are in the cheatsheet. Dimmed
+/// says the action cannot run here, and the arrows stepping onto it or the
+/// pointer resting on it lift it, exactly as a Transport's does.
+fn chip_style(state: &State, chip: &varde::Chip, armed: bool) -> Style {
+    if armed || state.hovered_action == Some(chip.action) {
+        return Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+    }
+    match chip.tone {
+        varde::Tone::Dimmed => Style::default().fg(Color::DarkGray),
+        _ => Style::default().fg(match chip.hue {
+            varde::Hue::Go => Color::Green,
+            varde::Hue::Hold => Color::Yellow,
+            varde::Hue::Step => Color::Blue,
+            varde::Hue::Halt => Color::Red,
+            varde::Hue::Plain => Color::Reset,
+        }),
+    }
 }
 
 /// F40. Who last committed the line the cursor is on, and the day they wrote

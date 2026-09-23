@@ -4459,6 +4459,9 @@ fn click_breakpoint_row_chip(world: &mut VardeWorld, chip: String, file: String,
 /// driven as an event, so a Chip nobody could reach with a pointer fails here.
 #[when(expr = "I click the {string} Chip")]
 fn click_chip(world: &mut VardeWorld, chip: String) {
+    if row_chip(world, &chip).is_some() {
+        return click_variables_row_chip(world, &chip);
+    }
     let (area, chips) = match varde::debug::transport(&world.state)
         .iter()
         .any(|offered| offered.name == chip)
@@ -8234,6 +8237,8 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::Candidates(_) => "candidates",
         Modal::Stops { .. } => "stops",
         Modal::Restart => "restart",
+        Modal::SetValue => "set-value",
+        Modal::NewWatch => "new-watch",
     };
     assert_eq!(actual, expected);
 }
@@ -14026,6 +14031,7 @@ fn adapter_event(world: &mut VardeWorld, message: Value) {
 
 /// The stack a thread answers with, unless a scenario gave it one.
 fn stopped_at(world: &mut VardeWorld, thread: i64, file: &str, line: usize, reason: &str) {
+    plant_the_programs_locals(world);
     let path = abs(world, file);
     world
         .dap
@@ -14112,6 +14118,7 @@ fn debug_session_is_running(world: &mut VardeWorld) {
 }
 
 #[given(expr = "a Debug session is Paused at {string} line {int}")]
+#[when(expr = "a Debug session is Paused at {string} line {int}")]
 fn debug_session_is_paused(world: &mut VardeWorld, file: String, line: usize) {
     session_running(world);
     stopped_at(world, 1, &file, line, "breakpoint");
@@ -14557,8 +14564,28 @@ fn plant_member(world: &mut VardeWorld, member: Value) {
     if world.dap.scopes.is_empty() {
         world.dap.scopes.push(("Locals".to_string(), LOCALS));
     }
-    world.dap.members.entry(LOCALS).or_default().push(member);
+    let held = world.dap.members.entry(LOCALS).or_default();
+    // Planted over whatever the pause already had by that name, never beside
+    // it: two rows with one name is a scenario acting on whichever the walk
+    // reached first.
+    held.retain(|already| already["name"] != member["name"]);
+    held.push(member);
     repause(world);
+}
+
+/// The locals of the program every debug Scenario's Background opens on. A
+/// pause has to show something, and a scenario that says "the row `count`"
+/// without planting one means the program's own — the same two names its code
+/// declares.
+fn plant_the_programs_locals(world: &mut VardeWorld) {
+    if !world.dap.scopes.is_empty() {
+        return;
+    }
+    world.dap.scopes.push(("Locals".to_string(), LOCALS));
+    world.dap.members.entry(LOCALS).or_default().extend([
+        json!({ "name": "orders", "value": "[…]" }),
+        json!({ "name": "count", "value": "3" }),
+    ]);
 }
 
 #[given(expr = "the Variables show {string}")]
@@ -15149,12 +15176,42 @@ fn chip_names_the_keys(world: &mut VardeWorld, name: String, step: &Step) {
     assert_eq!(named, expected);
 }
 
-/// The Chip that says what pressing it does, found by that name.
+/// The Chip that says what pressing it does, found by that name — on the
+/// Variables' Transport, or on the row the keyboard is on, since both are
+/// Chips and a scenario names one by what pressing it does.
 fn chip(world: &VardeWorld, name: &str) -> varde::Chip {
-    varde::debug::strip_transport(&world.state)
+    row_chip(world, name)
+        .or_else(|| {
+            varde::debug::strip_transport(&world.state)
+                .into_iter()
+                .find(|offered| offered.name == name)
+        })
+        .unwrap_or_else(|| panic!("no {name:?} Chip"))
+}
+
+/// The named Chip on the Variables row the keyboard is on, if it carries one.
+fn row_chip(world: &VardeWorld, name: &str) -> Option<varde::Chip> {
+    varde::debug::row_chips(&world.state, world.state.variables_selection)
         .into_iter()
         .find(|offered| offered.name == name)
-        .unwrap_or_else(|| panic!("no {name:?} Chip"))
+}
+
+/// Through the hit-test, on the row's own line and at the columns `ui` draws
+/// the Chips into — never driven as an event, so a Chip no pointer could
+/// reach fails here.
+fn click_variables_row_chip(world: &mut VardeWorld, name: &str) {
+    let index = world.state.variables_selection;
+    let chips = varde::debug::row_chips(&world.state, index);
+    let at = chips
+        .iter()
+        .position(|offered| offered.name == name)
+        .unwrap_or_else(|| panic!("no {name:?} Chip on the row"));
+    let strip = world.panes().terminal;
+    let row = strip.y + 1 + (index - world.state.variables_scroll) as u16;
+    let column = strip.x + strip.width - 1 - 2 * (chips.len() - at) as u16;
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, row);
+    world.report(mouse::Kind::LeftUp, column, row);
 }
 
 #[then(expr = "the {string} Chip is dimmed")]
@@ -15249,4 +15306,348 @@ fn every_chip_is_drawn_whole(world: &mut VardeWorld) {
             chip.name
         );
     }
+}
+
+// ---- #57: the Variables' row Chips, and the Watches ----
+
+/// The row a scenario names, by the expression that reaches it — `orders[0].id`
+/// rather than the `id` the row is labelled with — falling back to the label,
+/// which is how a scope and the exception row are named.
+fn variables_index(world: &VardeWorld, named: &str) -> usize {
+    let rows = varde::debug::variables(&world.state);
+    rows.iter()
+        .position(|row| row.expression == named)
+        .or_else(|| rows.iter().position(|row| row.name == named))
+        .unwrap_or_else(|| {
+            panic!(
+                "no Variables row {named:?}; rows are {:?}",
+                rows.iter()
+                    .map(|row| row.expression.clone())
+                    .collect::<Vec<String>>()
+            )
+        })
+}
+
+/// By the arrows, from wherever the selection is — the gesture a reader makes,
+/// so a row the motion cannot reach fails here rather than being set into
+/// place behind the keyboard's back.
+#[given(expr = "the Variables selection is the row {string}")]
+#[given(expr = "the Variables selection is the Watch {string}")]
+#[when(expr = "I move the Variables selection to the row {string}")]
+fn variables_selection_is(world: &mut VardeWorld, named: String) {
+    let index = variables_index(world, &named);
+    world.state.focus = Pane::Variables;
+    while world.state.variables_selection > index {
+        world.send(Event::MoveSelection(Direction::Up));
+    }
+    while world.state.variables_selection < index {
+        world.send(Event::MoveSelection(Direction::Down));
+    }
+    assert_eq!(world.state.variables_selection, index);
+}
+
+/// The row's Chips by the names that say what pressing each does, never the
+/// glyphs or the colours, exactly as the Transport's are read.
+#[then(expr = "the row {string} carries the Chips:")]
+fn row_carries_chips(world: &mut VardeWorld, named: String, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("a table of Chips")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let index = variables_index(world, &named);
+    let drawn: Vec<&str> = varde::debug::row_chips(&world.state, index)
+        .iter()
+        .map(|chip| chip.name)
+        .collect();
+    assert_eq!(drawn, expected);
+}
+
+#[then(expr = "the row {string} carries no Chips")]
+fn row_carries_no_chips(world: &mut VardeWorld, named: String) {
+    let index = variables_index(world, &named);
+    assert_eq!(varde::debug::row_chips(&world.state, index), Vec::new());
+}
+
+/// The adapter's own word about itself, as the `capabilities` event carries
+/// it — never assumed, and never found out by trying the request.
+#[given(expr = "the Debug adapter reported it can set variables")]
+#[given(expr = "the Debug adapter reported it cannot set variables")]
+fn adapter_reported_set_variables(world: &mut VardeWorld, step: &Step) {
+    let can = !step.value.contains("cannot");
+    adapter_event(
+        world,
+        json!({
+            "type": "event",
+            "event": "capabilities",
+            "body": { "capabilities": { "supportsSetVariable": can } },
+        }),
+    );
+}
+
+/// Through the box the set-value Chip opens: the key, the characters, Enter —
+/// the gesture a reader makes, so a box that never opened fails here.
+#[given(expr = "I set the value of the row to {string}")]
+#[when(expr = "I set the value of the row to {string}")]
+fn set_the_value_of_the_row(world: &mut VardeWorld, value: String) {
+    world.state.focus = Pane::Variables;
+    route_key(world, "s", 0);
+    assert_eq!(
+        world.state.modal,
+        Modal::SetValue,
+        "the set-value box did not open"
+    );
+    for character in value.chars() {
+        route_key(world, &character.to_string(), 0);
+    }
+    route_key(world, "Enter", 0);
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for {string} with the value {string}")]
+fn adapter_sent_set_variable(world: &mut VardeWorld, command: String, name: String, value: String) {
+    let request = last_request(world, &command);
+    assert_eq!(request["arguments"]["name"], json!(name));
+    assert_eq!(request["arguments"]["value"], json!(value));
+}
+
+#[when(expr = "the Debug adapter answers {string} with the value {string}")]
+fn adapter_answers_with_value(world: &mut VardeWorld, command: String, value: String) {
+    let seq = last_request(world, &command)["seq"].clone();
+    adapter_event(
+        world,
+        json!({
+            "type": "response",
+            "request_seq": seq,
+            "success": true,
+            "command": command,
+            "body": { "value": value },
+        }),
+    );
+}
+
+#[given(expr = "the Variables row {string} shows the value {string}")]
+fn variables_row_shows_value(world: &mut VardeWorld, name: String, value: String) {
+    plant_member(world, json!({ "name": name, "value": value }));
+}
+
+#[then(expr = "the Variables row {string} shows the value {string}")]
+fn variables_row_should_show_value(world: &mut VardeWorld, named: String, value: String) {
+    let index = variables_index(world, &named);
+    assert_eq!(varde::debug::variables(&world.state)[index].value, value);
+}
+
+/// A nested row planted and walked open, a level at a time — the members
+/// above it have to exist and be open for the row to be drawn at all.
+#[given(expr = "the Variables row {string} is open")]
+fn variables_row_is_open(world: &mut VardeWorld, path: String) {
+    let names = expression_parts(&path);
+    let mut reference = LOCALS;
+    for (depth, name) in names.iter().enumerate() {
+        let leaf = depth + 1 == names.len();
+        let child = match leaf {
+            true => 0,
+            false => 7000 + depth as i64,
+        };
+        let member = json!({ "name": name, "value": "…", "variablesReference": child });
+        match depth {
+            0 => plant_member(world, member),
+            _ => {
+                world.dap.members.entry(reference).or_default().push(member);
+                repause(world);
+            }
+        }
+        reference = child;
+    }
+    for depth in 1..names.len() {
+        let so_far = names[..depth].iter().fold(String::new(), |path, name| {
+            match (path.is_empty(), name.starts_with('[')) {
+                (true, _) => name.to_string(),
+                (false, true) => format!("{path}{name}"),
+                (false, false) => format!("{path}.{name}"),
+            }
+        });
+        let index = variables_index(world, &so_far);
+        open_variables_row(world, index);
+    }
+}
+
+/// An expression split into the members it walks through: `orders[0].id` is
+/// three of them, and an index is a member of its own.
+fn expression_parts(path: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut held = String::new();
+    for character in path.chars() {
+        match character {
+            '.' => {
+                if !held.is_empty() {
+                    parts.push(std::mem::take(&mut held));
+                }
+            }
+            '[' => {
+                if !held.is_empty() {
+                    parts.push(std::mem::take(&mut held));
+                }
+                held.push('[');
+            }
+            other => held.push(other),
+        }
+    }
+    if !held.is_empty() {
+        parts.push(held);
+    }
+    parts
+}
+
+#[when(expr = "I copy the row as an expression")]
+fn copy_the_row_as_an_expression(world: &mut VardeWorld) {
+    world.state.focus = Pane::Variables;
+    route_key(world, "Y", 0);
+}
+
+/// Through the box `a` opens on the Variables, typed and entered — the other
+/// half of "added from a row or typed", and the gesture a reader makes, so a
+/// box that never opened fails here.
+#[given(expr = "the Watches are {string}")]
+#[given(expr = "the Watches are {string} and {string}")]
+fn the_watches_are(world: &mut VardeWorld, step: &Step) {
+    world.state.focus = Pane::Variables;
+    for expression in step
+        .value
+        .trim_start_matches("Given ")
+        .trim_start_matches("the Watches are ")
+        .split(" and ")
+    {
+        route_key(world, "a", 0);
+        assert_eq!(
+            world.state.modal,
+            Modal::NewWatch,
+            "the Watch box did not open"
+        );
+        for character in expression.trim_matches('"').chars() {
+            route_key(world, &character.to_string(), 0);
+        }
+        route_key(world, "Enter", 0);
+    }
+}
+
+#[then("the Watches are:")]
+fn the_watches_should_be(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("a table of Watches")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let held: Vec<String> = world
+        .state
+        .watches
+        .iter()
+        .map(|watch| watch.expression.clone())
+        .collect();
+    assert_eq!(held, expected);
+}
+
+#[then("the Variables' first rows are the Watches")]
+fn variables_first_rows_are_the_watches(world: &mut VardeWorld) {
+    let expected: Vec<String> = world
+        .state
+        .watches
+        .iter()
+        .map(|watch| watch.expression.clone())
+        .collect();
+    assert!(!expected.is_empty(), "no Watches to be the first rows");
+    let rows = varde::debug::variables(&world.state);
+    let first: Vec<String> = rows
+        .iter()
+        .take(expected.len())
+        .map(|row| row.expression.clone())
+        .collect();
+    assert_eq!(first, expected);
+    assert!(
+        rows.iter()
+            .take(expected.len())
+            .all(|row| matches!(row.of, varde::debug::Of::Watch { .. })),
+        "a first row is not a Watch"
+    );
+}
+
+#[then(
+    expr = "the Debug adapter was sent an {string} request for {string} in the {string} context"
+)]
+fn adapter_sent_evaluate(
+    world: &mut VardeWorld,
+    command: String,
+    expression: String,
+    context: String,
+) {
+    let asked: Vec<&Value> = dap_requests(world, &command)
+        .into_iter()
+        .filter(|message| {
+            message["arguments"]["expression"] == json!(expression)
+                && message["arguments"]["context"] == json!(context)
+        })
+        .collect();
+    assert!(!asked.is_empty(), "sent: {:?}", world.dap.sent);
+}
+
+/// The Watch row, by the expression it holds.
+fn watch_row(world: &VardeWorld, expression: &str) -> varde::debug::Row {
+    varde::debug::variables(&world.state)
+        .into_iter()
+        .find(|row| {
+            matches!(row.of, varde::debug::Of::Watch { .. }) && row.expression == expression
+        })
+        .unwrap_or_else(|| panic!("no Watch row {expression:?}"))
+}
+
+#[then(expr = "the Watch {string} is marked as calling")]
+fn watch_is_marked_as_calling(world: &mut VardeWorld, expression: String) {
+    assert!(matches!(
+        watch_row(world, &expression).of,
+        varde::debug::Of::Watch { calling: true, .. }
+    ));
+}
+
+#[then(expr = "the Watch {string} is not marked as calling")]
+fn watch_is_not_marked_as_calling(world: &mut VardeWorld, expression: String) {
+    assert!(matches!(
+        watch_row(world, &expression).of,
+        varde::debug::Of::Watch { calling: false, .. }
+    ));
+}
+
+#[when(expr = "the Debug adapter answers the {string} for {string} with the error {string}")]
+fn adapter_answers_evaluate_with_error(
+    world: &mut VardeWorld,
+    command: String,
+    expression: String,
+    error: String,
+) {
+    let seq = dap_requests(world, &command)
+        .into_iter()
+        .rev()
+        .find(|message| message["arguments"]["expression"] == json!(expression))
+        .unwrap_or_else(|| panic!("no {command:?} for {expression:?}"))["seq"]
+        .clone();
+    adapter_event(
+        world,
+        json!({
+            "type": "response",
+            "request_seq": seq,
+            "success": false,
+            "command": command,
+            "message": error,
+        }),
+    );
+}
+
+#[then(expr = "the Watch {string} shows an error")]
+fn watch_shows_an_error(world: &mut VardeWorld, expression: String) {
+    assert!(matches!(
+        watch_row(world, &expression).of,
+        varde::debug::Of::Watch { failed: true, .. }
+    ));
 }

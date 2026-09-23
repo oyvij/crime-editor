@@ -360,6 +360,13 @@ pub enum Modal {
     Chord,
     /// Picking the type and body for the selected diff lines.
     Comment,
+    /// A box on the Variables row the keyboard is on, typed in the program's
+    /// language rather than in Varde's: the row's new value, or a Watch being
+    /// written from scratch. Two variants and not a flag, because Enter means
+    /// two different things and a box that had to remember which is a box
+    /// with two authors.
+    SetValue,
+    NewWatch,
     /// Submitting clears whatever the AI's CLI is showing, which can be a
     /// half-written message. It cannot be read back, so it is announced.
     ConfirmSubmit,
@@ -1842,6 +1849,11 @@ pub struct State {
     pub output_paste: keys::Paste,
     /// Every Breakpoint in the workspace, with or without a Debug session.
     pub breakpoints: Vec<debug::Breakpoint>,
+    /// The expressions kept at the top of the Variables, in the order they
+    /// were added. Beside the Breakpoints rather than inside the session for
+    /// the same reason: a Watch is a question about the program, and it
+    /// outlives the session it was first asked in.
+    pub watches: Vec<debug::Watch>,
     pub terminal_mouse: mouse::Encoding,
     /// The terminal strip's shells, side by side, and what each is doing.
     /// Told by the edge — it starts them, watches them exit and asks the OS
@@ -2352,6 +2364,7 @@ impl Default for State {
             strip_height: None,
             strip: layout::Group::Shells,
             breakpoints: Vec::new(),
+            watches: Vec::new(),
             corner: layout::Corner::Hidden,
             risk_all: false,
             risk_selection: 0,
@@ -3370,6 +3383,11 @@ fn on_enter_name(state: &State, mut next: State, event: Event, wheeled: bool) ->
                     Effect::ReadFolder(folder),
                 ]
             }
+            // The box on a Variables row. The text is the program's
+            // language, so it is never parsed here — set as written, and
+            // watched as written.
+            Modal::SetValue => debug::set_value(&mut next, name),
+            Modal::NewWatch => debug::add_watch(&mut next, name),
             _ => vec![],
         },
 
@@ -3604,6 +3622,35 @@ fn on_key_3(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
             Ok(match key {
                 'j' => update(state, Event::MoveSelection(Direction::Down)),
                 _ => update(state, Event::MoveSelection(Direction::Up)),
+            })
+        }
+
+        // The Variables' own keys: `j` and `k` as every list has, and a
+        // letter per row Chip — the Breakpoint list's shape, one pane over.
+        // `Y` is the one action with no Chip of its own: the spec draws five
+        // Chips on a row and copying as an expression is the sixth action, so
+        // it rides the shifted copy key rather than a Chip the row has no
+        // room for. Not in `CHEATSHEET`, for the reason the Breakpoint
+        // list's are not — they answer only while this pane holds the
+        // keyboard, which is where its Chips are on screen naming them.
+        Event::Key(key @ ('j' | 'k' | 's' | 'y' | 'Y' | 'w' | 'd' | 'a'))
+            if state.focus == Pane::Variables && state.modal == Modal::None =>
+        {
+            Ok(match key {
+                'j' => update(state, Event::MoveSelection(Direction::Down)),
+                'k' => update(state, Event::MoveSelection(Direction::Up)),
+                's' => update(state, Event::RowAction(debug::SET_VALUE)),
+                'y' => update(state, Event::RowAction(debug::COPY_VALUE)),
+                'Y' => update(state, Event::RowAction(debug::COPY_EXPRESSION)),
+                'w' => update(state, Event::RowAction(debug::WATCH)),
+                'd' => update(state, Event::RowAction(debug::REMOVE_WATCH)),
+                // The one that needs no row: a Watch typed from scratch is
+                // not about whatever the keyboard happens to be standing on.
+                _ => {
+                    let mut opened = next;
+                    opened.modal = Modal::NewWatch;
+                    (opened, vec![])
+                }
             })
         }
 
@@ -8351,6 +8398,46 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
         // run on a row is not the deliberate "take me there" that Enter on the
         // row itself is.
         Event::RowAction(history::GO_TO) => return Ok(history::go(state, next)),
+        // The Variables' row Chips, each straight through to what its key
+        // does, for the reason the Transport's are one event: a click and a
+        // key are one gesture. `evaluate` and `ask-ai` are dimmed — issues
+        // #60 and #70 — and a dimmed Chip does nothing, so neither has an arm
+        // and a name from nowhere does nothing rather than guessing.
+        Event::RowAction(debug::SET_VALUE) => {
+            // Read off the Chip itself rather than re-deciding: a dimmed Chip
+            // does nothing, and a box that opened over an adapter that will
+            // not take the value is a box that refuses at Enter.
+            let settable = debug::row_chips(state, state.variables_selection)
+                .iter()
+                .any(|chip| chip.action == debug::SET_VALUE && chip.tone != Tone::Dimmed);
+            if settable {
+                next.modal = Modal::SetValue;
+            }
+            vec![]
+        }
+        // Dimmed, so they do nothing — the Evaluator is issue #60 and asking
+        // the AI about one value is #70. Arms rather than a fall-through,
+        // because `Event::RowAction` has no catch-all: every name it carries
+        // is one some pane offers.
+        Event::RowAction(debug::EVALUATE | debug::ROW_ASK_AI) => vec![],
+        Event::RowAction(debug::COPY_VALUE) => match debug::row(state) {
+            Some(row) => to_clipboard(state, row.value),
+            None => vec![],
+        },
+        Event::RowAction(debug::COPY_EXPRESSION) => match debug::row(state) {
+            Some(row) => to_clipboard(state, row.expression),
+            None => vec![],
+        },
+        Event::RowAction(debug::WATCH) => match debug::row(state) {
+            Some(row) => debug::add_watch(&mut next, row.expression),
+            None => vec![],
+        },
+        Event::RowAction(debug::REMOVE_WATCH) => {
+            if let Some(debug::Of::Watch { index, .. }) = debug::row(state).map(|row| row.of) {
+                debug::remove_watch(&mut next, index);
+            }
+            vec![]
+        }
         Event::RowAction(debug::REMOVE) => match debug::selected(state).cloned() {
             Some(gone) => {
                 next.breakpoints.retain(|breakpoint| *breakpoint != gone);
@@ -8958,6 +9045,15 @@ fn selected_row_actions(state: &State) -> Vec<&'static str> {
     }
     if state.focus == Pane::Breakpoints {
         return debug::row_actions(state);
+    }
+    // The one pane whose row actions are Chips rather than bare icons: the
+    // names come off the Chips so the arrows, the click and the renderer read
+    // one list, and only the dimming is `ui`'s to draw.
+    if state.focus == Pane::Variables {
+        return debug::row_chips(state, state.variables_selection)
+            .into_iter()
+            .map(|chip| chip.action)
+            .collect();
     }
     match state.tree_selection.as_deref() {
         Some(path) => tree::row_actions(state, path),

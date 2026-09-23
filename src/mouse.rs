@@ -632,12 +632,20 @@ fn pressed(state: &State, panes: &Layout, pane: Pane, input: Input) -> Vec<Event
             }
         }
         // A Variables row, through the Strip's rectangle and the Variables'
-        // own scroll offset — the Frames' hit-test, one pane over.
+        // own scroll offset — the Frames' hit-test, one pane over. Its Chips
+        // first, for the reason the Breakpoint list's row icons come before
+        // its rows: an icon is on the row, so a row that answered first would
+        // open the tree instead of acting on it.
         (Pane::Variables, _) => {
             let index = list_row(panes.terminal, input.row, state.variables_scroll);
             let on_a_row = input.row > panes.terminal.y
                 && input.row < panes.terminal.bottom().saturating_sub(1)
                 && index < crate::debug::variables(state).len();
+            if on_a_row {
+                if let Some(action) = variables_chip_at(state, panes, input.column, index) {
+                    return vec![Event::RowAction(action)];
+                }
+            }
             match on_a_row {
                 true => vec![Event::ClickVariablesRow(index)],
                 false => vec![Event::ClickPane(Pane::Variables)],
@@ -1292,6 +1300,13 @@ fn action_under(state: &State, panes: &Layout, input: Input) -> Option<&'static 
             let index = list_row(panes.corner, input.row, state.breakpoints_scroll);
             breakpoint_action_at(state, panes, input.column, index)
         }
+        Pane::Variables
+            if input.row > panes.terminal.y
+                && input.row < panes.terminal.bottom().saturating_sub(1) =>
+        {
+            let index = list_row(panes.terminal, input.row, state.variables_scroll);
+            variables_chip_at(state, panes, input.column, index)
+        }
         _ => None,
     }
 }
@@ -1346,6 +1361,22 @@ fn breakpoint_action_at(
         return None;
     }
     icon_at(&crate::debug::row_actions(state), panes.corner, column)
+}
+
+/// Which Chip of the Variables' focused row sits under the pointer. Only the
+/// row the keyboard is on, for the reason the Breakpoint list's are: that is
+/// the row the pane draws Chips on.
+fn variables_chip_at(
+    state: &State,
+    panes: &Layout,
+    column: u16,
+    index: usize,
+) -> Option<&'static str> {
+    let chips: Vec<&'static str> = crate::debug::row_chips(state, index)
+        .into_iter()
+        .map(|chip| chip.action)
+        .collect();
+    icon_at(&chips, panes.terminal, column)
 }
 
 /// Which Chip of the Breakpoint list's Transport sits under the pointer, at
