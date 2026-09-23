@@ -14033,11 +14033,18 @@ fn adapter_event(world: &mut VardeWorld, message: Value) {
 fn stopped_at(world: &mut VardeWorld, thread: i64, file: &str, line: usize, reason: &str) {
     plant_the_programs_locals(world);
     let path = abs(world, file);
-    world
+    let stack = world
         .dap
         .stacks
         .entry(thread)
-        .or_insert_with(|| vec![("main".to_string(), path, line)]);
+        .or_insert_with(|| vec![("main".to_string(), path.clone(), line)]);
+    // Where the program stopped is the top of its stack, whatever the pause
+    // before it left there: a second `stopped` event naming another line with
+    // the stack still pointing at the first is a program that never moved.
+    if let Some(top) = stack.first_mut() {
+        top.1 = path;
+        top.2 = line;
+    }
     let mut body = json!({ "threadId": thread, "reason": reason });
     if let Some(text) = world.dap.text.clone() {
         body["text"] = json!(text);
@@ -15650,4 +15657,235 @@ fn watch_shows_an_error(world: &mut VardeWorld, expression: String) {
         watch_row(world, &expression).of,
         varde::debug::Of::Watch { failed: true, .. }
     ));
+}
+
+// ---- #58: Inline values ----
+
+/// The Inline values the editor draws, off the same tokens the edge caches for
+/// it and hands `ui`.
+fn inline_values(world: &VardeWorld) -> BTreeMap<usize, Vec<varde::debug::Inline>> {
+    let (name, source) = match world.state.current_buffer.as_ref() {
+        Some(path) => (
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            current_buffer(world).shown().to_string(),
+        ),
+        None => return BTreeMap::new(),
+    };
+    // The columns the renderer drew, off the same rectangles the mouse is
+    // hit-tested against — a scenario that never said how big the screen is
+    // gets the plain window `screen` falls back to.
+    let columns = varde::fits_in(&world.state, &world.panes()).2;
+    varde::debug::inline(
+        &world.state,
+        &varde::highlight::highlight(&name, &source),
+        columns,
+    )
+}
+
+/// One Inline value wherever it is drawn, by the name it stands for.
+fn inline_value(world: &VardeWorld, name: &str) -> varde::debug::Inline {
+    inline_values(world)
+        .into_values()
+        .flatten()
+        .find(|value| value.name == name)
+        .unwrap_or_else(|| panic!("no Inline value for {name:?}"))
+}
+
+/// The Locals the scripted adapter answers with, replacing whatever a pause
+/// would otherwise plant. One set for every Frame: the fake answers `scopes`
+/// the same whichever Frame asked, so a scenario naming one is saying which
+/// call's values it is describing, not scripting a second set.
+fn plant_locals(world: &mut VardeWorld, values: &[(String, String)]) {
+    world.dap.scopes = vec![("Locals".to_string(), LOCALS)];
+    world.dap.members.insert(
+        LOCALS,
+        values
+            .iter()
+            .map(|(name, value)| json!({ "name": name, "value": value }))
+            .collect(),
+    );
+}
+
+#[given(expr = "the Debug adapter's Locals are {string} = {string}")]
+fn locals_are(world: &mut VardeWorld, name: String, value: String) {
+    plant_locals(world, &[(name, value)]);
+}
+
+#[given(expr = "the Debug adapter's Locals are {string} = {string} and {string} = {string}")]
+fn locals_are_two(
+    world: &mut VardeWorld,
+    first: String,
+    first_value: String,
+    second: String,
+    second_value: String,
+) {
+    plant_locals(world, &[(first, first_value), (second, second_value)]);
+}
+
+#[given(
+    expr = "the Debug adapter's Locals for {string} are {string} = {string} and {string} = {string}"
+)]
+fn locals_for_frame(
+    world: &mut VardeWorld,
+    _frame: String,
+    first: String,
+    first_value: String,
+    second: String,
+    second_value: String,
+) {
+    plant_locals(world, &[(first, first_value), (second, second_value)]);
+}
+
+#[given(expr = "a Debug session is Paused at {string} line {int} with {string} = {string}")]
+fn paused_with_local(
+    world: &mut VardeWorld,
+    file: String,
+    line: usize,
+    name: String,
+    value: String,
+) {
+    plant_locals(world, &[(name, value)]);
+    debug_session_is_paused(world, file, line);
+}
+
+#[given(
+    expr = "the Debug adapter sends the {string} event for thread {int} at {string} line {int} with reason {string} and {string} = {string} and {string} = {string}"
+)]
+#[when(
+    expr = "the Debug adapter sends the {string} event for thread {int} at {string} line {int} with reason {string} and {string} = {string} and {string} = {string}"
+)]
+// One parameter per value the step names, which is what the step text has:
+// a struct to carry them would be a struct nothing else reads.
+#[allow(clippy::too_many_arguments)]
+fn adapter_sends_stopped_with_locals(
+    world: &mut VardeWorld,
+    event: String,
+    thread: i64,
+    file: String,
+    line: usize,
+    reason: String,
+    first: String,
+    first_value: String,
+    second: String,
+    second_value: String,
+) {
+    assert_eq!(event, "stopped");
+    plant_locals(world, &[(first, first_value), (second, second_value)]);
+    stopped_at(world, thread, &file, line, &reason);
+}
+
+/// The editor's **text** width rather than its rectangle: what a line has to
+/// fit in is what is left once the borders, the gutter and the mirror have
+/// taken theirs, and that is the width an Inline value is trimmed to. Not the
+/// same question as "the editor **pane** is N columns wide", which sets the
+/// rectangle — the two differ by the chrome. Solved for by screen size, for
+/// the reason that step solves for one.
+#[given(expr = "the editor is {int} columns wide")]
+fn editor_is_columns_wide(world: &mut VardeWorld, columns: usize) {
+    let (_, height) = world.screen();
+    let width = (columns as u16..600)
+        .find(|width| {
+            let mut wider = world.state.clone();
+            wider.screen_width = *width;
+            wider.screen_height = height;
+            varde::fits(&wider).2 == columns
+        })
+        .unwrap_or_else(|| panic!("no screen width leaves the editor {columns} columns of text"));
+    world.send(Event::Resized { width, height });
+}
+
+#[then(expr = "line {int} carries the Inline value {string} = {string}")]
+fn line_carries_inline_value(world: &mut VardeWorld, line: usize, name: String, value: String) {
+    let drawn = inline_values(world);
+    let row = drawn
+        .get(&line)
+        .unwrap_or_else(|| panic!("line {line} carries no Inline value; drawn: {drawn:?}"));
+    let shown = row
+        .iter()
+        .find(|shown| shown.name == name)
+        .unwrap_or_else(|| panic!("line {line} carries nothing for {name:?}; drawn: {row:?}"));
+    assert_eq!(shown.text.trim(), format!("{name} = {value}"));
+}
+
+#[then(expr = "line {int} carries no Inline value")]
+fn line_carries_no_inline_value(world: &mut VardeWorld, line: usize) {
+    let drawn = inline_values(world);
+    assert!(
+        !drawn.contains_key(&line),
+        "line {line} carries {:?}",
+        drawn.get(&line)
+    );
+}
+
+#[then(expr = "no line carries an Inline value")]
+fn no_line_carries_an_inline_value(world: &mut VardeWorld) {
+    assert!(inline_values(world).is_empty(), "values are still drawn");
+}
+
+/// A file other than the one the pause is in, looked at the only way there is
+/// to look at one: brought on screen, since Inline values are derived for the
+/// Buffer the editor is drawing.
+#[then(expr = "{string} carries no Inline values")]
+fn file_carries_no_inline_values(world: &mut VardeWorld, path: String) {
+    let path = abs(world, &path);
+    world.apply(vec![Effect::OpenAt {
+        path,
+        at: Place { line: 1, column: 1 },
+    }]);
+    assert!(inline_values(world).is_empty(), "values are still drawn");
+}
+
+/// The last pause's values, still drawn and nothing among them highlighted:
+/// a highlight says *this pause* moved a value, and while the program runs
+/// there is no such pause, so the whole run is the faint layer. Dimmed by the
+/// same fact the Frames and the Variables are dimmed by, so there is one
+/// author for it.
+#[then(expr = "the Inline values are drawn dimmed")]
+fn inline_values_are_dimmed(world: &mut VardeWorld) {
+    let drawn = inline_values(world);
+    assert!(!drawn.is_empty(), "no values are drawn");
+    assert!(varde::debug::stale(&world.state), "not running");
+    let marked: Vec<String> = drawn
+        .into_values()
+        .flatten()
+        .filter(|value| value.changed)
+        .map(|value| value.name)
+        .collect();
+    assert!(marked.is_empty(), "still highlighted: {marked:?}");
+}
+
+#[then(expr = "the Inline value {string} is highlighted")]
+fn inline_value_is_highlighted(world: &mut VardeWorld, name: String) {
+    assert!(inline_value(world, &name).changed, "{name} is not marked");
+}
+
+#[then(expr = "the Inline value {string} is not highlighted")]
+fn inline_value_is_not_highlighted(world: &mut VardeWorld, name: String) {
+    assert!(!inline_value(world, &name).changed, "{name} is marked");
+}
+
+#[then(expr = "line {int}'s Inline values end within the editor's width")]
+fn inline_values_end_within_the_width(world: &mut VardeWorld, line: usize) {
+    let columns = varde::fits_in(&world.state, &world.panes()).2;
+    let drawn = inline_values(world);
+    let values = drawn
+        .get(&line)
+        .unwrap_or_else(|| panic!("line {line} carries no Inline value"));
+    // Display columns, which is what the pane has: the editor is measured in
+    // screen cells and a wide glyph takes two of them.
+    let text = unicode_width::UnicodeWidthStr::width(
+        current_buffer(world)
+            .shown()
+            .split('\n')
+            .nth(line - 1)
+            .unwrap_or_default(),
+    );
+    let drawn: usize = values
+        .iter()
+        .map(|value| unicode_width::UnicodeWidthStr::width(value.text.as_str()))
+        .sum();
+    assert!(
+        text + drawn <= columns,
+        "{text} + {drawn} columns drawn in {columns}",
+    );
 }

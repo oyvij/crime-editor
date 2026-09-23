@@ -14,6 +14,7 @@ use crate::{layout, Effect, Pane, Place, State};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// A line the program pauses at. `text` is what the line held, trimmed, so a
 /// project that remembers it can tell at load whether the line still does —
@@ -349,6 +350,16 @@ pub struct Session {
     /// A pause asked for before any thread was known, so it waits on the
     /// `threads` answer that names one.
     pausing: bool,
+    /// What the locals held at the pause before this one, by name, under the
+    /// name of the Frame they belong to — and `None` until a pause has been
+    /// left behind. This is what an Inline value is marked as changed against,
+    /// and the Frame's name travels with them because only the *inspected*
+    /// Frame's scopes are ever fetched: without it, choosing an outer Frame
+    /// would diff one call's locals against another's and mark names that
+    /// never moved. On the Session rather than on the Pause, because the
+    /// question is about the pause that is gone: a Pause carrying it would
+    /// have to be handed its predecessor's copy to build itself.
+    previous: Option<(String, BTreeMap<String, String>)>,
     /// Whether the adapter said it can write a member back. Its word, never
     /// a try: a set-value Chip that looked enabled and failed teaches the
     /// reader nothing, so the capability dims it instead.
@@ -629,6 +640,7 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
         seq: 0,
         asked: BTreeMap::new(),
         pausing: false,
+        previous: None,
         can_set: false,
         corner: next.corner,
         strip: next.strip,
@@ -952,6 +964,22 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
                 Phase::Paused(pause) if pause.thread == thread => {}
                 _ => return Vec::new(),
             }
+            // What the pause now ending held, kept for the one pause that
+            // follows it: taken here, where the old Pause is still whole, and
+            // never from the new one, which has no values yet.
+            let ending = match &session.phase {
+                Phase::Paused(pause) => Some(pause),
+                Phase::Running(last) => last.as_ref(),
+                _ => None,
+            };
+            session.previous = ending.map(|pause| {
+                let frame = pause
+                    .frames
+                    .get(pause.chosen)
+                    .map(|frame| frame.name.clone())
+                    .unwrap_or_default();
+                (frame, locals(pause))
+            });
             session.phase = Phase::Paused(Pause {
                 thread,
                 why: match body["reason"].as_str() {
@@ -1603,6 +1631,170 @@ pub fn paused_line(state: &State) -> Option<(&Path, usize, Why)> {
     };
     let frame = pause.frames.get(pause.chosen)?;
     Some((frame.file.as_deref()?, frame.line, pause.why))
+}
+
+/// One value drawn at the end of a line the Paused call has already run.
+/// `text` is exactly what the renderer draws, its gap included and its value
+/// already trimmed to the columns the line leaves — the trimming is the
+/// library's because *does it fit* is a question about the pane, and a
+/// renderer that cut it itself would be a second author for the width. `name`
+/// is what the line mentioned, which is the only thing the value belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Inline {
+    pub name: String,
+    pub text: String,
+    /// Whether this pause is the one where the value moved. One pause only:
+    /// a mark that stayed would say the same thing at every stop, and what
+    /// makes stepping readable is seeing what the line just did.
+    pub changed: bool,
+}
+
+/// The gap before an Inline value, and between two of them.
+const GAP: usize = 2;
+
+/// The Inline values of the Buffer on screen, by line: every local the chosen
+/// Frame holds, drawn at the end of the line that mentions it, from the line
+/// the call opens on down to the line before the Paused one. Never on the
+/// Paused line or past it — the call has not run those, so a value shown there
+/// would be the one from before it was assigned.
+///
+/// `tokens` are the current Buffer's, parsed once per edit by the edge and
+/// handed in for the reason [`crate::minimap::cells`] is handed them: nothing
+/// parses per frame. `columns` is what
+/// [`crate::fits_in`] counted off the rectangles the renderer drew, handed in
+/// for the reason `mouse` is handed them: one derivation of where the text
+/// ends, or a value is trimmed against a pane of another size.
+pub fn inline(
+    state: &State,
+    tokens: &[Vec<crate::highlight::Token>],
+    columns: usize,
+) -> BTreeMap<usize, Vec<Inline>> {
+    let mut drawn = BTreeMap::new();
+    let (Some(session), Some(pause)) = (state.debug.as_ref(), showing(state)) else {
+        return drawn;
+    };
+    let Some(frame) = pause.frames.get(pause.chosen) else {
+        return drawn;
+    };
+    // The Buffer on screen and the call being inspected have to be the same
+    // file: a value drawn against another file's line numbers names a line
+    // nobody is paused in.
+    let Some(buffer) = frame
+        .file
+        .as_ref()
+        .filter(|file| state.current_buffer.as_ref() == Some(*file))
+        .and_then(|file| state.buffers.get(file))
+    else {
+        return drawn;
+    };
+    let held = locals(pause);
+    // Nothing is marked while the program runs: a highlight says *this pause*
+    // moved it, and between pauses there is no such pause. What is on screen
+    // then is the last one's values, whole and faint, which is what dims them.
+    let was = session
+        .previous
+        .as_ref()
+        .filter(|_| matches!(session.phase, Phase::Paused(_)))
+        .filter(|(called, _)| *called == frame.name)
+        .map(|(_, held)| held);
+    let source = buffer.shown();
+    let opens = call_start(source, frame.line);
+    for (index, line) in source
+        .split('\n')
+        .enumerate()
+        .skip(opens - 1)
+        .take(frame.line.saturating_sub(opens))
+    {
+        let number = index + 1;
+        let mut room = columns.saturating_sub(line.width());
+        let mut values: Vec<Inline> = Vec::new();
+        for name in mentioned(tokens.get(number - 1).map_or(&[], Vec::as_slice)) {
+            let Some(value) = held.get(name) else {
+                continue;
+            };
+            if values.iter().any(|shown| shown.name == name) {
+                continue;
+            }
+            let head = format!("{}{name} = ", " ".repeat(GAP));
+            // A name with no room left for even one column of its value is
+            // not drawn at all, and neither is anything after it: code pushed
+            // off screen is the one thing an Inline value must never do.
+            let spare = room.saturating_sub(head.width());
+            if spare == 0 {
+                break;
+            }
+            let value = clipped(value, spare);
+            room -= head.width() + value.width();
+            values.push(Inline {
+                name: name.to_string(),
+                text: head + &value,
+                changed: was.is_some_and(|was| was.get(name) != held.get(name)),
+            });
+        }
+        if !values.is_empty() {
+            drawn.insert(number, values);
+        }
+    }
+    drawn
+}
+
+/// `text` cut to `columns` **display** columns, for the reason `ui`'s own
+/// truncation is by width: a wide glyph cut on a character boundary still
+/// overruns the column it was cut to fit, and the column it overruns is the
+/// editor's last one.
+fn clipped(text: &str, columns: usize) -> String {
+    let mut left = columns;
+    let mut kept = String::new();
+    for character in text.chars() {
+        let width = character.width().unwrap_or(0);
+        if width > left {
+            break;
+        }
+        left -= width;
+        kept.push(character);
+    }
+    kept
+}
+
+/// What the chosen Frame's scopes hold, by name, in the adapter's own words.
+/// The top level of the tree and nothing under it: a member called `id` inside
+/// an order is not a name the code on screen mentions.
+fn locals(pause: &Pause) -> BTreeMap<String, String> {
+    pause
+        .scopes
+        .iter()
+        .filter_map(|scope| pause.children.get(&scope.reference))
+        .flatten()
+        .map(|member| (member.name.clone(), member.value.clone()))
+        .collect()
+}
+
+/// The names a line mentions, in the order it mentions them: the words of the
+/// tokens the highlighter left plain. Which names are variables is the
+/// grammar's answer and never a rule of Varde's — a name inside a comment, a
+/// string, a call or a type is some other kind and never reaches here, in
+/// every language the grammar set knows.
+fn mentioned(tokens: &[crate::highlight::Token]) -> Vec<&str> {
+    tokens
+        .iter()
+        .filter(|token| token.kind == crate::highlight::Kind::Plain)
+        .flat_map(|token| token.text.split(|c: char| !c.is_alphanumeric() && c != '_'))
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+/// The line the Paused call opens on: the innermost block holding the Paused
+/// line, read off the indentation [`crate::fold`] already derives rather than
+/// from a brace matcher — the same answer in Python as in Rust, and no
+/// per-language rule about what a call looks like. A Paused line in no block
+/// at all is a script's top level, where everything above it has run.
+fn call_start(source: &str, line: usize) -> usize {
+    crate::fold::blocks(source)
+        .into_iter()
+        .filter(|block| block.from < line && line <= block.to)
+        .map(|block| block.from)
+        .max()
+        .unwrap_or(1)
 }
 
 /// The whole inspection moved to the chosen Frame: its file brought on screen
@@ -2267,5 +2459,45 @@ mod tests {
         }];
         follow(&mut breakpoints, Path::new("/w/a.rs"), "a\nb", "b");
         assert_eq!(breakpoints[0].line, 2);
+    }
+
+    /// A name the grammar coloured as something else is not a variable, which
+    /// is what keeps a value off a line that only talks about one. No rule
+    /// here says which languages have comments or strings.
+    #[test]
+    fn only_the_names_the_grammar_left_plain_are_variables() {
+        let tokens = crate::highlight::highlight("main.rs", "    let total = 0; // count");
+        assert_eq!(mentioned(&tokens[0]), ["total"]);
+        let tokens = crate::highlight::highlight("main.rs", "    let total = \"count\";");
+        assert_eq!(mentioned(&tokens[0]), ["total"]);
+    }
+
+    /// The call the Paused line is in, and not the one above it: a value drawn
+    /// on a line of the function before this one is a value from a call that
+    /// is not on the stack.
+    #[test]
+    fn the_call_opens_where_the_block_holding_the_paused_line_opens() {
+        let source = "fn a() {\n    let x = 1;\n}\nfn b() {\n    let y = 2;\n}";
+        assert_eq!(call_start(source, 5), 4);
+    }
+
+    /// A value the line has half the room for is cut where the screen runs
+    /// out, which is not where its characters do: two of these glyphs fill
+    /// four columns and the third would overrun the one column left.
+    #[test]
+    fn a_value_is_cut_by_display_width_and_never_by_character_count() {
+        assert_eq!(clipped("東京タワー", 5), "東京");
+        assert_eq!(clipped("abc", 2), "ab");
+    }
+
+    /// Indentation and nothing else, so a language with no braces at all
+    /// answers the same question the same way.
+    #[test]
+    fn a_call_in_a_language_without_braces_opens_the_same_way() {
+        let source = "def main():\n    total = 0\n    print(total)";
+        assert_eq!(call_start(source, 3), 1);
+        // A script's top level is in no block at all, and everything above the
+        // Paused line has run.
+        assert_eq!(call_start("total = 0\nprint(total)", 2), 1);
     }
 }

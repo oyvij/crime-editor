@@ -1966,6 +1966,29 @@ fn editor_widget(
             );
         }
     }
+    // What the program holds, at the end of the lines the Paused call has
+    // already run. Faint, the way the indentation guides are faint: a value is
+    // a note about the code and never part of it. A value that moved at this
+    // pause is the one thing here worth looking at, so it is the one thing
+    // drawn in the foreground's own colour — the faintness is what the others
+    // are for. Appended after every pass that counts columns from the start of
+    // a line, so none of them can reach into a span that is not the file's
+    // text.
+    for (number, values) in varde::debug::inline(state, tokens, varde::fits(state).2) {
+        let Some(line) = lines.get_mut(number - 1) else {
+            continue;
+        };
+        for value in values {
+            // No colour of its own: the text's own foreground, bold, beside
+            // neighbours mixed to a tenth of it. A hue here would be a fourth
+            // palette to keep in step with the themes.
+            let style = match value.changed {
+                true => Style::default().add_modifier(Modifier::BOLD),
+                false => faint,
+            };
+            line.spans.push(Span::styled(value.text, style));
+        }
+    }
     shift(&mut lines, state, 1);
     // Last, for the reason the Site's mark is last in `marked_code`: everything
     // above counts columns from the start of the line, and a barred line's
