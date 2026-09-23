@@ -148,6 +148,9 @@ pub enum Divider {
     Ai,
     /// The border above the Strip, which moves the Strip/top boundary.
     Strip,
+    /// The Program output's left border, which moves the Variables/Program
+    /// output boundary inside the Debug group.
+    Output,
 }
 
 /// Where a drag began, and which divider it grabbed. Edge state, but the
@@ -273,6 +276,9 @@ pub fn on_mouse(state: &State, panes: &Layout, pointer: &mut Pointer, input: Inp
         if let Some(group) = group_tab_at(state, panes, input.column) {
             return Outcome::of(vec![Event::ShowGroup(group)]);
         }
+        if let Some(action) = strip_chip_at(state, panes, input.column) {
+            return Outcome::of(vec![Event::PaneAction(action)]);
+        }
     }
     if let Some(outcome) = divider_drag(panes, pointer, input) {
         return outcome;
@@ -323,12 +329,27 @@ fn result_click(state: &State, search: &crate::Search, input: Input) -> Vec<Even
 /// of labels on a border is hit-tested by. Nothing at all off the Strip's own
 /// columns: the corner's top border is on the same row and carries its icons.
 fn group_tab_at(state: &State, panes: &Layout, column: u16) -> Option<crate::layout::Group> {
-    if !panes.terminal.holds(column, panes.terminal.y) {
+    let strip = panes.strip();
+    if !strip.holds(column, strip.y) {
         return None;
     }
     let labels = crate::group_labels(state);
-    let index = crate::layout::strip_at(panes.terminal, &labels, column)?;
-    Some(crate::group_tabs(state)[index].0)
+    let index = crate::layout::strip_at(strip, &labels, column)?;
+    Some(crate::group_tabs(state)[index].group)
+}
+
+/// Which Chip of the Variables' Transport sits under a column of the Strip's
+/// top border, at the columns `ui` draws them into — both off
+/// `crate::transport_area`, for the reason the Group tabs above read one
+/// `strip_at`.
+fn strip_chip_at(state: &State, panes: &Layout, column: u16) -> Option<&'static str> {
+    if state.strip != crate::layout::Group::Debug {
+        return None;
+    }
+    let chips = crate::debug::strip_transport(state);
+    let area = crate::transport_area(state, panes.strip());
+    let labels = crate::layout::chip_labels(&chips, area.width, crate::layout::CORNER_TITLE);
+    Some(chips[crate::layout::strip_at(area, &labels, column)?].action)
 }
 
 /// A pane's border is the handle. Checked before anything else, because those
@@ -351,8 +372,16 @@ fn divider_drag(panes: &Layout, pointer: &mut Pointer, input: Input) -> Option<O
     // else: the row above it is the editor's bottom border, where the buffer
     // dots are, and the Corner's top border carries its icons. Its Group tabs
     // have already been answered above.
-    let above_strip =
-        input.row == panes.terminal.y && panes.terminal.holds(input.column, input.row);
+    // The whole Strip's top border, the Program output's columns included: a
+    // handle that stopped at the Variables would leave the height undraggable
+    // from half of it.
+    let above_strip = input.row == panes.terminal.y && panes.strip().holds(input.column, input.row);
+    // The Program output's own left border, which runs the Strip's height —
+    // its top row excepted, where the Group tabs and the Transport are.
+    let beside_output = panes.output.width > 0
+        && input.row > panes.output.y
+        && input.row < panes.output.bottom()
+        && input.column.abs_diff(panes.output.x) <= 1;
     match input.kind {
         Kind::LeftDown if beside_tree && input.column.abs_diff(tree_edge) <= 1 => {
             pointer.dragging = Some(Divider::Tree);
@@ -362,9 +391,20 @@ fn divider_drag(panes: &Layout, pointer: &mut Pointer, input: Input) -> Option<O
             pointer.dragging = Some(Divider::Ai);
             Some(Outcome::default())
         }
+        Kind::LeftDown if beside_output => {
+            pointer.dragging = Some(Divider::Output);
+            Some(Outcome::default())
+        }
         Kind::LeftDown if above_strip => {
             pointer.dragging = Some(Divider::Strip);
             Some(Outcome::default())
+        }
+        // Unclamped, like the Strip's height: the width is state, and the
+        // layout bounds it against the group it was dragged in.
+        Kind::LeftDrag if pointer.dragging == Some(Divider::Output) => {
+            Some(Outcome::of(vec![Event::DragOutput(u32::from(
+                panes.output.right().saturating_sub(input.column),
+            ))]))
         }
         // Unclamped: the height is state, and `update` bounds it against the
         // screen it was dragged on.
@@ -843,7 +883,7 @@ fn dragged(
         }
         // A pty's cells are the child's, so this half of the drag is the edge's
         // to finish.
-        Pane::Terminal | Pane::Ai => {
+        Pane::Terminal | Pane::Ai | Pane::Output => {
             let (from, to) = order(
                 place_in(state, panes, pane, from),
                 place_in(state, panes, pane, (input.column, input.row)),
@@ -1014,6 +1054,7 @@ fn place_in(state: &State, panes: &Layout, pane: Pane, (column, row): (u16, u16)
         Pane::Tree
         | Pane::Ai
         | Pane::Terminal
+        | Pane::Output
         | Pane::Risk
         | Pane::Buffers
         | Pane::History
@@ -1078,9 +1119,10 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
         Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
             interior(panes.corner)
         }
-        // The Strip's own rectangle, which the Debug group has instead of the
-        // shells: the same rectangle, a different pane in it.
+        // The Strip's own rectangle less whatever the Program output beside it
+        // is taking, which the Debug group has instead of the shells.
         Pane::Variables => interior(panes.terminal),
+        Pane::Output => interior(panes.output),
     }
 }
 

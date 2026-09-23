@@ -68,6 +68,7 @@ pub fn selected(state: &crate::State) -> Option<&Breakpoint> {
 }
 
 pub const REMOVE: &str = "remove-breakpoint";
+pub const TOGGLE_OUTPUT: &str = "toggle-output";
 pub const CLEAR_ALL: &str = "clear-all-breakpoints";
 
 /// What the focused row offers: removing the Breakpoint it names.
@@ -90,6 +91,34 @@ pub fn transport(state: &crate::State) -> Vec<crate::Chip> {
         hue: crate::Hue::Halt,
         tone: match state.breakpoints.is_empty() {
             true => crate::Tone::Dimmed,
+            false => crate::Tone::Plain,
+        },
+    }]
+}
+
+/// The Chips on the Variables' top border. One so far: hiding the Program
+/// output and showing it again are one control, so they are one Chip, named
+/// for what pressing it does — the Reading Transport's play and pause, one
+/// pane over. None at all with no program running, for the reason the `Debug`
+/// Group tab is offered only while a session exists.
+pub fn strip_transport(state: &crate::State) -> Vec<crate::Chip> {
+    if !state.output_running {
+        return Vec::new();
+    }
+    vec![crate::Chip {
+        action: TOGGLE_OUTPUT,
+        name: match state.output_hidden {
+            true => "show-output",
+            false => "hide-output",
+        },
+        glyph: match state.output_hidden {
+            true => "\u{25a3}".to_string(),
+            false => "\u{25a2}".to_string(),
+        },
+        keys: "\u{2423}h",
+        hue: crate::Hue::Plain,
+        tone: match state.output_unseen {
+            true => crate::Tone::Marked,
             false => crate::Tone::Plain,
         },
     }]
@@ -481,11 +510,57 @@ pub fn received(next: &mut State, json: &str) -> Vec<Effect> {
     match message["type"].as_str() {
         Some("response") => answered(next, &message),
         Some("event") => told(next, &message),
-        // A reverse request nothing here answers yet is refused out loud: an
-        // adapter left waiting on a reply is a session that hangs.
         Some("request") => {
             let session = next.debug.as_mut().expect("a session");
             let command = message["command"].as_str().unwrap_or_default();
+            // The adapter asking for a terminal to run the debugged program
+            // in. It gets the Debug group's own, never a shell: the Strip's
+            // shells are the reader's, and a program started in one would
+            // print over whatever was running there and end with the next
+            // `:split`.
+            if command == "runInTerminal" {
+                let arguments = &message["arguments"];
+                let argv: Vec<String> = arguments["args"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(printable)
+                    .collect();
+                if argv.is_empty() {
+                    return vec![reply(
+                        session,
+                        &message,
+                        json!({
+                            "success": false,
+                            "command": command,
+                            "message": "runInTerminal named no program",
+                        }),
+                    )];
+                }
+                // The adapter's, which is untrusted input, so it is never
+                // interpolated into a shell command: the argv goes to the pty
+                // as it stands and the environment is a map of names to
+                // values, both handed to the edge rather than spelled out as
+                // a line something else would parse.
+                let env = arguments["env"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(name, value)| Some((printable(name), printable(value.as_str()?))))
+                    .collect();
+                let cwd = arguments["cwd"].as_str().map(printable).map(PathBuf::from);
+                return vec![
+                    reply(
+                        session,
+                        &message,
+                        json!({ "success": true, "command": command, "body": {} }),
+                    ),
+                    Effect::RunProgram { argv, cwd, env },
+                ];
+            }
+            // A reverse request nothing here answers is refused out loud: an
+            // adapter left waiting on a reply is a session that hangs.
             vec![reply(
                 session,
                 &message,
@@ -1071,6 +1146,10 @@ fn end(next: &mut State) {
         .map_or(next.strip, |session| session.strip);
     next.debug = None;
     next.stepping = false;
+    // The mark is a claim that the Program output printed something nobody
+    // has read; with the session gone there is nothing left to show, so it
+    // goes too rather than standing over the next session's tab.
+    next.output_unseen = false;
     // Both of the session's own panes go with it, so the keyboard is never
     // left in one that is no longer on screen.
     if matches!(next.focus, Pane::Frames | Pane::Variables) {

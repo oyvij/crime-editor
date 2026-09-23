@@ -123,6 +123,12 @@ Feature: The Strip and the Debug group
       When I drag the border between the Variables and the Program output to column 0
       Then the Variables are at their least width
 
+    Scenario: The Group tabs stay at the Strip's right edge whatever the border does
+      Given a Debug session is Paused at "src/main.rs" line 3
+      And the border between the Variables and the Program output is at column 40
+      When I click the Group tab "Shells"
+      Then the Strip shows the Shell group
+
   Rule: The Program output is hidden without ending it, and output while hidden is marked
 
     Scenario: Hiding the Program output gives the Variables the full width
@@ -130,7 +136,7 @@ Feature: The Strip and the Debug group
       When I press "Space"
       And I press "h"
       Then the Program output is hidden
-      And the Variables are 120 columns wide
+      And the Variables have the Debug group's whole width
 
     Scenario: A hidden Program output shows a Chip that shows it again
       Given a Debug session is Paused at "src/main.rs" line 3
@@ -153,6 +159,7 @@ Feature: The Strip and the Debug group
 
     Scenario: Showing the Program output clears the mark
       Given a Debug session is Running
+      And the Strip shows the Debug group
       And the Program output is hidden
       And the program prints "panicked at src/main.rs:4"
       When I click the "show-output" Chip
@@ -166,6 +173,7 @@ Feature: The Strip and the Debug group
 
     Scenario: A hidden Program output keeps its size and everything it printed
       Given a Debug session is Running
+      And the Strip shows the Debug group
       And the Program output is 60 columns wide
       And the Program output is hidden
       And the program prints "hello"

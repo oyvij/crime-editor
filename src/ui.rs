@@ -158,6 +158,7 @@ pub fn draw(
     rows: &[Row],
     shells: &[PtyPane],
     ai: Option<&PtyPane>,
+    output: Option<&PtyPane>,
     chrome: Chrome,
 ) {
     let areas = areas(frame.area(), state);
@@ -222,12 +223,29 @@ pub fn draw(
                 );
             }
         }
-        layout::Group::Debug => frame.render_widget(
-            variables_widget(state, areas.panes.terminal.width),
-            rect(areas.panes.terminal),
-        ),
+        layout::Group::Debug => {
+            frame.render_widget(
+                variables_widget(state, areas.panes.terminal.width),
+                rect(areas.panes.terminal),
+            );
+            // Zero-width while it is hidden, so there is nothing to draw and
+            // the Variables already have the columns back.
+            if let (Some(output), true) = (output, areas.panes.output.width > 0) {
+                frame.render_widget(
+                    terminal_widget(
+                        output,
+                        "program",
+                        state.focus == Pane::Output,
+                        state,
+                        Pane::Output,
+                    ),
+                    rect(areas.panes.output),
+                );
+            }
+        }
     }
-    group_tabs(frame, state, areas.panes.terminal);
+    strip_chips(frame, state, areas.panes.strip());
+    group_tabs(frame, state, areas.panes.strip());
     // Zero-width while the corner is empty, so there is nothing to draw and
     // nothing to clear: the shell already has the columns back. Exhaustive on
     // the occupant, so a new pane in that slot is a compiler error rather than
@@ -253,6 +271,11 @@ pub fn draw(
         }
     }
     let caret_is_free = state.modal == Modal::None && typing.is_none();
+    if let (Pane::Output, layout::Group::Debug, true, Some(output)) =
+        (state.focus, state.strip, caret_is_free, output)
+    {
+        place_pty_cursor(frame, rect(areas.panes.output), output);
+    }
     if let (Pane::Terminal, layout::Group::Shells, true, Some((shell, area))) = (
         state.focus,
         state.strip,
@@ -2570,6 +2593,31 @@ fn right_title(state: &State, room: usize, width: u16) -> Line<'static> {
     Line::from(spans).right_aligned()
 }
 
+/// The Variables' Transport, on the Strip's top border left of the Group tabs
+/// — at the columns `mouse::strip_chip_at` hit-tests, both off
+/// `varde::transport_area`. Drawn as its own strip rather than as the pane's
+/// title, for the reason the tabs are: the two share one border, and a title
+/// flush to the right would sit under them.
+fn strip_chips(frame: &mut Frame, state: &State, strip: Area) {
+    let chips = varde::debug::strip_transport(state);
+    if chips.is_empty() || state.strip != layout::Group::Debug {
+        return;
+    }
+    let area = varde::transport_area(state, strip);
+    let labels = layout::chip_labels(&chips, area.width, layout::CORNER_TITLE);
+    let Some(mut x) = area.right().checked_sub(layout::strip_width(&labels)) else {
+        return;
+    };
+    for (chip, label) in chips.iter().zip(labels) {
+        let columns = label.width() as u16;
+        frame.render_widget(
+            Line::from(chip_spans(state, chip, label).to_vec()),
+            Rect::new(x, strip.y, columns, 1),
+        );
+        x += columns;
+    }
+}
+
 fn group_tabs(frame: &mut Frame, state: &State, strip: Area) {
     let tabs = varde::group_tabs(state);
     let labels = varde::group_labels(state);
@@ -2578,13 +2626,21 @@ fn group_tabs(frame: &mut Frame, state: &State, strip: Area) {
         return;
     };
     // Each label on its own, so the column of border after it is left as the
-    // split drew it, in the split's own colour.
-    for ((_, lit), label) in tabs.iter().zip(labels) {
-        let style = match lit {
-            true => Style::default()
+    // split drew it, in the split's own colour. A tab holding output nobody
+    // has read is bold and in the notice colour — the Chip's own mark, one
+    // border over, so the two say the same thing the same way.
+    for (tab, label) in tabs.iter().zip(labels) {
+        let style = match (tab.lit, tab.unseen) {
+            (true, false) => Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::REVERSED),
-            false => Style::default().fg(Color::DarkGray),
+            (true, true) => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::REVERSED | Modifier::BOLD),
+            (false, true) => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            (false, false) => Style::default().fg(Color::DarkGray),
         };
         let columns = label.width() as u16;
         frame.render_widget(
@@ -2613,6 +2669,9 @@ fn chip_spans(state: &State, chip: &varde::Chip, label: String) -> [Span<'static
         varde::Tone::Dimmed => (Color::DarkGray, Color::DarkGray, Modifier::empty()),
         varde::Tone::Plain => (hue, Color::DarkGray, Modifier::empty()),
         varde::Tone::Lit => (hue, hue, Modifier::REVERSED),
+        // Bold and in the notice colour rather than reversed: reversed is what
+        // says "you just pressed this", and nobody pressed this one.
+        varde::Tone::Marked => (Color::Yellow, Color::DarkGray, Modifier::BOLD),
     };
     if state.hovered_action == Some(chip.action) {
         lift |= Modifier::BOLD | Modifier::UNDERLINED;

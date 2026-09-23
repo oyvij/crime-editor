@@ -140,6 +140,12 @@ pub struct VardeWorld {
     /// What the AI session's grid holds. Separate from `screen` because they are
     /// separate ptys: a drag that read the wrong one is the bug behind this.
     ai_screen: Vec<String>,
+    /// Every argv the edge was asked to run in the Debug group's own terminal.
+    program: Vec<Vec<String>>,
+    /// The size of the pty the edge holds for it, `None` when it holds none.
+    /// Kept as a size rather than a flag because a hidden pane that was
+    /// resized to nothing is the failure the scenarios pin.
+    output_pty: Option<(u16, u16)>,
     /// What the edge is half-way through collecting — the key router needs it.
     drafts: Drafts,
     /// The content last shown or held for a diffed file, so a `Then` can
@@ -580,6 +586,7 @@ impl VardeWorld {
             | Pane::Breakpoints
             | Pane::Frames
             | Pane::Variables
+            | Pane::Output
             | Pane::Terminal => self.screen.clone(),
         }
     }
@@ -595,6 +602,17 @@ impl VardeWorld {
     /// edge's to know, so the core is told rather than remembering it.
     fn tell_core(&mut self) {
         self.state.ai_running = self.ai_pane;
+        self.state.output_running = self.output_pty.is_some();
+        // What `resize_panes` does before every frame: fit the pty to the
+        // rectangle the layout gives it, and leave it alone when the layout
+        // gives it none.
+        let output = self.panes().output;
+        if let (true, Some(size)) = (
+            self.output_pty.is_some(),
+            layout::pty_size(output.width, output.height),
+        ) {
+            self.output_pty = Some(size);
+        }
         self.state.head = self.head.clone();
         // Which branch HEAD is on is the edge's to read, so the world reads it
         // too — the core never writes it.
@@ -859,6 +877,10 @@ impl VardeWorld {
             }
             Effect::StopDap => {
                 if std::mem::take(&mut self.dap.held) {
+                    // The debugged program goes with the session it belonged
+                    // to, which is what the edge does at every site that stops
+                    // holding an adapter.
+                    self.output_pty = None;
                     self.send_now(Event::DapGone {
                         why: varde::debug::Gone::Exited,
                     });
@@ -910,6 +932,13 @@ impl VardeWorld {
             // The edge holds one status line, so a withdrawal leaves
             // nothing showing rather than the notice before it.
             Effect::ClearNotice => self.notices.clear(),
+            // What the edge does: start the program in the Debug group's own
+            // terminal, never in a shell. Its pty opens at the floor and is
+            // fitted by `tell_core` above, exactly as the edge does.
+            Effect::RunProgram { argv, .. } => {
+                self.program.push(argv);
+                self.output_pty = Some((2, 1));
+            }
             // What the edge does: build the stream under `~/.varde/tmp` and
             // play it. No path crosses the seam, so none is modelled — what a
             // scenario can see is that words reached a voice.
@@ -2140,6 +2169,7 @@ fn pointer_at(
         Pane::Editor => (panes.editor, varde::gutter(state), state.editor_scroll),
         Pane::Tree => (panes.tree, 0, state.tree_scroll),
         Pane::Ai => (panes.ai, 0, 0),
+        Pane::Output => (panes.output, 0, 0),
         Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
             (panes.corner, 0, 0)
         }
@@ -4189,7 +4219,7 @@ fn group_tabs_are(world: &mut VardeWorld, step: &Step) {
         .collect();
     let tabs: Vec<String> = varde::group_tabs(&world.state)
         .iter()
-        .map(|(group, _)| format!("{group:?}"))
+        .map(|tab| format!("{:?}", tab.group))
         .collect();
     assert_eq!(tabs, expected);
 }
@@ -4199,7 +4229,7 @@ fn strip_shows_shells(world: &mut VardeWorld) {
     assert_eq!(world.state.strip, layout::Group::Shells);
     let lit: Vec<layout::Group> = varde::group_tabs(&world.state)
         .into_iter()
-        .filter_map(|(group, lit)| lit.then_some(group))
+        .filter_map(|tab| tab.lit.then_some(tab.group))
         .collect();
     assert_eq!(lit, vec![layout::Group::Shells]);
 }
@@ -4424,23 +4454,32 @@ fn click_breakpoint_row_chip(world: &mut VardeWorld, chip: String, file: String,
     );
 }
 
-/// A Chip on the Transport along the top border of the Corner's occupant,
-/// found by the hit-test that answers a click there.
+/// A Chip on the Transport along the top border of the Corner's occupant or of
+/// the Variables, found by the hit-test that answers a click there — never
+/// driven as an event, so a Chip nobody could reach with a pointer fails here.
 #[when(expr = "I click the {string} Chip")]
 fn click_chip(world: &mut VardeWorld, chip: String) {
-    let panes = world.panes();
-    let chips = varde::debug::transport(&world.state);
+    let (area, chips) = match varde::debug::transport(&world.state)
+        .iter()
+        .any(|offered| offered.name == chip)
+    {
+        true => (world.panes().corner, varde::debug::transport(&world.state)),
+        false => (
+            varde::transport_area(&world.state, world.panes().strip()),
+            varde::debug::strip_transport(&world.state),
+        ),
+    };
     let at = chips
         .iter()
         .position(|offered| offered.name == chip)
         .unwrap_or_else(|| panic!("no {chip:?} Chip"));
-    let labels = layout::chip_labels(&chips, panes.corner.width, layout::CORNER_TITLE);
-    let column = (panes.corner.x..panes.corner.right())
-        .find(|&column| layout::strip_at(panes.corner, &labels, column) == Some(at))
+    let labels = layout::chip_labels(&chips, area.width, layout::CORNER_TITLE);
+    let column = (area.x..area.right())
+        .find(|&column| layout::strip_at(area, &labels, column) == Some(at))
         .expect("the Chip on screen");
     world.pointer = mouse::Pointer::default();
-    world.report(mouse::Kind::LeftDown, column, panes.corner.y);
-    world.report(mouse::Kind::LeftUp, column, panes.corner.y);
+    world.report(mouse::Kind::LeftDown, column, area.y);
+    world.report(mouse::Kind::LeftUp, column, area.y);
 }
 
 #[then("the workspace has no Breakpoints")]
@@ -5300,6 +5339,7 @@ fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
         Pane::Tree => world.panes().tree,
         Pane::Editor => world.panes().editor,
         Pane::Ai => world.panes().ai,
+        Pane::Output => world.panes().output,
         Pane::Terminal | Pane::Variables => world.panes().terminal,
         Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
             world.panes().corner
@@ -14428,33 +14468,32 @@ fn parse_group(name: &str) -> layout::Group {
 }
 
 /// Whether a tab is drawn as the one showing — the same pairs `ui` draws from.
-fn tab_is_lit(world: &VardeWorld, label: &str) -> bool {
+fn tab(world: &VardeWorld, label: &str) -> varde::Tab {
     varde::group_tabs(&world.state)
         .into_iter()
-        .find(|(group, _)| group.label() == label)
+        .find(|tab| tab.group.label() == label)
         .unwrap_or_else(|| panic!("no Group tab {label:?}"))
-        .1
 }
 
 #[then(expr = "the Group tab {string} is lit")]
 fn group_tab_is_lit(world: &mut VardeWorld, label: String) {
-    assert!(tab_is_lit(world, &label));
+    assert!(tab(world, &label).lit);
 }
 
 #[then(expr = "the Group tab {string} is not lit")]
 fn group_tab_is_not_lit(world: &mut VardeWorld, label: String) {
-    assert!(!tab_is_lit(world, &label));
+    assert!(!tab(world, &label).lit);
 }
 
 /// Through the hit-test, on the tab's own columns of the Strip's top border —
 /// the columns `layout::strip_at` names and `ui` draws into.
 #[when(expr = "I click the Group tab {string}")]
 fn click_group_tab(world: &mut VardeWorld, label: String) {
-    let strip = world.panes().terminal;
+    let strip = world.panes().strip();
     let labels = varde::group_labels(&world.state);
     let index = varde::group_tabs(&world.state)
         .iter()
-        .position(|(group, _)| group.label() == label)
+        .position(|tab| tab.group.label() == label)
         .unwrap_or_else(|| panic!("no Group tab {label:?}"));
     let column = (strip.x + strip.width - 1 - varde::layout::strip_width(&labels)
         + labels[..index]
@@ -14789,5 +14828,227 @@ fn debug_adapter_row_is(world: &mut VardeWorld, language: String, expected: Stri
             .availability
             .as_str(),
         expected
+    );
+}
+
+// ---- F45: the Program output in the Debug group ----
+
+/// The adapter's reverse request, driven in exactly as the edge frames it.
+#[given(expr = "the Debug adapter asks to run {string} in a terminal")]
+#[when(expr = "the Debug adapter asks to run {string} in a terminal")]
+fn adapter_asks_for_a_terminal(world: &mut VardeWorld, program: String) {
+    // A `seq` of the adapter's own, past anything Varde has sent: a reverse
+    // request is numbered in the adapter's sequence, not in Varde's.
+    let seq = 1000 + world.dap.sent.len() as i64;
+    adapter_event(
+        world,
+        json!({
+            "type": "request",
+            "seq": seq,
+            "command": "runInTerminal",
+            "arguments": { "kind": "integrated", "args": [program] },
+        }),
+    );
+}
+
+/// A session with the debugged program already running in the Debug group,
+/// which is what every step about the Program output needs behind it.
+fn program_running(world: &mut VardeWorld) {
+    if world.output_pty.is_none() {
+        adapter_asks_for_a_terminal(world, "target/debug/server".to_string());
+    }
+}
+
+#[then(expr = "a Program output pty is asked for running {string}")]
+fn program_pty_asked_for(world: &mut VardeWorld, program: String) {
+    assert_eq!(world.program, vec![vec![program]]);
+    assert!(
+        world.output_pty.is_some(),
+        "the edge holds no Program output"
+    );
+}
+
+#[then(expr = "no shell is asked for")]
+fn no_shell_asked_for(world: &mut VardeWorld) {
+    assert_eq!(world.splits, Vec::<usize>::new());
+    assert_eq!(world.state.terminals.len(), 1);
+}
+
+/// What is in the Debug group, whether or not it is the group on screen — so
+/// the group is brought forward, which is where a reader looking would be.
+#[then(expr = "the Debug group holds the Variables and the Program output")]
+fn debug_group_holds_both(world: &mut VardeWorld) {
+    program_running(world);
+    world.state.strip = layout::Group::Debug;
+    world.tell_core();
+    let panes = world.panes();
+    assert_eq!(
+        layout::pane_at(&panes, panes.terminal.x + 1, panes.terminal.y + 1),
+        Some(Pane::Variables)
+    );
+    assert_eq!(
+        layout::pane_at(&panes, panes.output.x + 1, panes.output.y + 1),
+        Some(Pane::Output)
+    );
+}
+
+/// The border's column, as a width off the Strip's right-hand end — which is
+/// what the layout is told, since the Strip's own left edge moves with the
+/// Corner beside it.
+#[given(expr = "the border between the Variables and the Program output is at column {int}")]
+fn border_at_column(world: &mut VardeWorld, column: u16) {
+    program_running(world);
+    let right = debug_group_right(world);
+    world.state.output_width = Some(u32::from(right.saturating_sub(column)));
+    world.tell_core();
+}
+
+/// The Debug group's right-hand edge, which the border is a width back from.
+/// Off the Strip when the Program output is away and off the output when it is
+/// not: the group is the two rectangles together.
+fn debug_group_right(world: &VardeWorld) -> u16 {
+    let panes = world.panes();
+    panes.terminal.right().max(panes.output.right())
+}
+
+/// Through the hit-test, from the border column itself: the handle has to be
+/// one a pointer can reach.
+#[when(expr = "I drag that border to column {int}")]
+#[when(expr = "I drag the border between the Variables and the Program output to column {int}")]
+fn drag_output_border(world: &mut VardeWorld, column: u16) {
+    program_running(world);
+    let panes = world.panes();
+    let row = panes.output.y + 1;
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, panes.output.x, row);
+    world.report(mouse::Kind::LeftDrag, column, row);
+    world.report(mouse::Kind::LeftUp, column, row);
+}
+
+#[given(expr = "the Program output is {int} columns wide")]
+fn output_is_wide(world: &mut VardeWorld, columns: u16) {
+    program_running(world);
+    let column = debug_group_right(world) - columns;
+    border_at_column(world, column);
+}
+
+#[then(expr = "the Program output is {int} columns wide")]
+fn output_should_be_wide(world: &mut VardeWorld, columns: u16) {
+    assert_eq!(world.panes().output.width, columns);
+}
+
+#[then(expr = "the Variables are at their least width")]
+fn variables_at_least_width(world: &mut VardeWorld) {
+    assert_eq!(world.panes().terminal.width, layout::GROUP_LEAST);
+}
+
+#[then(expr = "the Variables have the Debug group's whole width")]
+fn variables_have_the_whole_width(world: &mut VardeWorld) {
+    let panes = world.panes();
+    assert_eq!(panes.output.width, 0);
+    assert_eq!(panes.terminal.right(), panes.ai.right());
+}
+
+#[given(expr = "the Program output is hidden")]
+fn output_is_hidden(world: &mut VardeWorld) {
+    program_running(world);
+    if !world.state.output_hidden {
+        world.send(Event::ToggleOutput);
+    }
+}
+
+#[then(expr = "the Program output is hidden")]
+fn output_should_be_hidden(world: &mut VardeWorld) {
+    assert!(world.state.output_hidden);
+    assert_eq!(world.panes().output.width, 0);
+}
+
+#[then(expr = "the Program output is shown")]
+fn output_should_be_shown(world: &mut VardeWorld) {
+    assert!(varde::showing_output(&world.state));
+    assert!(world.panes().output.width > 0);
+}
+
+#[given(expr = "the Program output has focus")]
+fn output_has_focus(world: &mut VardeWorld) {
+    program_running(world);
+    world.state.focus = Pane::Output;
+}
+
+#[given(expr = "the Variables have focus")]
+fn variables_take_focus(world: &mut VardeWorld) {
+    world.state.focus = Pane::Variables;
+}
+
+/// Everything the program prints reaches the core the same way: the edge says
+/// it spoke, and the core decides whether the reader could see it.
+#[when(expr = "the program prints {string}")]
+fn program_prints(world: &mut VardeWorld, _text: String) {
+    program_running(world);
+    world.send(Event::OutputSpoke);
+}
+
+#[given(expr = "the program prints {string}")]
+fn program_printed(world: &mut VardeWorld, text: String) {
+    program_prints(world, text);
+}
+
+#[then(expr = "the Group tab {string} is marked as having unseen output")]
+fn tab_is_marked(world: &mut VardeWorld, label: String) {
+    assert!(tab(world, &label).unseen);
+}
+
+#[then(expr = "the Group tab {string} is not marked as having unseen output")]
+fn tab_is_not_marked(world: &mut VardeWorld, label: String) {
+    assert!(!tab(world, &label).unseen);
+}
+
+#[then(expr = "the {string} Chip is marked as having unseen output")]
+fn chip_is_marked(world: &mut VardeWorld, chip: String) {
+    let offered = varde::debug::strip_transport(&world.state)
+        .into_iter()
+        .find(|offered| offered.name == chip)
+        .unwrap_or_else(|| panic!("no {chip:?} Chip"));
+    assert_eq!(offered.tone, varde::Tone::Marked);
+}
+
+#[then(expr = "the Program output pty was never stopped")]
+fn output_pty_never_stopped(world: &mut VardeWorld) {
+    assert!(world.output_pty.is_some());
+    assert_eq!(world.program.len(), 1, "the program was started again");
+}
+
+#[then(expr = "the Program output's pty is at least {int} rows by {int} column")]
+fn output_pty_is_at_least(world: &mut VardeWorld, rows: u16, columns: u16) {
+    let (held_rows, held_columns) = world.output_pty.expect("a Program output pty");
+    assert!(
+        held_rows >= rows && held_columns >= columns,
+        "{held_rows}x{held_columns}"
+    );
+}
+
+#[then(expr = "the Program output received the key {string}")]
+fn output_received_key(world: &mut VardeWorld, key: String) {
+    let expected: &[u8] = match key.as_str() {
+        "Space" => b" ",
+        other => panic!("no bytes are pinned for {other:?}"),
+    };
+    assert_eq!(
+        world.keys_sent,
+        vec![(Pane::Output, expected.to_vec())],
+        "keys sent: {:?}",
+        world.keys_sent
+    );
+}
+
+#[then(expr = "nothing reached the Program output")]
+fn nothing_reached_the_output(world: &mut VardeWorld) {
+    assert!(
+        !world
+            .keys_sent
+            .iter()
+            .any(|(pane, _)| *pane == Pane::Output),
+        "keys sent: {:?}",
+        world.keys_sent
     );
 }

@@ -233,16 +233,48 @@ impl Group {
         }
     }
 
-    /// Which pane the Strip is holding. One answer, read by the hit-test, by
-    /// the focus geometry and by the Group tabs, for the reason
-    /// [`Corner::pane`] is one.
+    /// Which pane the Strip is holding — the one the keyboard goes to when a
+    /// group is brought forward. One answer, read by the hit-test, by the
+    /// focus geometry and by the Group tabs, for the reason [`Corner::pane`]
+    /// is one.
     pub fn pane(self) -> Pane {
         match self {
             Group::Shells => Pane::Terminal,
             Group::Debug => Pane::Variables,
         }
     }
+
+    /// Whether this group is the one `pane` lives in. Not `pane()` compared,
+    /// because the Debug group holds two: the keyboard left in the Program
+    /// output when the Shells come forward is a keyboard in a pane nobody can
+    /// see, which is the whole of what the comparison was there to prevent.
+    pub fn holds(self, pane: Pane) -> bool {
+        match self {
+            Group::Shells => pane == Pane::Terminal,
+            Group::Debug => matches!(pane, Pane::Variables | Pane::Output),
+        }
+    }
 }
+
+/// Whether the Debug group is showing the Program output beside the Variables,
+/// and how wide it is once the border between them has been dragged — `None`
+/// until then, a share of the group, exactly as the AI pane's width is. One
+/// value rather than a flag beside a width, for the reason [`Corner`] is one:
+/// "hidden and 60 columns wide" is a state the layout has no rectangle for,
+/// and the width a hidden output keeps is `State`'s to remember, not the
+/// layout's to be told twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Output {
+    #[default]
+    Away,
+    Shown(Option<u16>),
+}
+
+/// The fewest columns either side of that border keeps. Small on purpose: the
+/// gesture is "give the other one the room", and a floor wide enough to read
+/// is a floor that stops the drag well short of where it was aimed. Hiding is
+/// how the Program output goes away entirely.
+pub const GROUP_LEAST: u16 = 8;
 
 /// The fewest rows the area above the Strip keeps, and the fewest the Strip
 /// does: its two borders and the two rows a pty needs, since vt100 underflows
@@ -276,6 +308,8 @@ pub struct Shapes {
     /// `None` until the border above the Strip is dragged: a share of the
     /// screen until somebody names a height, as the AI pane's width is.
     pub strip: Option<u16>,
+    /// Whether the Debug group is showing the Program output, and how wide.
+    pub output: Output,
 }
 
 /// The first content row a pane shows: where the wheel left it, pulled back so
@@ -335,6 +369,28 @@ pub struct Layout {
     /// The same for the Strip, whose one rectangle is the shells or the Debug
     /// group: `terminal` is where it is, and this is whose it is.
     pub group: Group,
+    /// The Program output, at the Strip's right-hand end, with the Variables
+    /// keeping what is left. Empty (zero width) whenever it is not showing —
+    /// which `Area::holds` answers `false` for, so no hit-test has to ask
+    /// whether there is one before asking where it is.
+    pub output: Area,
+}
+
+impl Layout {
+    /// The Strip's whole rectangle: the Variables and the Program output
+    /// together, or the shells. Where its top border is — which the Group tabs
+    /// and the Variables' Transport are right-aligned on and hit-tested
+    /// against, and which the handle that drags its height runs along.
+    /// `terminal` alone stops at the border between the two, so a strip of
+    /// labels measured against it would slide every time that border was
+    /// dragged and vanish altogether once the Variables were squeezed to
+    /// [`GROUP_LEAST`].
+    pub fn strip(&self) -> Area {
+        Area {
+            width: self.terminal.width + self.output.width,
+            ..self.terminal
+        }
+    }
 }
 
 /// Tree, editor and AI across the top; terminal beneath. The terminal takes 30%
@@ -387,7 +443,19 @@ pub fn panes(
         Corner::Hidden => 0,
         _ => tree_width.min(shell_room.saturating_sub(1)),
     };
-    let terminal_width = shell_room.saturating_sub(corner_width).max(1);
+    let strip_width = shell_room.saturating_sub(corner_width).max(1);
+    // The Program output takes its columns out of the Strip's right-hand end,
+    // the way the corner takes its out of the left: the Variables keep what is
+    // left, and neither can be squeezed past `GROUP_LEAST`.
+    let output_width = match shapes.output {
+        Output::Away => 0,
+        Output::Shown(asked) => {
+            let least = GROUP_LEAST.min(strip_width);
+            let most = strip_width.saturating_sub(GROUP_LEAST).max(least);
+            asked.unwrap_or(strip_width / 2).clamp(least, most)
+        }
+    };
+    let terminal_width = strip_width - output_width;
 
     Layout {
         tree: Area {
@@ -430,6 +498,12 @@ pub fn panes(
             width: corner_width,
             height: terminal_height,
         },
+        output: Area {
+            x: corner_width + terminal_width,
+            y: top,
+            width: output_width,
+            height: terminal_height,
+        },
         occupant: shapes.corner,
         group: shapes.group,
         band: Area {
@@ -439,6 +513,24 @@ pub fn panes(
             height: band_height,
         },
     }
+}
+
+/// The pty size a pane's rectangle asks for: its interior, clamped so vt100
+/// never sees a grid it panics on — two rows and not one, because wrapping a
+/// column needs a row to scroll into and on a one-row grid vt100 subtracts the
+/// scroll off the row it came from.
+///
+/// `None` for a rectangle with nothing in it, which is a pane that is not on
+/// screen: a hidden Program output squeezed to the floor would reflow
+/// everything its child had printed, and showing it again would bring back
+/// something nobody could read.
+pub fn pty_size(width: u16, height: u16) -> Option<(u16, u16)> {
+    (width > 0 && height > 0).then(|| {
+        (
+            height.saturating_sub(2).max(2),
+            width.saturating_sub(2).max(1),
+        )
+    })
 }
 
 /// A centred overlay box sized to its content. Shared so that what is drawn and
@@ -520,6 +612,8 @@ pub fn pane_at(layout: &Layout, column: u16, row: u16) -> Option<Pane> {
     // for a span of the wrong pane.
     if layout.corner.holds(column, row) {
         layout.occupant.pane()
+    } else if layout.output.holds(column, row) {
+        Some(Pane::Output)
     } else if layout.tree.holds(column, row) {
         Some(Pane::Tree)
     } else if layout.editor.holds(column, row) || layout.band.holds(column, row) {
@@ -536,6 +630,56 @@ pub fn pane_at(layout: &Layout, column: u16, row: u16) -> Option<Pane> {
 #[cfg(test)]
 mod split_tests {
     use super::*;
+
+    /// The Debug group tiles the Strip: the Variables keep what the Program
+    /// output does not take, neither is squeezed past `GROUP_LEAST`, and
+    /// hiding it gives the Variables every column back. Pinned here because
+    /// two rectangles that do not tile are a click landing in a pane nobody
+    /// pointed at.
+    #[test]
+    fn the_program_output_tiles_the_strip_with_the_variables() {
+        let group = |output| {
+            let layout = panes(
+                120,
+                40,
+                30,
+                None,
+                0,
+                0,
+                Shapes {
+                    corner: Corner::Frames,
+                    group: Group::Debug,
+                    output,
+                    ..Shapes::default()
+                },
+            );
+            (layout.terminal, layout.output)
+        };
+        let (variables, output) = group(Output::Away);
+        assert_eq!((variables.x, variables.width), (30, 90));
+        assert_eq!(output.width, 0);
+        assert!(!output.holds(100, variables.y + 1));
+
+        let (variables, output) = group(Output::Shown(Some(60)));
+        assert_eq!((variables.x, variables.width), (30, 30));
+        assert_eq!((output.x, output.width), (60, 60));
+        assert_eq!(variables.right(), output.x);
+        assert_eq!(output.right(), 120);
+
+        // Dragged past either floor, the other side keeps `GROUP_LEAST`.
+        assert_eq!(group(Output::Shown(Some(120))).0.width, GROUP_LEAST);
+        assert_eq!(group(Output::Shown(Some(0))).1.width, GROUP_LEAST);
+    }
+
+    /// A pane with no rectangle asks for no pty, and one with a rectangle
+    /// never asks for a grid vt100 panics on.
+    #[test]
+    fn a_hidden_pane_asks_for_no_pty_and_a_tiny_one_asks_for_the_floor() {
+        assert_eq!(pty_size(0, 10), None);
+        assert_eq!(pty_size(10, 0), None);
+        assert_eq!(pty_size(1, 1), Some((2, 1)));
+        assert_eq!(pty_size(62, 12), Some((10, 60)));
+    }
 
     #[test]
     fn splits_tile_the_strip_and_the_last_takes_the_remainder() {
@@ -637,7 +781,7 @@ mod frame_tests {
 mod tests {
     use super::{
         chip_labels, inset, pane_at, panes, strip_at, strip_height, strip_width, AiPane, Area,
-        Corner, Group, Shapes, EDITOR_TITLE, STEP_MENU_WIDTH, STRIP_LEAST, TOP_LEAST,
+        Corner, Group, Output, Shapes, EDITOR_TITLE, STEP_MENU_WIDTH, STRIP_LEAST, TOP_LEAST,
     };
 
     /// Nine columns, the Breakpoint column leftmost and the fold toggle right
@@ -999,6 +1143,7 @@ mod tests {
                 ai: AiPane::Tall,
                 corner: Corner::Risk,
                 strip: None,
+                output: Output::Away,
             },
         );
         assert_eq!((layout.corner.x, layout.corner.width), (0, 30));
@@ -1027,6 +1172,7 @@ mod tests {
                     ai,
                     corner: Corner::Risk,
                     strip: None,
+                    output: Output::Away,
                 },
             );
             assert_eq!(layout.terminal.width, 1, "{ai:?}");
@@ -1156,6 +1302,7 @@ mod tests {
                     ai: AiPane::Tall,
                     corner: Corner::Risk,
                     strip: None,
+                    output: Output::Away,
                 }),
             ] {
                 let layout = panes(width, height, 30, None, 6, 0, shapes);

@@ -1571,6 +1571,7 @@ fn initial_state(
         // layout reads as its share of the screen.
         ai_width: saved_number(input.state_json.as_deref(), "ai_width"),
         strip_height: saved_number(input.state_json.as_deref(), "strip_height"),
+        output_width: saved_number(input.state_json.as_deref(), "output_width"),
         breakpoints: saved_breakpoints(&input.root, input.state_json.as_deref()),
         // Beside the editor unless the project was last worked in the tall
         // shape — including state recorded before `:tall` existed, which names

@@ -236,13 +236,14 @@ pub const CHORDS: [(&str, &str, &[View]); 1] = [("␣b", "breakpoint", &[View::E
 /// The chords a Debug session answers, offered only while one exists for the
 /// reason [`DEBUG_KEYS`] are listed only while one does: with no session they
 /// do nothing, and a hint offering them would teach keys that are not there.
-pub const DEBUG_CHORDS: [(&str, &str, &[View]); 6] = [
+pub const DEBUG_CHORDS: [(&str, &str, &[View]); 7] = [
     ("␣n", "step over", &[View::Edit]),
     ("␣i", "step into", &[View::Edit]),
     ("␣o", "step out", &[View::Edit]),
     ("␣c", "continue / pause", &[View::Edit]),
     ("␣q", "stop debugging", &[View::Edit]),
     ("␣s", "switch the Strip's group", &[View::Edit]),
+    ("␣h", "hide / show the Program output", &[View::Edit]),
 ];
 
 /// The keys a Debug session reserves, listed while one exists and absent while
@@ -452,6 +453,9 @@ pub fn chord(state: &State, key: char) -> Option<Event> {
         'q' => Some(Event::DebugStop),
         // The Group tab from the keyboard: whichever group the Strip is not
         // showing, since there are two and the gesture is "the other one".
+        // Hiding the Program output and showing it again are one gesture, so
+        // one letter: what pressing it does is whichever the reader can see.
+        'h' if state.debug.is_some() => Some(Event::ToggleOutput),
         's' if state.debug.is_some() => Some(Event::ShowGroup(match state.strip {
             crate::layout::Group::Shells => crate::layout::Group::Debug,
             crate::layout::Group::Debug => crate::layout::Group::Shells,
@@ -836,6 +840,9 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
             // With no session the AI pane is an input box asking which CLI to
             // start, so it is not hosting anything yet.
             Pane::Ai => state.ai_running,
+            // And with no program started the Debug group shows the Variables
+            // alone, so there is no child there to type at either.
+            Pane::Output => state.output_running,
             Pane::Tree
             | Pane::Editor
             | Pane::Risk
@@ -1487,7 +1494,7 @@ fn claims_colon(state: &State) -> bool {
         | Pane::Breakpoints
         | Pane::Frames
         | Pane::Variables => true,
-        Pane::Ai | Pane::Terminal => false,
+        Pane::Ai | Pane::Terminal | Pane::Output => false,
     }
 }
 
@@ -1524,7 +1531,7 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
         (Pane::Breakpoints | Pane::Frames | Pane::Variables, false) => list_arrow(direction),
         (Pane::Breakpoints | Pane::Frames | Pane::Variables, true) => vec![],
         // A hosted pane's arrows went to its child; see below.
-        (Pane::Ai | Pane::Terminal, _) => vec![],
+        (Pane::Ai | Pane::Terminal | Pane::Output, _) => vec![],
     })
 }
 
@@ -1560,7 +1567,7 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         // something collecting one of the returns above took it. Every pane is
         // named rather than caught by a `_`, so a new one is a compiler
         // error rather than a pane whose keys go nowhere.
-        Pane::Ai | Pane::Terminal => vec![],
+        Pane::Ai | Pane::Terminal | Pane::Output => vec![],
     }
 }
 

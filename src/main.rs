@@ -568,6 +568,10 @@ struct Edge {
     /// runs: the last one exiting is how Varde ends.
     shells: Vec<pty::Pane>,
     ai: Option<pty::Pane>,
+    /// The debugged program's own terminal, in the Debug group beside the
+    /// Variables. Held here and nowhere else, so the core is told it exists
+    /// rather than remembering it was asked for.
+    output: Option<pty::Pane>,
     root: PathBuf,
     /// The Bare workspace's Sidecar, as `main` derived it — the edge's own copy
     /// of what it told the core, for the effects it executes against a path of
@@ -780,7 +784,14 @@ fn run(
     let (released_tx, released_rx) = channel();
     let (replaced_tx, replaced_rx) = channel();
     let mut edge = Edge {
-        shells: vec![pty::Pane::spawn(None, &root, size.height / 3, size.width)?],
+        output: None,
+        shells: vec![pty::Pane::spawn(
+            &[],
+            &root,
+            &BTreeMap::new(),
+            size.height / 3,
+            size.width,
+        )?],
         ai: None,
         root: root.clone(),
         sidecar: state.sidecar.clone(),
@@ -1163,14 +1174,24 @@ fn resize_panes(
     }
     edge.area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
     let areas = ui::areas(edge.area, state);
+    // One rule for every hosted pane, off the rectangles the renderer draws:
+    // `pty_size` clamps the grid vt100 would panic on and answers `None` for a
+    // pane with no rectangle at all — the Program output while it is hidden,
+    // which squeezed to the floor would reflow everything it printed.
+    let fit = |pane: &mut pty::Pane, width, height| {
+        if let Some((rows, cols)) = varde::layout::pty_size(width, height) {
+            pane.resize(rows, cols);
+        }
+    };
     for (shell, area) in edge.shells.iter_mut().zip(&areas.splits) {
-        shell.resize(area.height.saturating_sub(2), area.width.saturating_sub(2));
+        fit(shell, area.width, area.height);
     }
     if let Some(ai) = edge.ai.as_mut() {
-        ai.resize(
-            areas.ai.height.saturating_sub(2),
-            areas.ai.width.saturating_sub(2),
-        );
+        fit(ai, areas.ai.width, areas.ai.height);
+    }
+    if let Some(output) = edge.output.as_mut() {
+        let area = areas.panes.output;
+        fit(output, area.width, area.height);
     }
     dirty
 }
@@ -1199,6 +1220,21 @@ fn drain_panes(state: &State, edge: &mut Edge, queue: &mut VecDeque<Event>) -> b
     // command held for a fresh split waits for, as a review waits for the AI.
     for (split, _) in spoke.iter().enumerate().filter(|(_, spoke)| **spoke) {
         queue.push_back(Event::ShellSpoke(split));
+    }
+    if let Some(output) = edge.output.as_mut() {
+        // Every arrival, not only the first: out of sight each one is what
+        // marks the `Debug` Group tab, and the core is the one that decides
+        // whether the reader can see it.
+        if output.drain() {
+            dirty = true;
+            queue.push_back(Event::OutputSpoke);
+        }
+        // The program ended, so the pane goes with it — the Debug group is the
+        // Variables alone again.
+        if !output.alive {
+            edge.output = None;
+            dirty = true;
+        }
     }
     let Some(ai) = edge.ai.as_mut() else {
         return dirty;
@@ -1260,12 +1296,20 @@ fn drain_adapter(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
     let dirty = !arrived.is_empty() || !adapter.alive;
     queue.extend(arrived.into_iter().map(|json| Event::DapReceived { json }));
     if !adapter.alive {
-        edge.adapter = None;
-        queue.push_back(Event::DapGone {
-            why: varde::debug::Gone::Exited,
-        });
+        adapter_is_gone(edge, queue, varde::debug::Gone::Exited);
     }
     dirty
+}
+
+/// What the edge does wherever it stops holding an adapter: the session is
+/// gone, and the debugged program goes with it. Dropping its pty is what takes
+/// the child down — a program left running in a group nobody can reach is a
+/// pane with no way back, `ai_running`'s failure from the other side. One
+/// function for the two sites, so neither can remember only half of it.
+fn adapter_is_gone(edge: &mut Edge, queue: &mut VecDeque<Event>, why: varde::debug::Gone) {
+    edge.adapter = None;
+    edge.output = None;
+    queue.push_back(Event::DapGone { why });
 }
 
 /// Asking git which paths are ignored costs milliseconds, so it is asked when
@@ -1550,6 +1594,7 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
             &rows,
             &edge.shells,
             edge.ai.as_ref(),
+            edge.output.as_ref(),
             ui::Chrome {
                 status: &status,
                 tone,
@@ -1778,6 +1823,19 @@ fn tell_core(state: &mut State, edge: &mut Edge) {
     state.terminal_paste = edge.shells[state.split()].bracketed_paste();
     state.ai_paste = edge
         .ai
+        .as_ref()
+        .map(pty::Pane::bracketed_paste)
+        .unwrap_or_default();
+    // The Program output's three, the same way: whether the edge holds it, and
+    // what its child asked for.
+    state.output_running = edge.output.is_some();
+    state.output_mouse = edge
+        .output
+        .as_ref()
+        .map(pty::Pane::mouse_encoding)
+        .unwrap_or_default();
+    state.output_paste = edge
+        .output
         .as_ref()
         .map(pty::Pane::bracketed_paste)
         .unwrap_or_default();
@@ -2414,6 +2472,7 @@ fn grid_lines(edge: &Edge, pane: Pane, split: usize, upto: usize) -> Option<Vec<
     let screen = match pane {
         Pane::Ai => edge.ai.as_ref()?.screen(),
         Pane::Terminal => edge.shells.get(split)?.screen(),
+        Pane::Output => edge.output.as_ref()?.screen(),
         Pane::Tree
         | Pane::Editor
         | Pane::Risk
@@ -2524,6 +2583,11 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
                 }
             }
             Pane::Terminal => edge.shell(split).send(&bytes),
+            Pane::Output => {
+                if let Some(output) = edge.output.as_mut() {
+                    output.send(&bytes);
+                }
+            }
             Pane::Tree
             | Pane::Editor
             | Pane::Risk
@@ -2554,7 +2618,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
             let from = from.min(edge.shells.len() - 1);
             let cwd = edge.shells[from].cwd().unwrap_or_else(|| edge.root.clone());
             let (rows, cols) = edge.shells[from].screen().size();
-            match pty::Pane::spawn(None, &cwd, rows, cols) {
+            match pty::Pane::spawn(&[], &cwd, &BTreeMap::new(), rows, cols) {
                 Ok(pane) => edge.shells.insert(from + 1, pane),
                 Err(error) => {
                     edge.status = Status {
@@ -2566,7 +2630,13 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
         }
         Effect::SpawnAi { command } => {
             let size = edge.shells[0].screen().size();
-            match pty::Pane::spawn(Some(&command), &edge.root, size.0, size.1) {
+            match pty::Pane::spawn(
+                std::slice::from_ref(&command),
+                &edge.root,
+                &BTreeMap::new(),
+                size.0,
+                size.1,
+            ) {
                 Ok(pane) => {
                     edge.ai = Some(pane);
                 }
@@ -2580,6 +2650,23 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                     // and a review queued for it is not owed to whichever CLI
                     // is started next.
                     queue.push_back(Event::AiExited);
+                }
+            }
+        }
+        // The adapter asked for a terminal to run the debugged program in. It
+        // replaces whatever the last session left: one Debug group, one
+        // program, and a pane holding a program nobody is debugging is the
+        // dead pane `ai_running` was.
+        Effect::RunProgram { argv, cwd, env } => {
+            let cwd = cwd.unwrap_or_else(|| edge.root.clone());
+            let size = edge.shells[0].screen().size();
+            match pty::Pane::spawn(&argv, &cwd, &env, size.0, size.1) {
+                Ok(pane) => edge.output = Some(pane),
+                Err(error) => {
+                    edge.status = Status {
+                        text: format!("could not run {}: {error}", argv.join(" ")),
+                        tone: ui::Tone::Warning,
+                    };
                 }
             }
         }
@@ -2669,10 +2756,8 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
             }),
         },
         Effect::StopDap => {
-            if edge.adapter.take().is_some() {
-                queue.push_back(Event::DapGone {
-                    why: varde::debug::Gone::Exited,
-                });
+            if edge.adapter.is_some() {
+                adapter_is_gone(edge, queue, varde::debug::Gone::Exited);
             }
         }
         // Asked for, so the answer kept from the list opening is dropped and

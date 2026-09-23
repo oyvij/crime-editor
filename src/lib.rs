@@ -117,6 +117,10 @@ pub enum Pane {
     /// variant for the reason the corner's four are each their own: a click in
     /// it names a member to open, which is nothing a shell's grid holds.
     Variables,
+    /// The debugged program's own terminal, beside the Variables in the Debug
+    /// group. A hosted pane like the shells and the AI: its child owns the
+    /// keyboard, and Varde is the terminal answering its queries.
+    Output,
 }
 
 /// One control in a Transport (`docs/adr/0022-every-action-has-a-chip.md`):
@@ -152,6 +156,11 @@ pub enum Tone {
     Dimmed,
     Plain,
     Lit,
+    /// Something arrived that the reader has not seen — the Program output
+    /// printing while it is out of sight. Its own tone rather than Lit: lit is
+    /// "this is what you just did", and a mark is "this happened without you",
+    /// which is the opposite claim.
+    Marked,
 }
 
 /// What one of the terminal strip's shells is doing, told by the edge: a
@@ -575,6 +584,12 @@ pub enum Event {
     /// A shell that had printed nothing has printed something, so it is
     /// reading its input — what a held command waits for (R38.5).
     ShellSpoke(usize),
+    /// The debugged program printed something. Out of sight that marks the
+    /// `Debug` Group tab and the Chip that shows it again; on screen it is
+    /// already read, so it marks nothing.
+    OutputSpoke,
+    /// Hide the Program output, or show it again — `␣h` and the show Chip.
+    ToggleOutput,
     ClickPane(Pane),
     /// A press and release in a pane with no drag between them: a click the
     /// pane's child may want, unlike the press, which is ours. `at` is the cell
@@ -631,6 +646,9 @@ pub enum Event {
     /// A width rather than a column, because the tree's divider moves either
     /// side of it and the pane is meant to keep the size it was given.
     DragAiDivider(u32),
+    /// The border between the Variables and the Program output, as a width for
+    /// the Program output.
+    DragOutput(u32),
     /// The border above the Strip was dragged: how many rows tall it asks to be.
     DragStrip(u32),
     Copy,
@@ -1288,6 +1306,16 @@ pub enum Effect {
     DapSend {
         json: String,
     },
+    /// Start the debugged program in the Debug group's own terminal, which is
+    /// what the adapter's `runInTerminal` asks for. Never a shell: the Strip's
+    /// shells are the reader's, and a program started in one would end with
+    /// the next `:split` and print into whatever else was running there.
+    /// Whether it started is the edge's to say, the way a spawned AI is.
+    RunProgram {
+        argv: Vec<String>,
+        cwd: Option<PathBuf>,
+        env: BTreeMap<String, String>,
+    },
     /// Let the adapter go. The edge answers with `Event::DapGone`, as every
     /// site that stops holding one does.
     StopDap,
@@ -1790,6 +1818,25 @@ pub struct State {
     pub strip_height: Option<u32>,
     /// Which group the Strip is showing.
     pub strip: layout::Group,
+    /// Whether the edge holds the debugged program's own terminal. Told by the
+    /// edge, for `ai_running`'s reason: a program asked for is not a process
+    /// that exists, and the core would otherwise route keys to a pane nobody
+    /// holds.
+    pub output_running: bool,
+    /// Whether the Program output is out of sight, which gives the Variables
+    /// the whole Debug group. Hiding it stops nothing: the pty keeps its size
+    /// and everything it printed, so this is the one fact hiding changes.
+    pub output_hidden: bool,
+    /// How wide it is once the border between it and the Variables has been
+    /// dragged, and `None` until then — a share of the group, as `ai_width`
+    /// is of the screen. Kept while it is hidden, which is what showing it
+    /// again brings back.
+    pub output_width: Option<u32>,
+    /// Whether it has printed anything since it was last on screen, which is
+    /// what the `Debug` Group tab and the show Chip are marked with.
+    pub output_unseen: bool,
+    pub output_mouse: mouse::Encoding,
+    pub output_paste: keys::Paste,
     /// Every Breakpoint in the workspace, with or without a Debug session.
     pub breakpoints: Vec<debug::Breakpoint>,
     pub terminal_mouse: mouse::Encoding,
@@ -2317,6 +2364,12 @@ impl Default for State {
             launches: BTreeMap::new(),
             debug: None,
             stepping: false,
+            output_running: false,
+            output_hidden: false,
+            output_width: None,
+            output_unseen: false,
+            output_mouse: mouse::Encoding::None,
+            output_paste: keys::Paste::Bare,
             terminal_mouse: mouse::Encoding::None,
             terminals: vec![Shell::Idle],
             terminal_split: 0,
@@ -2419,6 +2472,21 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
     // wrote. That is the mode doing what a mode does — it is also what the
     // editor was already *drawing*, from `Buffer::selected_lines`, while `d`
     // took the charwise arm and deleted something else.
+    // What the reader can see, told once: the mark on the `Debug` tab is a
+    // claim that output arrived unseen, so it lasts exactly as long as the
+    // Program output is out of sight. Here rather than in the arms that show
+    // it — the tab, the Chip, the chord and a session that ends are four, and
+    // a mark one of them forgot is a tab that says something arrived when the
+    // reader is looking straight at it.
+    if showing_output(&next) {
+        next.output_unseen = false;
+    }
+    // A pane the edge no longer holds is a pane the keyboard must not be in —
+    // the rule `AiExited` exists for, here because `output_running` is derived
+    // and there is no event to hang it on.
+    if next.focus == Pane::Output && !next.output_running {
+        next.focus = Pane::Editor;
+    }
     let showing_lines = next.focus == Pane::Editor && next.diff.is_none() && !previewing(&next);
     let linewise = showing_lines
         .then(|| current_buffer(&next).and_then(Buffer::selected_lines))
@@ -3502,6 +3570,25 @@ fn on_key_3(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
             })
         }
 
+        // Space is the chord prefix in Varde's own Debug panes too, not only
+        // on the code: stepping happens in bursts from wherever the keyboard
+        // is, and a modifier-free alias that works in one pane is the failure
+        // the F-keys' reserved-everywhere rule exists to prevent. The editor's
+        // own arm is below, where it has a buffer's mode to answer for.
+        Event::Key(' ')
+            if state.modal == Modal::None
+                && state.debug.is_some()
+                && matches!(state.focus, Pane::Variables | Pane::Frames) =>
+        {
+            Ok((
+                State {
+                    modal: Modal::Chord,
+                    ..next
+                },
+                vec![],
+            ))
+        }
+
         // The Frames' `j` and `k`, as every list in the corner has.
         Event::Key(key @ ('j' | 'k'))
             if state.focus == Pane::Frames && state.modal == Modal::None =>
@@ -3944,7 +4031,7 @@ fn on_submit_review(state: &State, mut next: State, event: Event, wheeled: bool)
         // buttons work, and the AI pane went without one for exactly as long as
         // it sat in a wildcard arm. Exhaustive so a fifth pane is a decision.
         Event::ClickThrough { pane, at } => match pane {
-            Pane::Terminal | Pane::Ai => {
+            Pane::Terminal | Pane::Ai | Pane::Output => {
                 match mouse::report(mouse_encoding(state, pane), mouse::Gesture::Click, at) {
                     Some(bytes) => vec![Effect::SendKeys { pane, bytes }],
                     None => vec![],
@@ -4154,7 +4241,7 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                     // No `Effect::Scrolled` when the child cannot be told: a
                     // pty's scrollback is rows, so there is no sideways history
                     // for the edge to answer with.
-                    Pane::Terminal | Pane::Ai => match mouse::report(
+                    Pane::Terminal | Pane::Ai | Pane::Output => match mouse::report(
                         mouse_encoding(state, pane),
                         mouse::Gesture::Wheel(direction),
                         at,
@@ -4257,7 +4344,7 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 }
                 // A program that asked for mouse events scrolls itself; ours is
                 // the scrollback behind a shell that did not.
-                Pane::Terminal | Pane::Ai => match mouse::report(
+                Pane::Terminal | Pane::Ai | Pane::Output => match mouse::report(
                     mouse_encoding(state, pane),
                     mouse::Gesture::Wheel(direction),
                     at,
@@ -4335,6 +4422,15 @@ fn on_resized(state: &State, mut next: State, event: Event, wheeled: bool) -> An
 
         Event::DragDivider(column) => {
             next.tree_divider = column;
+            vec![Effect::SaveState(state_json(&next))]
+        }
+
+        // Remembered as a width off the Debug group's right-hand end rather
+        // than as a column: the Strip's left edge moves with the Corner beside
+        // it, and a column would put the border somewhere else every time the
+        // Corner's occupant changed.
+        Event::DragOutput(width) => {
+            next.output_width = Some(width);
             vec![Effect::SaveState(state_json(&next))]
         }
 
@@ -7609,6 +7705,7 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
             ));
         }
         // Dimmed with nothing to clear, and a dimmed Chip does nothing.
+        Event::PaneAction(debug::TOGGLE_OUTPUT) => return Ok(update(state, Event::ToggleOutput)),
         Event::PaneAction(debug::CLEAR_ALL) if !state.breakpoints.is_empty() => {
             next.breakpoints.clear();
             vec![Effect::SaveState(state_json(&next))]
@@ -8054,9 +8151,32 @@ fn on_activate_2(state: &State, mut next: State, event: Event, wheeled: bool) ->
         // to leave the file being read.
         Event::ShowGroup(group) => {
             next.strip = group;
-            if state.focus == state.strip.pane() {
+            if state.strip.holds(state.focus) {
                 next.focus = group.pane();
             }
+            vec![]
+        }
+
+        // Nothing is stopped and nothing is resized: the pty keeps its rows
+        // and everything it printed, and `output_width` keeps the border where
+        // the reader left it, so showing it again brings back what was there.
+        Event::ToggleOutput => {
+            next.output_hidden = !state.output_hidden;
+            // Showing it is asking to see it, so the group it lives in comes
+            // forward — the Chip is clickable from the Debug group alone, but
+            // `␣h` is a key like the F-keys and reaches from anywhere.
+            if state.output_hidden {
+                next.strip = layout::Group::Debug;
+            }
+            vec![]
+        }
+
+        // Out of sight it is marked where the reader will look — the `Debug`
+        // Group tab and the Chip that brings it back. On screen it has already
+        // been read, so it marks nothing; `settle` is what clears the mark,
+        // for the reason it clamps the scrolls.
+        Event::OutputSpoke => {
+            next.output_unseen = !showing_output(state);
             vec![]
         }
 
@@ -8136,7 +8256,10 @@ fn on_bytes(state: &State, next: State, event: Event, wheeled: bool) -> Answered
             // With no session running the AI pane is an input box, so its keys
             // belong to that — never to the shell.
             Pane::Ai if !state.ai_running => vec![],
-            Pane::Terminal | Pane::Ai => vec![Effect::SendKeys {
+            // And with no program started the Debug group is the Variables
+            // alone, so there is no child there for a key to reach.
+            Pane::Output if !state.output_running => vec![],
+            Pane::Terminal | Pane::Ai | Pane::Output => vec![Effect::SendKeys {
                 pane: state.focus,
                 bytes,
             }],
@@ -8165,7 +8288,9 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
             let asked = match state.focus {
                 Pane::Terminal => Some(state.terminal_paste),
                 Pane::Ai if state.ai_running => Some(state.ai_paste),
-                Pane::Ai
+                Pane::Output if state.output_running => Some(state.output_paste),
+                Pane::Output
+                | Pane::Ai
                 | Pane::Tree
                 | Pane::Editor
                 | Pane::Risk
@@ -8528,6 +8653,7 @@ fn state_json(state: &State) -> String {
         "tree_divider": state.tree_divider,
         "ai_width": state.ai_width,
         "strip_height": state.strip_height,
+        "output_width": state.output_width,
         "ai_pane": format!("{:?}", state.ai_pane),
         "corner": format!("{:?}", debug::resting_corner(state)),
         "cheatsheet": state.cheatsheet,
@@ -8818,6 +8944,7 @@ fn mouse_encoding(state: &State, pane: Pane) -> mouse::Encoding {
     match pane {
         Pane::Terminal => state.terminal_mouse,
         Pane::Ai => state.ai_mouse,
+        Pane::Output => state.output_mouse,
         Pane::Tree
         | Pane::Editor
         | Pane::Risk
@@ -8829,15 +8956,41 @@ fn mouse_encoding(state: &State, pane: Pane) -> mouse::Encoding {
     }
 }
 
-/// The Group tabs on the Strip's top border, in the order they are drawn, and
-/// whether each is lit — the one lit being the group the Strip shows.
-/// The Debug group only while a session exists, for the reason its chords are
+/// Whether the Program output is on screen: the Debug group up, a pty behind
+/// it, and not hidden. One answer, read by the layout, by the mark that says
+/// output arrived unseen and by the Chip that brings it back, so the three
+/// cannot disagree about whether the reader can see it.
+pub fn showing_output(state: &State) -> bool {
+    state.strip == layout::Group::Debug && state.output_running && !state.output_hidden
+}
+
+/// One Group tab as it is drawn. Lit and marked are two facts rather than one
+/// [`Tone`]: the Debug group can be up with the Program output hidden behind
+/// it, which is a tab that is both, and a single tone would have to drop one
+/// of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tab {
+    pub group: layout::Group,
+    /// Whether this is the group the Strip is showing.
+    pub lit: bool,
+    /// Whether it holds output the reader has not seen.
+    pub unseen: bool,
+}
+
+/// The Group tabs on the Strip's top border, in the order they are drawn. The
+/// Debug group only while a session exists, for the reason its chords are
 /// offered only then: a tab that shows an empty Strip is a tab that lies.
-pub fn group_tabs(state: &State) -> Vec<(layout::Group, bool)> {
+pub fn group_tabs(state: &State) -> Vec<Tab> {
     [layout::Group::Shells]
         .into_iter()
         .chain(state.debug.as_ref().map(|_| layout::Group::Debug))
-        .map(|group| (group, group == state.strip))
+        .map(|group| Tab {
+            group,
+            lit: group == state.strip,
+            // Only the group the Program output lives in has anything unseen
+            // to say: the shells are the reader's own and nothing marks them.
+            unseen: group == layout::Group::Debug && state.output_unseen,
+        })
         .collect()
 }
 
@@ -8853,6 +9006,23 @@ pub fn shapes(state: &State) -> layout::Shapes {
         corner: state.corner,
         group: state.strip,
         strip: state.strip_height.map(|height| height as u16),
+        output: match showing_output(state) {
+            true => layout::Output::Shown(state.output_width.map(|width| width as u16)),
+            false => layout::Output::Away,
+        },
+    }
+}
+
+/// Where the Variables' Transport is drawn and hit-tested: the Strip's own
+/// rectangle, less the columns the Group tabs keep at its right-hand end. One
+/// derivation, for the reason [`layout::chip_labels`] is one — two would be a
+/// Chip drawn where nothing clicks it.
+pub fn transport_area(state: &State, strip: layout::Area) -> layout::Area {
+    layout::Area {
+        width: strip
+            .width
+            .saturating_sub(layout::strip_width(&group_labels(state))),
+        ..strip
     }
 }
 
@@ -8863,7 +9033,7 @@ pub fn shapes(state: &State) -> layout::Shapes {
 pub fn group_labels(state: &State) -> Vec<String> {
     group_tabs(state)
         .iter()
-        .map(|(group, _)| format!(" {} ", group.label()))
+        .map(|tab| format!(" {} ", tab.group.label()))
         .collect()
 }
 
