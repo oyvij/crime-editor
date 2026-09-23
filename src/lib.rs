@@ -1026,8 +1026,16 @@ pub enum Event {
     MoveLaunchRow(Direction),
     /// F9: continue while Paused, pause while Running.
     DebugResume,
+    /// F8, F7 and Shift+F8, and the chords that alias them: one step of the
+    /// inspected thread.
+    DebugStep(debug::Step),
     /// Ctrl+F2: stop the Debug session.
     DebugStop,
+    /// A key Stepping mode does not claim, so the mode ends here and the key
+    /// does what it always does — the events queued behind this one. Its own
+    /// event because only the router knows a key was not one of the mode's,
+    /// and only `update` may write the flag.
+    LeaveStepping,
     /// Typing paused for as long as the window `Effect::DebounceCandidates`
     /// asked for, so what may follow what was typed is worth asking about.
     /// Sent by the edge, which holds the
@@ -2003,6 +2011,11 @@ pub struct State {
     pub launches: BTreeMap<String, startup::Launch>,
     /// The Debug session, if one exists.
     pub debug: Option<debug::Session>,
+    /// Stepping mode: a Space chord has just run, so the stepping letters act
+    /// without their Space until any other key leaves it. Never on without a
+    /// session — `n` is find-next the rest of the time, and a mode that
+    /// swallowed it for nothing would be a trap.
+    pub stepping: bool,
     /// How many ticks the edge has reported. The edge ticks only while it holds
     /// work, so this advances while a job runs and stands still otherwise —
     /// which is the whole of what the core knows about it
@@ -2286,6 +2299,7 @@ impl Default for State {
             adapters: BTreeMap::new(),
             launches: BTreeMap::new(),
             debug: None,
+            stepping: false,
             terminal_mouse: mouse::Encoding::None,
             terminals: vec![Shell::Idle],
             terminal_split: 0,
@@ -3518,13 +3532,18 @@ fn on_key_5(state: &State, mut next: State, event: Event, _wheeled: bool) -> Ans
         // costs the one key, the way Escape does.
         Event::Key(key) if state.modal == Modal::Chord => {
             next.modal = Modal::None;
-            match key {
-                'b' => {
-                    let line = current_buffer(&next).map_or(0, |buffer| buffer.line);
-                    Ok(update(&next, Event::ToggleBreakpoint(line)))
-                }
-                _ => Ok((next, vec![])),
-            }
+            let Some(chord) = keys::chord(state, key) else {
+                return Ok((next, vec![]));
+            };
+            // The chord done, the keyboard is left in Stepping mode, where the
+            // stepping letters act without their Space: stepping happens in
+            // bursts, and a Space per step is a Space too many. The session is
+            // what bounds it — see `State::stepping` — so `q`, which is the
+            // chord that ends one, is the chord that does not leave it on:
+            // between the request and the adapter letting go, the mode would
+            // be four letters swallowed for a session on its way out.
+            next.stepping = state.debug.is_some() && key != 'q';
+            Ok(update(&next, chord))
         }
         Event::Key(key) if state.modal == Modal::Palette => {
             let Some(entry) = palette_entry(key) else {
@@ -6102,7 +6121,7 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
 }
 
 /// DapReceived, DapStarted, DapGone, StartLaunch, MoveLaunchRow, DebugResume,
-/// DebugStop
+/// DebugStep, DebugStop, LeaveStepping
 fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::DapReceived { json } => debug::received(&mut next, &json),
@@ -6121,7 +6140,12 @@ fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answ
             debug::start(&mut next, &name)
         }
         Event::DebugResume => debug::resume(&mut next),
+        Event::DebugStep(step) => debug::step(&mut next, step),
         Event::DebugStop => debug::stop(&mut next),
+        Event::LeaveStepping => {
+            next.stepping = false;
+            vec![]
+        }
         Event::MoveLaunchRow(direction) => {
             let last = state.launches.len().saturating_sub(1);
             if let Modal::Launches { row } = &mut next.modal {
@@ -8331,6 +8355,16 @@ pub fn mode_label(state: &State, buffer: &editor::Buffer) -> &'static str {
     // at without having to guess from the absence of line numbers.
     if previewing(state) {
         return "preview";
+    }
+    // Ahead of the buffer's own mode, because it is the mode the next
+    // keystroke obeys: in Stepping mode `n`, `i`, `o` and `c` drive the
+    // program rather than the buffer, and the title is where a reader finds
+    // out which of the two they are typing at. Behind the three above for the
+    // reason they are there at all: a surface that refuses every edit is the
+    // more useful thing to say, and Stepping mode adds keys rather than
+    // taking any away.
+    if state.stepping {
+        return "stepping";
     }
     buffer.mode.as_str()
 }
@@ -11040,7 +11074,44 @@ mod tests {
             let mut buffer = editor::Buffer::open("", false, editor::DEFAULT_TAB_WIDTH);
             buffer.mode = mode;
             assert_eq!(mode_label(&state, &buffer), expected);
+            // Stepping mode outranks the buffer's own mode and nothing else:
+            // `n`, `i`, `o` and `c` drive the program rather than the buffer,
+            // so naming the buffer's mode there advertises keys that are not
+            // on offer — but a walk refuses every edit, which is the more
+            // useful thing to say. Until the Variables' title exists this is
+            // where Varde says the mode is on at all.
+            let stepping = State {
+                stepping: true,
+                ..state
+            };
+            let expected = match walking {
+                true => "read-only",
+                false => "stepping",
+            };
+            assert_eq!(mode_label(&stepping, &buffer), expected);
         }
+    }
+
+    /// Which chord leaves the keyboard in Stepping mode and which does not.
+    /// `␣q` is the chord that ends the session the mode belongs to, so it is
+    /// the one that leaves it off: in the interval between the request and the
+    /// adapter letting go, the mode is four letters swallowed for a session on
+    /// its way out. With no session the mode never opens at all, because `n`
+    /// is find-next the rest of the time.
+    #[test]
+    fn a_chord_leaves_stepping_mode_on_unless_it_ends_the_session() {
+        let chord = |state: &State, key| {
+            let waiting = State {
+                modal: Modal::Chord,
+                ..state.clone()
+            };
+            update(&waiting, Event::Key(key)).0
+        };
+        let paused = debug::paused(State::default());
+        assert!(chord(&paused, 'n').stepping);
+        assert!(chord(&paused, 'b').stepping);
+        assert!(!chord(&paused, 'q').stepping);
+        assert!(!chord(&State::default(), 'b').stepping);
     }
 
     /// The claim the guard in `update` makes that no list of keys could: an

@@ -225,18 +225,51 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
     ),
 ];
 
-/// What a tapped Space can be followed by. The one list both the Chord hint
-/// and the cheatsheet draw, so the two cannot disagree: each row is spelled as
-/// the chord, and the hint reads its key off the spelling's second character.
-/// Space is shared — other features may claim other letters later.
+/// What a tapped Space can be followed by whatever else is going on — the
+/// chords that need no Debug session. With [`DEBUG_CHORDS`] it is the one list
+/// both the Chord hint and the cheatsheet draw, so the two cannot disagree:
+/// each row is spelled as the chord, and the hint reads its key off the
+/// spelling's second character. Space is shared — other features may claim
+/// other letters later.
 pub const CHORDS: [(&str, &str, &[View]); 1] = [("␣b", "breakpoint", &[View::Edit])];
+
+/// The chords a Debug session answers, offered only while one exists for the
+/// reason [`DEBUG_KEYS`] are listed only while one does: with no session they
+/// do nothing, and a hint offering them would teach keys that are not there.
+pub const DEBUG_CHORDS: [(&str, &str, &[View]); 5] = [
+    ("␣n", "step over", &[View::Edit]),
+    ("␣i", "step into", &[View::Edit]),
+    ("␣o", "step out", &[View::Edit]),
+    ("␣c", "continue / pause", &[View::Edit]),
+    ("␣q", "stop debugging", &[View::Edit]),
+];
 
 /// The keys a Debug session reserves, listed while one exists and absent while
 /// none does — which is when the hosted panes have them back.
-pub const DEBUG_KEYS: [(&str, &str, &[View]); 2] = [
+pub const DEBUG_KEYS: [(&str, &str, &[View]); 5] = [
     ("F9", "continue / pause", &[View::Edit]),
+    ("F8", "step over", &[View::Edit]),
+    ("F7", "step into", &[View::Edit]),
+    ("S-F8", "step out", &[View::Edit]),
     ("C-F2", "stop debugging", &[View::Edit]),
 ];
+
+/// The chords on offer in `state`: the ones that need a Debug session, only
+/// while one exists. One answer, read by the Chord hint, by the cheatsheet and
+/// through them by the mouse's hit-test, so the three cannot disagree about
+/// what a waiting Space is waiting for.
+///
+/// The debug chords first, for the reason [`DEBUG_KEYS`] come first in the
+/// cheatsheet: while a session exists they are the keys being reached for.
+fn chords(
+    state: &State,
+) -> impl Iterator<Item = &'static (&'static str, &'static str, &'static [View])> {
+    let debug: &'static [(&str, &str, &[View])] = match state.debug {
+        Some(_) => &DEBUG_CHORDS,
+        None => &[],
+    };
+    debug.iter().chain(CHORDS.iter())
+}
 
 /// The cheatsheet as drawn: the debug keys while a session exists — first,
 /// because while one does they are the keys being reached for — then
@@ -248,15 +281,14 @@ pub fn cheatsheet(
         Some(_) => &DEBUG_KEYS,
         None => &[],
     };
-    debug.iter().chain(CHEATSHEET.iter()).chain(CHORDS.iter())
+    debug.iter().chain(CHEATSHEET.iter()).chain(chords(state))
 }
 
 /// The Chord hint as drawn, each row carrying the key it offers or nothing —
 /// the shape [`crate::palette_rows`] has, so the mouse hit-tests these same
 /// rows and a click is the keystroke.
-pub fn chord_rows() -> Vec<(Option<char>, String)> {
-    let mut rows: Vec<(Option<char>, String)> = CHORDS
-        .iter()
+pub fn chord_rows(state: &State) -> Vec<(Option<char>, String)> {
+    let mut rows: Vec<(Option<char>, String)> = chords(state)
         .filter_map(|(keys, what, _)| {
             let key = keys.chars().nth(1)?;
             Some((Some(key), format!("   ({key}) {what}")))
@@ -364,10 +396,74 @@ pub fn on_key_event(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: 
         return events;
     }
     let event = shifted(event);
-    if let Some(events) = claimed_everywhere(state, event) {
-        return events;
+    // Stepping mode, ahead of every arm below: the letters a chord just used
+    // act without their Space, and any other key leaves the mode and then does
+    // what it always does, so nobody is ever trapped in it. Leaving is an event
+    // of its own queued in front of the key's own, because only `update` may
+    // write the flag.
+    let leaving = match state.stepping {
+        false => None,
+        true => match stepping_key(event) {
+            Some(stepped) => return vec![stepped],
+            None => Some(Event::LeaveStepping),
+        },
+    };
+    let mut events = match claimed_everywhere(state, event) {
+        Some(events) => events,
+        None => modal_key(state, drafts, event),
+    };
+    if let Some(leave) = leaving {
+        events.insert(0, leave);
     }
-    modal_key(state, drafts, event)
+    events
+}
+
+/// What a key does in Stepping mode, or nothing for one the mode does not
+/// claim — which is every key but the four [`stepping_letter`] names.
+///
+/// The `every_key` sweep cannot drive this mode, and the omission is a
+/// decision rather than an oversight: in Stepping mode *every* key answers,
+/// because a key the mode does not claim answers by leaving it, so a sweep
+/// driven here would hold all sixty-four modifier combinations of every code
+/// to a cheatsheet row. What the box promises about these four is their
+/// chords, `DEBUG_CHORDS`, which the sweep does hold; that they do the same
+/// thing without the Space is
+/// `stepping_mode_claims_its_letters_and_hands_every_other_key_back`.
+fn stepping_key(event: KeyEvent) -> Option<Event> {
+    if !event.modifiers.is_empty() {
+        return None;
+    }
+    stepping_letter(typed(event)?)
+}
+
+/// What a chord's second key does, given where the keyboard is: the one table
+/// the hint's rows are answered from, so the letters the Chord hint offers and
+/// the letters something happens for cannot part ways. Here rather than in
+/// `update` because it is a key being interpreted, and a key nobody bound
+/// answers with nothing.
+pub fn chord(state: &State, key: char) -> Option<Event> {
+    match key {
+        // The line the caret is on, since the chord is pressed while reading
+        // it. No buffer is line 0, which owns no Breakpoint.
+        'b' => Some(Event::ToggleBreakpoint(
+            crate::current_buffer(state).map_or(0, |buffer| buffer.line),
+        )),
+        'q' => Some(Event::DebugStop),
+        letter => stepping_letter(letter),
+    }
+}
+
+/// The four letters Stepping mode is for, which are also four of the chords.
+/// `q` is not among them, though its chord is: stopping is not a step, and a
+/// session ended by a stray letter is one nothing can bring back.
+fn stepping_letter(key: char) -> Option<Event> {
+    match key {
+        'n' => Some(Event::DebugStep(crate::debug::Step::Over)),
+        'i' => Some(Event::DebugStep(crate::debug::Step::Into)),
+        'o' => Some(Event::DebugStep(crate::debug::Step::Out)),
+        'c' => Some(Event::DebugResume),
+        _ => None,
+    }
 }
 
 /// The keys claimed before the hosted-pane split, so they mean the same thing
@@ -401,14 +497,30 @@ fn reserved(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) -> 
     // while a session exists: with none, the child in a hosted pane gets them.
     if state.debug.is_some() {
         let ctrl = event.modifiers.contains(KeyModifiers::CTRL);
+        let shift = event.modifiers.contains(KeyModifiers::SHIFT);
+        let stepped = |step| Some(vec![Event::DebugStep(step)]);
         match event.code {
             KeyCode::F(9) if !ctrl => return Some(vec![Event::DebugResume]),
             KeyCode::F(2) if ctrl => return Some(vec![Event::DebugStop]),
+            // Shift is a gesture of its own here, which is why `label` spells
+            // it: stepping out is the same key as stepping over, held.
+            KeyCode::F(8) if !ctrl && shift => return stepped(crate::debug::Step::Out),
+            KeyCode::F(8) if !ctrl => return stepped(crate::debug::Step::Over),
+            KeyCode::F(7) if !ctrl => return stepped(crate::debug::Step::Into),
             _ => {}
         }
     }
     if child_owns_keys(state, drafts) {
-        return Some(to_child(state, event, at_ms));
+        let mut events = to_child(state, event, at_ms);
+        // A child owns its letters, so a key arriving here leaves Stepping
+        // mode rather than being claimed by it. The mode is only enterable
+        // from a pane Varde interprets, so this is the one way out of it once
+        // a click has put the keyboard in a shell — without it the mode, and
+        // the title saying so, would outlive every key that could end it.
+        if state.stepping {
+            events.insert(0, Event::LeaveStepping);
+        }
+        return Some(events);
     }
     None
 }
@@ -489,11 +601,17 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
             },
         },
         // Every key takes the hint down; a letter is also the chord's second
-        // key, and one nobody bound does nothing else.
-        Modal::Chord => match typed(event) {
-            Some(c) => vec![Event::Key(c)],
-            None => vec![Event::Cancel],
-        },
+        // key, and one nobody bound does nothing else. Command on a letter is
+        // Command's gesture rather than the chord's, so it takes the hint down
+        // like any other key: `D-c` is copy everywhere else in Varde, and
+        // reading it as the `c` chord would continue a paused program because
+        // somebody reached for the clipboard.
+        Modal::Chord => {
+            match typed(event).filter(|_| !event.modifiers.contains(KeyModifiers::SUPER)) {
+                Some(c) => vec![Event::Key(c)],
+                None => vec![Event::Cancel],
+            }
+        }
         Modal::Comment => comment_picker(drafts, event),
         Modal::NameBox { .. } => name_box(drafts, event),
         Modal::Candidates(_) => candidate_list(state, drafts, event),
@@ -3476,8 +3594,12 @@ mod tests {
                 arrow_label(shift, alt, ctrl)
             }
             // Ctrl is inspected on F2, which stops a Debug session and is
-            // nothing without it.
+            // nothing without it. Shift is inspected on F8 and nowhere else —
+            // held, it steps out where the key alone steps over — so it is a
+            // gesture of its own there and a modifier no binding reads on
+            // every other function key, exactly as Command is on `c` and `v`.
             KeyCode::F(number) if ctrl => format!("C-F{number}"),
+            KeyCode::F(8) if shift => "S-F8".to_string(),
             KeyCode::F(number) => format!("F{number}"),
             code => named_label(code),
         }
@@ -3576,6 +3698,10 @@ mod tests {
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
                 KeyModifiers::SHIFT | KeyModifiers::ALT
             }
+            // The modifiers [`label`] spells on a function key: Ctrl on any
+            // of them, Shift on F8 alone.
+            KeyCode::F(8) => KeyModifiers::CTRL | KeyModifiers::SHIFT,
+            KeyCode::F(_) => KeyModifiers::CTRL,
             _ => KeyModifiers::NONE,
         };
         event
@@ -4208,8 +4334,11 @@ mod tests {
         );
     }
 
-    /// F9 and Ctrl+F2 reach Varde from a shell only while a session exists;
+    /// The debug keys reach Varde from a shell only while a session exists;
     /// with none the shell's child has them, as every key it is not denied.
+    /// Stepping is on this list for the reason F9 is: it happens in bursts
+    /// from wherever the keyboard is, and a key that works in one pane is a
+    /// key that fails the moment focus is elsewhere.
     #[test]
     fn the_debug_keys_are_reserved_only_while_a_session_exists() {
         let shell = State {
@@ -4220,13 +4349,71 @@ mod tests {
             focus: Pane::Terminal,
             ..crate::debug::paused(State::default())
         };
-        let f9 = KeyEvent::new(KeyCode::F(9));
-        let stop = KeyEvent::new(KeyCode::F(2)).modifiers(KeyModifiers::CTRL);
+        let shift = |code| KeyEvent::new(code).modifiers(KeyModifiers::SHIFT);
+        let claimed = [
+            (KeyEvent::new(KeyCode::F(9)), Event::DebugResume),
+            (
+                KeyEvent::new(KeyCode::F(2)).modifiers(KeyModifiers::CTRL),
+                Event::DebugStop,
+            ),
+            (
+                KeyEvent::new(KeyCode::F(8)),
+                Event::DebugStep(crate::debug::Step::Over),
+            ),
+            (
+                KeyEvent::new(KeyCode::F(7)),
+                Event::DebugStep(crate::debug::Step::Into),
+            ),
+            (
+                shift(KeyCode::F(8)),
+                Event::DebugStep(crate::debug::Step::Out),
+            ),
+        ];
         let press = |state: &State, key| on_key_event(state, &mut Drafts::default(), key, 0);
-        assert_eq!(press(&debugging, f9), vec![Event::DebugResume]);
-        assert_eq!(press(&debugging, stop), vec![Event::DebugStop]);
-        assert!(matches!(press(&shell, f9)[..], [Event::Bytes(_)]));
-        assert!(matches!(press(&shell, stop)[..], [Event::Bytes(_)]));
+        for (key, event) in claimed {
+            assert_eq!(press(&debugging, key), vec![event], "{key:?}");
+            assert!(
+                matches!(press(&shell, key)[..], [Event::Bytes(_)]),
+                "{key:?} is withheld from the shell with no session"
+            );
+        }
+    }
+
+    /// Stepping mode: the letters act without their Space, and any other key
+    /// leaves the mode and is then routed as usual rather than swallowed —
+    /// which is what stops the mode from being somewhere anybody is trapped.
+    /// `q` is not one of the letters, so it leaves the mode like any other.
+    #[test]
+    fn stepping_mode_claims_its_letters_and_hands_every_other_key_back() {
+        let stepping = State {
+            stepping: true,
+            ..crate::debug::paused(editing())
+        };
+        let press = |key| on_key_event(&stepping, &mut Drafts::default(), key, 0);
+        for (key, event) in [
+            ('n', Event::DebugStep(crate::debug::Step::Over)),
+            ('i', Event::DebugStep(crate::debug::Step::Into)),
+            ('o', Event::DebugStep(crate::debug::Step::Out)),
+            ('c', Event::DebugResume),
+        ] {
+            assert_eq!(press(plain(key)), vec![event], "{key}");
+        }
+        let plainly = |key| on_key_event(&editing(), &mut Drafts::default(), plain(key), 0);
+        for key in ['j', '/', 'q'] {
+            let events = press(plain(key));
+            assert_eq!(events.first(), Some(&Event::LeaveStepping), "{key}");
+            assert_eq!(events[1..], plainly(key), "{key} is not what it always is");
+        }
+        // The one way out that is not a key Varde interprets: a click can put
+        // the keyboard in a shell, whose child owns these letters, and a mode
+        // that outlived that would have nothing left that could end it.
+        let shell = State {
+            focus: Pane::Terminal,
+            ..stepping
+        };
+        let in_shell = on_key_event(&shell, &mut Drafts::default(), plain('n'), 0);
+        assert_eq!(in_shell.first(), Some(&Event::LeaveStepping));
+        assert!(matches!(in_shell[1..], [Event::Bytes(_)]));
     }
 
     /// The other half of the picker's contract: the sweep above excuses every
@@ -4344,40 +4531,48 @@ mod tests {
         );
     }
 
-    /// The Chord hint is drawn from [`CHORDS`], so what it names must be what a
-    /// waiting Space answers, and what a waiting Space answers must be named.
-    /// Measured against Escape, which takes the hint down and does nothing else:
-    /// a second key that only does that is not a chord. A key claimed before
-    /// the hint — `C-q`, `C-space` — answers through it and is not the hint's.
+    /// The Chord hint is drawn from [`CHORDS`] and [`DEBUG_CHORDS`], so what it
+    /// names must be what a waiting Space answers, and what a waiting Space
+    /// answers must be named. Measured against Escape, which takes the hint
+    /// down and does nothing else: a second key that only does that is not a
+    /// chord. A key claimed before the hint — `C-q`, `C-space` — answers
+    /// through it and is not the hint's.
+    ///
+    /// Driven with a Debug session and without one, because the list is not
+    /// fixed: the debug chords are on it only while a session exists, so a
+    /// state with none would never see them and a state with one would never
+    /// see them go.
     #[test]
     fn a_waiting_space_answers_exactly_the_keys_the_chord_hint_names() {
-        let (waiting, _) = drive(&editing(), &mut Drafts::default(), &[plain(' ')]);
-        assert_eq!(waiting.modal, crate::Modal::Chord, "the hint opens at once");
-        let (cancelled, _) = drive(
-            &waiting,
-            &mut Drafts::default(),
-            &[KeyEvent::new(KeyCode::Esc)],
-        );
-        assert_eq!(cancelled.modal, crate::Modal::None, "Escape cancels it");
-        let chord = |event: KeyEvent| {
-            let events = on_key_event(&waiting, &mut Drafts::default(), event, 0);
-            let (after, acted) = drive(&waiting, &mut Drafts::default(), &[event]);
-            matches!(events.as_slice(), [Event::Key(_)])
-                && (acted || settled(&after) != settled(&cancelled))
-        };
-        let mut answered: Vec<String> = every_key()
-            .into_iter()
-            .filter(|event| chord(*event))
-            .map(label)
-            .collect();
-        answered.sort();
-        answered.dedup();
-        let mut named: Vec<String> = super::chord_rows()
-            .into_iter()
-            .filter_map(|(key, _)| key.map(String::from))
-            .collect();
-        named.sort();
-        assert_eq!(answered, named);
+        for state in [editing(), crate::debug::paused(editing())] {
+            let (waiting, _) = drive(&state, &mut Drafts::default(), &[plain(' ')]);
+            assert_eq!(waiting.modal, crate::Modal::Chord, "the hint opens at once");
+            let (cancelled, _) = drive(
+                &waiting,
+                &mut Drafts::default(),
+                &[KeyEvent::new(KeyCode::Esc)],
+            );
+            assert_eq!(cancelled.modal, crate::Modal::None, "Escape cancels it");
+            let chord = |event: KeyEvent| {
+                let events = on_key_event(&waiting, &mut Drafts::default(), event, 0);
+                let (after, acted) = drive(&waiting, &mut Drafts::default(), &[event]);
+                matches!(events.as_slice(), [Event::Key(_)])
+                    && (acted || settled(&after) != settled(&cancelled))
+            };
+            let mut answered: Vec<String> = every_key()
+                .into_iter()
+                .filter(|event| chord(*event))
+                .map(label)
+                .collect();
+            answered.sort();
+            answered.dedup();
+            let mut named: Vec<String> = super::chord_rows(&waiting)
+                .into_iter()
+                .filter_map(|(key, _)| key.map(String::from))
+                .collect();
+            named.sort();
+            assert_eq!(answered, named);
+        }
     }
 
     /// Space is only a chord prefix in normal mode: inserting, it is a space.

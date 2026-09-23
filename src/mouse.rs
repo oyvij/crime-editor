@@ -1053,7 +1053,7 @@ pub fn palette_entry_at(state: &State, panes: &Layout, column: u16, row: u16) ->
     let height = panes.tree.height + panes.terminal.height;
     let rows = match state.modal {
         Modal::Palette => crate::palette_rows(height),
-        Modal::Chord => crate::keys::chord_rows(),
+        Modal::Chord => crate::keys::chord_rows(state),
         _ => return None,
     };
     let widest = rows
@@ -2490,7 +2490,7 @@ mod tests {
             ..workspace()
         };
         let panes = panes(120, 26, 30, None, 0, 0, Shapes::default());
-        for (key, _) in crate::keys::chord_rows() {
+        for (key, _) in crate::keys::chord_rows(&state) {
             let Some(key) = key else { continue };
             let clicked = (0..26).any(|row| {
                 (0..120)

@@ -2582,8 +2582,11 @@ fn enter_name(world: &mut VardeWorld, name: String) {
 #[given(expr = "I pressed {string}")]
 fn press(world: &mut VardeWorld, key: String) {
     // Through the router: what a tapped Space means is where the keyboard is
-    // and what mode it is in, which no one event stands for.
+    // and what mode it is in, which no one event stands for — and in Stepping
+    // mode that is true of every key, since the mode claims four letters and
+    // hands the rest back to whatever they always were.
     if key == "Space"
+        || world.state.stepping
         || named_key(&key).is_some_and(|event| matches!(event.code, terminput::KeyCode::F(_)))
     {
         return route_key(world, &key, 0);
@@ -4572,6 +4575,23 @@ fn terminal_received(world: &mut VardeWorld, text: String) {
     assert_eq!(
         world.keys_sent,
         vec![(Pane::Terminal, text.into_bytes())],
+        "keys sent: {:?}",
+        world.keys_sent
+    );
+}
+
+/// A key Varde did not claim, as the child received it: the bytes, pinned, so
+/// a key that quietly stops reaching the shell fails here rather than reading
+/// as a pass because something arrived.
+#[then(expr = "the terminal program received the key {string}")]
+fn terminal_received_key(world: &mut VardeWorld, key: String) {
+    let expected: &[u8] = match key.as_str() {
+        "F8" => b"\x1b[19~",
+        other => panic!("no bytes are pinned for {other:?}"),
+    };
+    assert_eq!(
+        world.keys_sent,
+        vec![(Pane::Terminal, expected.to_vec())],
         "keys sent: {:?}",
         world.keys_sent
     );
@@ -14139,6 +14159,96 @@ fn adapter_sent_with(world: &mut VardeWorld, command: String, key: String, value
         last_request(world, &command)["arguments"][key.as_str()],
         expected
     );
+}
+
+/// The hint is a menu as well as a reminder: the mouse hit-tests the rows
+/// `chord_rows` names, which the unit test beside it holds, so what this
+/// drives is the key the row offers.
+#[when(expr = "I click the Chord hint entry for {string}")]
+fn click_chord_entry(world: &mut VardeWorld, key: String) {
+    let key = key.chars().next().expect("a key");
+    let rows = keys::chord_rows(&world.state);
+    assert!(
+        rows.iter().any(|(offered, _)| *offered == Some(key)),
+        "the Chord hint does not offer {key:?}: {rows:?}"
+    );
+    world.send(Event::ClickPaletteEntry(key));
+}
+
+/// The cheatsheet as `ui` draws it for the view on screen: the rows
+/// `keys::cheatsheet` yields, which is the one list the box and the sweep both
+/// read.
+fn cheatsheet_lists(world: &VardeWorld, key: &str) -> bool {
+    keys::cheatsheet(&world.state)
+        .filter(|(_, _, views)| keys::applies_to(views, world.state.view))
+        .flat_map(|(keys, _, _)| keys.split_whitespace())
+        .any(|token| token == key)
+}
+
+#[then(expr = "the cheatsheet lists {string}")]
+fn cheatsheet_should_list(world: &mut VardeWorld, key: String) {
+    assert!(cheatsheet_lists(world, &key), "{key:?} is not listed");
+}
+
+#[then(expr = "the cheatsheet does not list {string}")]
+fn cheatsheet_should_not_list(world: &mut VardeWorld, key: String) {
+    assert!(!cheatsheet_lists(world, &key), "{key:?} is listed");
+}
+
+/// The hint and the cheatsheet are drawn from one list, and this is what holds
+/// them to it: a key offered in the hint that the box never names is a key
+/// nobody can find once the hint is down.
+#[then(expr = "every key the Chord hint lists is in the cheatsheet")]
+fn every_chord_hint_key_is_in_the_cheatsheet(world: &mut VardeWorld) {
+    for (key, _) in keys::chord_rows(&world.state) {
+        let Some(key) = key else { continue };
+        let chord = format!("␣{key}");
+        assert!(
+            cheatsheet_lists(world, &chord),
+            "the hint offers {key:?} and the cheatsheet does not name {chord:?}"
+        );
+    }
+}
+
+#[then(expr = "the Chord hint is shown")]
+fn chord_hint_is_shown(world: &mut VardeWorld) {
+    assert_eq!(world.state.modal, Modal::Chord);
+}
+
+#[then(expr = "no Chord hint is shown")]
+fn no_chord_hint_is_shown(world: &mut VardeWorld) {
+    assert_ne!(world.state.modal, Modal::Chord);
+}
+
+#[then(expr = "the Chord hint lists the keys:")]
+fn chord_hint_lists(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<char> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].chars().next().expect("a key"))
+        .collect();
+    let offered: Vec<char> = keys::chord_rows(&world.state)
+        .into_iter()
+        .filter_map(|(key, _)| key)
+        .collect();
+    assert_eq!(offered, expected);
+}
+
+#[given(expr = "Stepping mode is on")]
+fn stepping_mode_on(world: &mut VardeWorld) {
+    world.state.stepping = true;
+}
+
+#[then(expr = "Stepping mode is on")]
+fn stepping_mode_should_be_on(world: &mut VardeWorld) {
+    assert!(world.state.stepping);
+}
+
+#[then(expr = "Stepping mode is off")]
+fn stepping_mode_should_be_off(world: &mut VardeWorld) {
+    assert!(!world.state.stepping);
 }
 
 #[then(expr = "the Debug session is {string}")]

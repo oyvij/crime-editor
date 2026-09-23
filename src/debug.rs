@@ -243,6 +243,17 @@ impl Why {
     }
 }
 
+/// How far one step goes: over a call, into it, or out of the one being
+/// inspected. Named for the gesture rather than for the protocol, because it is
+/// what a key, a Chip and a cheatsheet row all say; `step` below is the one
+/// place the protocol's spelling for each of them lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    Over,
+    Into,
+    Out,
+}
+
 /// One call on the stack. `file` is absent for a Frame with no source the
 /// adapter can name — a call inside a library shipped without one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -579,6 +590,30 @@ pub fn resume(next: &mut State) -> Vec<Effect> {
     }
 }
 
+/// F8, F7 and Shift+F8, and the `n`, `i` and `o` chords: the inspected thread
+/// runs on by one step. Only while Paused — a program that is running is
+/// already between steps, and an adapter asked to step one that is not stopped
+/// answers with an error.
+///
+/// The phase moves as the request goes, for `resume`'s reason: the program is
+/// running until the `stopped` event says where it got to.
+pub fn step(next: &mut State, step: Step) -> Vec<Effect> {
+    let Some(session) = next.debug.as_mut() else {
+        return Vec::new();
+    };
+    let Phase::Paused(pause) = &session.phase else {
+        return Vec::new();
+    };
+    let thread = pause.thread;
+    let request = match step {
+        Step::Over => "next",
+        Step::Into => "stepIn",
+        Step::Out => "stepOut",
+    };
+    session.phase = Phase::Running;
+    vec![ask(session, request, json!({ "threadId": thread }))]
+}
+
 /// Ctrl+F2: a launched program is terminated and an attached one left
 /// running. A session already stopping is let go at once.
 pub fn stop(next: &mut State) -> Vec<Effect> {
@@ -659,10 +694,13 @@ pub fn resting_corner(state: &State) -> layout::Corner {
 }
 
 /// The session ends: the Corner gets back what it held before, and the
-/// keyboard leaves a pane that is going.
+/// keyboard leaves a pane that is going. Stepping mode goes with it — the
+/// letters it claims do nothing without a session, and one that swallowed
+/// them for nothing would be a mode nobody could see they were in.
 fn end(next: &mut State) {
     next.corner = resting_corner(next);
     next.debug = None;
+    next.stepping = false;
     if next.focus == Pane::Frames {
         next.focus = Pane::Editor;
     }

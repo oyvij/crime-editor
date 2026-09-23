@@ -408,7 +408,7 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
             "COMMANDS",
             rows_lines(palette_rows(frame.area().height)),
         ),
-        Modal::Chord => overlay(frame, "SPACE", rows_lines(keys::chord_rows())),
+        Modal::Chord => overlay(frame, "SPACE", rows_lines(keys::chord_rows(state))),
         Modal::NameBox { .. } => overlay(
             frame,
             "NAME",
