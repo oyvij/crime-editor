@@ -645,6 +645,11 @@ struct Edge {
     /// a Debug session only the edge can observe, told to the core as
     /// `Event::DapStarted` and `Event::DapGone`.
     adapter: Option<rpc::Adapter>,
+    /// A Waiting session's port being tried, off the main loop because a
+    /// remote host that drops the packets holds a connect for as long as its
+    /// timeout, and when it was last tried.
+    probe: Option<Receiver<bool>>,
+    probed: Instant,
     /// Which of the configured commands a probe of this process's `PATH` found,
     /// and `None` for "not probed since Tools was last opened" —
     /// which is what makes reopening the list a fresh answer rather than a
@@ -833,6 +838,8 @@ fn run(
         replaced: replaced_tx,
         exe,
         relaunch: false,
+        probe: None,
+        probed: Instant::now(),
     };
 
     let (watch_tx, watch_rx) = channel();
@@ -905,6 +912,7 @@ fn run(
         dirty |= drain_panes(&state, &mut edge, &mut queue);
         dirty |= drain_servers(&mut edge, &mut queue);
         dirty |= drain_adapter(&mut edge, &mut queue);
+        dirty |= probe_waiting(&state, &mut edge, &mut queue);
         start_voice(&state, &mut edge);
         reap_player(&mut edge, &mut queue);
         queue_position(&edge, &mut last_position, &mut queue);
@@ -1301,6 +1309,48 @@ fn drain_adapter(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
     dirty
 }
 
+/// The port a Waiting session watches, tried about once a second while — and
+/// only while — `debug::waiting_on` names one, so a session nobody is waiting
+/// on costs nothing. What answering means is the core's: the event says only
+/// that it did.
+fn probe_waiting(state: &State, edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
+    if let Some(probe) = &edge.probe {
+        match probe.try_recv() {
+            Ok(true) => {
+                edge.probe = None;
+                queue.push_back(Event::DapPortAnswers);
+                return true;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Ok(false) | Err(std::sync::mpsc::TryRecvError::Disconnected) => edge.probe = None,
+        }
+    }
+    // The clock restarts while nothing is Waiting, so the first try is a whole
+    // interval after the program went: one still shutting down can hold its
+    // port long enough to be attached to again on its way out.
+    let Some((host, port)) = varde::debug::waiting_on(state) else {
+        edge.probed = Instant::now();
+        return false;
+    };
+    if edge.probed.elapsed() < PROBE {
+        return false;
+    }
+    edge.probed = Instant::now();
+    let (answered, probe) = channel();
+    let host = host.to_string();
+    std::thread::spawn(move || {
+        use std::net::ToSocketAddrs;
+        let answers = (host.as_str(), port)
+            .to_socket_addrs()
+            .into_iter()
+            .flatten()
+            .any(|address| std::net::TcpStream::connect_timeout(&address, PROBE).is_ok());
+        let _ = answered.send(answers);
+    });
+    edge.probe = Some(probe);
+    false
+}
+
 /// What the edge does wherever it stops holding an adapter: the session is
 /// gone, and the debugged program goes with it. Dropping its pty is what takes
 /// the child down — a program left running in a group nobody can reach is a
@@ -1626,6 +1676,9 @@ const INPUT_BATCH: usize = 512;
 /// motion, slow enough that a frame's cost is a rounding error next to the
 /// analysis it is reporting on.
 const SPIN: Duration = Duration::from_millis(80);
+
+/// How often a Waiting session's port is tried, and how long one try may take.
+const PROBE: Duration = Duration::from_secs(1);
 
 /// How far below the workspace root [`beneath`] looks for a fact's marker.
 /// Three, because `apps/web/frontend` is as deep as a package sits and this is
@@ -2715,7 +2768,11 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                 }),
             }
         }
-        Effect::StartDap { command, args } => {
+        Effect::StartDap {
+            command,
+            args,
+            reach,
+        } => {
             // Truncated per spawn, for the reason a server's log is.
             let log = varde_dir(&edge.root, edge.sidecar.as_deref()).join("dap.log");
             let log = match std::fs::File::create(&log) {
@@ -2728,7 +2785,24 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                     None
                 }
             };
-            match rpc::Adapter::spawn(&command, &args, &edge.root, log) {
+            let spawned = match reach {
+                varde::debug::Reach::Stdio => rpc::Adapter::spawn(&command, &args, &edge.root, log),
+                // A port nothing holds, asked of the OS and let go for the
+                // adapter to take: the only way to learn one that is free.
+                varde::debug::Reach::Server => {
+                    std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                        .and_then(|listener| listener.local_addr())
+                        .and_then(|address| {
+                            let port = address.port();
+                            let args: Vec<String> = args
+                                .iter()
+                                .map(|arg| arg.replace("${port}", &port.to_string()))
+                                .collect();
+                            rpc::Adapter::connect(&command, &args, &edge.root, log, port)
+                        })
+                }
+            };
+            match spawned {
                 Ok(adapter) => {
                     edge.adapter = Some(adapter);
                     queue.push_back(Event::DapStarted);

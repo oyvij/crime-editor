@@ -1118,6 +1118,9 @@ pub enum Event {
     DapGone {
         why: debug::Gone,
     },
+    /// The port a Waiting session watches accepted a connection, which only
+    /// the edge can find out by trying.
+    DapPortAnswers,
     /// Start the named Launch configuration.
     StartLaunch(String),
     /// The launch list's arrows.
@@ -1374,6 +1377,7 @@ pub enum Effect {
     StartDap {
         command: String,
         args: Vec<String>,
+        reach: debug::Reach,
     },
     /// One Debug Adapter Protocol message for the adapter, built here.
     DapSend {
@@ -6602,7 +6606,7 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
     Ok(settle(next, effects, wheeled))
 }
 
-/// DapReceived, DapStarted, DapGone, StartLaunch, MoveLaunchRow, DebugResume,
+/// DapReceived, DapStarted, DapGone, DapPortAnswers, StartLaunch, MoveLaunchRow, DebugResume,
 /// DebugStep, DebugStop, DebugRestart, LeaveStepping
 fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
@@ -6617,6 +6621,7 @@ fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answ
             vec![]
         }
         Event::DapGone { why } => debug::gone(&mut next, why),
+        Event::DapPortAnswers => debug::reattach(&mut next),
         Event::StartLaunch(name) => {
             next.modal = Modal::None;
             debug::start(&mut next, &name)

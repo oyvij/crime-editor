@@ -147,6 +147,8 @@ Feature: Starting and ending a Debug session
         request = "attach"
         args = { hostName = "localhost", port = 5006 }
         """
+      And a Debug adapter for "java" is configured
+      And the Debug adapter for "java" is ready
       When I start the Launch configuration "orders" from the palette
       Then the Debug adapter's attach arguments are:
         """
@@ -260,7 +262,7 @@ Feature: Starting and ending a Debug session
       Given a Debug session was started from the Launch configuration "orders"
       And the Debug adapter sends the event "terminated"
       When the edge reports the port 5005 answers
-      Then the Debug adapter was sent an "attach" request
+      Then the Debug adapter was sent 2 "attach" requests
 
     Scenario: Breakpoints are sent again after every re-attach
       Given a Breakpoint on "src/main/java/Orders.java" line 12

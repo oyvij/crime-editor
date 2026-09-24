@@ -588,7 +588,9 @@ install.macos = "npm install -g prettier"
 install.linux = "npm install -g prettier"
 install.windows = "npm install -g prettier"
 
-# A Debug adapter per language, spoken to over its standard streams
+# A Debug adapter per language, spoken to over its standard streams — or, where
+# its `args` name `${port}`, started listening on a port Varde fills in and
+# connected to over TCP
 # (`docs/adr/0021-a-debug-adapter-is-a-hosted-child-reached-three-ways.md`).
 # codelldb has spoken stdio since 1.11. It ships as a VS Code extension and
 # nothing packages it, so the install unpacks the release into
@@ -1095,7 +1097,7 @@ pub struct Formatter {
 
 /// What runs a language's Debug adapter, as configuration named it — the
 /// `[dap.*]` row ADR 0021 puts every adapter in, so no arm names one. Spoken
-/// to over its standard streams.
+/// to over its standard streams, or over TCP where `args` name `${port}`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Adapter {
     /// Defaulted and held to being named by the merged table, for the reason
@@ -1122,9 +1124,19 @@ pub struct Launch {
     pub request: String,
     /// Handed to the adapter untouched, for the reason a server's
     /// `initialization_options` are: what an adapter needs to be told is its
-    /// own business, so Varde reads none of it.
+    /// own business. Varde reads one thing in it and writes nothing: the
+    /// `hostName` and `port` an attach session watches to attach again.
     #[serde(default)]
     pub args: serde_json::Map<String, serde_json::Value>,
+    /// Whether an attach session whose program went away waits for it to
+    /// answer again. On unless said otherwise: a remote machine that is not
+    /// coming back is the case for saying so.
+    #[serde(default = "attaches_again")]
+    pub reattach: bool,
+}
+
+fn attaches_again() -> bool {
+    true
 }
 
 /// A path on this machine a server's configuration may name, and how to find

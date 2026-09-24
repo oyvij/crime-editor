@@ -14,9 +14,15 @@ use anyhow::Result;
 use lsp_server::Message;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
+use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
+
+/// How long a server-reached Debug adapter has to start listening. Generous,
+/// since an adapter unpacking its own runtime on first start is slow, and an
+/// adapter that exits instead ends the wait at once.
+const CONNECT: std::time::Duration = std::time::Duration::from_secs(10);
 
 pub struct Server {
     child: Child,
@@ -112,14 +118,14 @@ impl Drop for Server {
     }
 }
 
-/// A Debug adapter over its stdio: the same child, reader thread and drain as
-/// [`Server`], in the Debug Adapter Protocol's framing. That framing is LSP's
-/// `Content-Length` header, but a DAP message has no `jsonrpc` field, so
-/// `lsp_server` cannot read one and no crate frames it for a client
-/// (`docs/stack.md`).
+/// A Debug adapter over its stdio or a TCP connection to it: the same child,
+/// reader thread and drain as [`Server`], in the Debug Adapter Protocol's
+/// framing. That framing is LSP's `Content-Length` header, but a DAP message
+/// has no `jsonrpc` field, so `lsp_server` cannot read one and no crate frames
+/// it for a client (`docs/stack.md`).
 pub struct Adapter {
     child: Child,
-    stdin: BufWriter<std::process::ChildStdin>,
+    writer: BufWriter<Box<dyn Write + Send>>,
     incoming: Receiver<String>,
     pub alive: bool,
 }
@@ -142,9 +148,61 @@ impl Adapter {
             .spawn()?;
         let stdout = child.stdout.take().expect("a piped stdout");
         let stdin = child.stdin.take().expect("a piped stdin");
+        Ok(Self::over(child, stdout, Box::new(stdin)))
+    }
+
+    /// An adapter that listens rather than reading its stdin: spawned with
+    /// `port` already in its arguments, then connected to on it. Its stdout is
+    /// talk rather than protocol, so it goes where its stderr does.
+    ///
+    /// Blocks until the adapter listens, it exits, or `CONNECT` passes. The
+    /// wait is a one-off at the start of a session, measured in the tens of
+    /// milliseconds an adapter takes to bind; a thread for it would have the
+    /// core told of a process before anything could talk to it.
+    pub fn connect(
+        command: &str,
+        args: &[String],
+        cwd: &Path,
+        log: Option<File>,
+        port: u16,
+    ) -> std::io::Result<Self> {
+        let stdout = match &log {
+            Some(file) => Stdio::from(file.try_clone()?),
+            None => Stdio::null(),
+        };
+        let mut child = Command::new(command)
+            .args(args)
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .stdout(stdout)
+            .stderr(log.map_or_else(Stdio::null, Stdio::from))
+            .spawn()?;
+        let started = std::time::Instant::now();
+        let stream = loop {
+            match TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)) {
+                Ok(stream) => break stream,
+                // Kill and reap on every way out: `Drop` is `Self`'s, and
+                // there is no `Self` yet.
+                Err(error) if started.elapsed() > CONNECT || child.try_wait()?.is_some() => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error);
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            }
+        };
+        let reader = stream.try_clone()?;
+        Ok(Self::over(child, reader, Box::new(stream)))
+    }
+
+    fn over(
+        child: Child,
+        reader: impl std::io::Read + Send + 'static,
+        writer: Box<dyn Write + Send>,
+    ) -> Self {
         let (sender, incoming) = channel();
         std::thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
+            let mut reader = BufReader::new(reader);
             // A stream that cannot be read as frames any more ends the
             // conversation: every message after a desynchronised header is
             // garbage, and the loss reaches the core as an adapter that is gone.
@@ -154,17 +212,17 @@ impl Adapter {
                 }
             }
         });
-        Ok(Self {
+        Self {
             child,
-            stdin: BufWriter::new(stdin),
+            writer: BufWriter::new(writer),
             incoming,
             alive: true,
-        })
+        }
     }
 
     pub fn send(&mut self, json: &str) {
-        let written = write!(self.stdin, "Content-Length: {}\r\n\r\n{json}", json.len())
-            .and_then(|()| self.stdin.flush());
+        let written = write!(self.writer, "Content-Length: {}\r\n\r\n{json}", json.len())
+            .and_then(|()| self.writer.flush());
         if written.is_err() {
             self.alive = false;
         }

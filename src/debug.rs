@@ -546,11 +546,19 @@ pub struct Session {
     /// request below.
     adapter: String,
     command: String,
+    /// What spawns the adapter again when a Waiting session attaches anew.
+    adapter_args: Vec<String>,
+    reach: Reach,
     pub phase: Phase,
     /// `launch` or `attach`, and what that request carries — taken when the
     /// session starts, so a config edited mid-session changes the next one.
     request: String,
     args: serde_json::Map<String, Value>,
+    /// The host and port an attach session watches once its program has
+    /// gone, and `None` for a session that ends with its program instead: a
+    /// launch, an attach that opted out, and one that names no port, which
+    /// would wait on nothing anybody could answer.
+    watch: Option<(String, u16)>,
     /// The `seq` the last request went out with, and every one still
     /// unanswered, by `seq`: a response names its request only by number.
     seq: i64,
@@ -662,6 +670,18 @@ pub enum Phase {
     /// dropped at once, it could take a launched program down with it before
     /// it had heard it was being stopped. A second stop does not wait.
     Stopping,
+    /// An attach session whose program went away, holding no adapter, until
+    /// the edge reports its port answers. Only stopping ends it.
+    Waiting,
+}
+
+/// How the edge reaches a Debug adapter, which its row says as data (ADR
+/// 0021): over its standard streams, or — for a row whose arguments name
+/// `${port}` — over TCP on a port the edge fills in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    Stdio,
+    Server,
 }
 
 /// One thread stopped, the call stack it stopped in, and which Frame is being
@@ -885,9 +905,26 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
         next.refusal = Some(Refusal::NoDebugAdapter(launch.adapter.clone()));
         return Vec::new();
     };
+    let reach = match adapter.args.iter().any(|arg| arg.contains("${port}")) {
+        true => Reach::Server,
+        false => Reach::Stdio,
+    };
     let effect = Effect::StartDap {
         command: adapter.command.clone(),
         args: adapter.args.clone(),
+        reach,
+    };
+    let watch = match (launch.request.as_str(), launch.reattach) {
+        ("attach", true) => launch
+            .args
+            .get("port")
+            .and_then(Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok())
+            .map(|port| {
+                let host = launch.args.get("hostName").and_then(Value::as_str);
+                (printable(host.unwrap_or("localhost")), port)
+            }),
+        _ => None,
     };
     // Remembered before the session exists and kept after it ends: what
     // restart reruns is the configuration, not the session.
@@ -895,9 +932,12 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
     next.debug = Some(Session {
         adapter: launch.adapter.clone(),
         command: adapter.command.clone(),
+        adapter_args: adapter.args.clone(),
+        reach,
         phase: Phase::Spawning,
         request: launch.request.clone(),
         args: launch.args.clone(),
+        watch,
         seq: 0,
         asked: BTreeMap::new(),
         verdicts: BTreeMap::new(),
@@ -912,6 +952,41 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
         class: None,
         corner: next.corner,
         strip: next.strip,
+    });
+    vec![effect]
+}
+
+/// The host and port a Waiting session is watching, which the edge probes
+/// until it answers — and nothing while no session is Waiting.
+pub fn waiting_on(state: &State) -> Option<(&str, u16)> {
+    let session = state.debug.as_ref()?;
+    let (host, port) = session.watch.as_ref()?;
+    (session.phase == Phase::Waiting).then_some((host.as_str(), *port))
+}
+
+/// The port a Waiting session watches answers, so the adapter is spawned
+/// again and the whole handshake runs anew — Breakpoints included, since the
+/// program that answered holds none of them. Nothing of the conversation that
+/// ended carries over but what the session was started with.
+pub fn reattach(next: &mut State) -> Vec<Effect> {
+    if waiting_on(next).is_none() {
+        return Vec::new();
+    }
+    let session = next.debug.take().expect("a Waiting session");
+    let effect = Effect::StartDap {
+        command: session.command.clone(),
+        args: session.adapter_args.clone(),
+        reach: session.reach,
+    };
+    next.debug = Some(Session {
+        phase: Phase::Spawning,
+        asked: BTreeMap::new(),
+        verdicts: BTreeMap::new(),
+        pausing: false,
+        threads: Vec::new(),
+        others: BTreeMap::new(),
+        previous: None,
+        ..session
     });
     vec![effect]
 }
@@ -949,6 +1024,8 @@ pub fn gone(next: &mut State, why: Gone) -> Vec<Effect> {
     // rather than when anybody pressed anything, and the next event of any
     // kind takes a refusal down.
     let (refusal, notice) = match (why, &session.phase) {
+        // Let go on purpose, and still waiting for its program.
+        (_, Phase::Waiting) => return Vec::new(),
         (_, Phase::Stopping) => (None, None),
         (Gone::Missing, _) => (
             Some(Refusal::NoDebugAdapter(command.clone())),
@@ -1062,11 +1139,7 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
                 effects
             }
             // The answer that lets the adapter go, whatever it says.
-            "disconnect" => {
-                let mut effects = end(next);
-                effects.push(Effect::StopDap);
-                effects
-            }
+            "disconnect" => let_go(next),
             // A pause that could not learn a thread is not still waiting on
             // one, or F9 would never pause again.
             "threads" => {
@@ -1313,13 +1386,24 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
             }
             Vec::new()
         }
-        "disconnect" => {
-            let mut effects = end(next);
-            effects.push(Effect::StopDap);
-            effects
-        }
+        "disconnect" => let_go(next),
         _ => Vec::new(),
     }
+}
+
+/// `disconnect` answered: the adapter goes, and the session with it unless it
+/// is Waiting for its program to come back.
+fn let_go(next: &mut State) -> Vec<Effect> {
+    let waiting = next
+        .debug
+        .as_ref()
+        .is_some_and(|session| session.phase == Phase::Waiting);
+    let mut effects = match waiting {
+        true => Vec::new(),
+        false => end(next),
+    };
+    effects.push(Effect::StopDap);
+    effects
 }
 
 fn told(next: &mut State, message: &Value) -> Vec<Effect> {
@@ -1425,12 +1509,17 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
         // The program is gone, so the adapter is told the session is over
         // and let go once it has answered, as a stop is: it may have more to
         // clean up than the program.
+        // An attach session that watches a port waits for it instead, and
+        // detaches rather than ending a program that may only be restarting.
         Some("terminated") => {
             let session = next.debug.as_mut().expect("a session");
-            if session.phase == Phase::Stopping {
+            if matches!(session.phase, Phase::Stopping | Phase::Waiting) {
                 return Vec::new();
             }
-            session.phase = Phase::Stopping;
+            session.phase = match session.watch {
+                Some(_) => Phase::Waiting,
+                None => Phase::Stopping,
+            };
             vec![ask(session, "disconnect", json!({}))]
         }
         _ => Vec::new(),
@@ -1639,7 +1728,7 @@ pub fn stop(next: &mut State) -> Vec<Effect> {
         return Vec::new();
     };
     let effects = match session.phase {
-        Phase::Stopping | Phase::Spawning => {
+        Phase::Stopping | Phase::Spawning | Phase::Waiting => {
             let mut effects = end(next);
             effects.push(Effect::StopDap);
             effects
@@ -1795,6 +1884,9 @@ pub fn stale(state: &State) -> bool {
 /// nobody can see they are in is a mode that swallows keys — then that the
 /// program is running, and otherwise the pane's own name.
 pub fn title(state: &State) -> &'static str {
+    if waiting_on(state).is_some() {
+        return "waiting";
+    }
     match (state.stepping, stale(state)) {
         (true, _) => "stepping",
         (false, true) => "running",
@@ -3515,6 +3607,7 @@ pub(crate) fn paused(mut state: State) -> State {
             adapter: "rust".to_string(),
             request: "launch".to_string(),
             args: serde_json::Map::new(),
+            reattach: true,
         },
     );
     start(&mut state, "app");
@@ -3761,6 +3854,7 @@ mod tests {
                 adapter: "rust".to_string(),
                 request: "launch".to_string(),
                 args: serde_json::Map::new(),
+                reattach: true,
             },
         );
         start(&mut can, "app");
@@ -4084,6 +4178,7 @@ mod tests {
                 adapter: "rust".to_string(),
                 request: "launch".to_string(),
                 args: serde_json::Map::new(),
+                reattach: true,
             },
         );
         start(&mut state, "app");
@@ -4163,6 +4258,7 @@ mod tests {
                 adapter: "rust".to_string(),
                 request: "launch".to_string(),
                 args: serde_json::Map::new(),
+                reattach: true,
             },
         );
         start(&mut state, "app");
@@ -4543,5 +4639,62 @@ mod tests {
         // A script's top level is in no block at all, and everything above the
         // Paused line has run.
         assert_eq!(call_start("total = 0\nprint(total)", 2), 1);
+    }
+
+    fn started_with(adapter: &[&str], request: &str, args: Value) -> (State, Vec<Effect>) {
+        let mut state = State::default();
+        state.adapters.insert(
+            "rust".to_string(),
+            crate::startup::Adapter {
+                command: "adapter".to_string(),
+                args: adapter.iter().map(|arg| arg.to_string()).collect(),
+                install: BTreeMap::new(),
+            },
+        );
+        state.launches.insert(
+            "app".to_string(),
+            crate::startup::Launch {
+                adapter: "rust".to_string(),
+                request: request.to_string(),
+                args: args.as_object().cloned().unwrap_or_default(),
+                reattach: true,
+            },
+        );
+        let effects = start(&mut state, "app");
+        (state, effects)
+    }
+
+    /// A row whose arguments name `${port}` anywhere in them is a server the
+    /// edge connects to, and any other is spoken to over its stdio.
+    #[test]
+    fn a_row_naming_a_port_is_reached_as_a_server() {
+        let reached = |args: &[&str]| match started_with(args, "launch", json!({})).1.as_slice() {
+            [Effect::StartDap { reach, .. }] => *reach,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(reached(&["--port", "${port}"]), Reach::Server);
+        assert_eq!(reached(&["--listen=127.0.0.1:${port}"]), Reach::Server);
+        assert_eq!(reached(&["--port", "5005"]), Reach::Stdio);
+        assert_eq!(reached(&[]), Reach::Stdio);
+    }
+
+    /// An attach naming no port has nothing to watch, so it ends with its
+    /// program as a launch does rather than waiting on nothing forever.
+    #[test]
+    fn an_attach_naming_no_port_ends_with_its_program() {
+        let (mut state, _) = started_with(&[], "attach", json!({ "pid": 42 }));
+        started(&mut state);
+        let seq = outstanding(&state, "initialize");
+        received(
+            &mut state,
+            &json!({"type": "response", "request_seq": seq, "success": true, "command": "initialize"})
+                .to_string(),
+        );
+        received(&mut state, r#"{"type":"event","event":"terminated"}"#);
+        assert_eq!(waiting_on(&state), None);
+        assert_eq!(
+            state.debug.map(|session| session.phase),
+            Some(Phase::Stopping)
+        );
     }
 }

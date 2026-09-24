@@ -14328,6 +14328,7 @@ fn session_running(world: &mut VardeWorld) {
             adapter,
             request: "launch".to_string(),
             args: serde_json::Map::new(),
+            reattach: true,
         },
     );
     world.dap.ready = true;
@@ -14519,6 +14520,16 @@ fn edge_reports_adapter_gone(world: &mut VardeWorld) {
     });
 }
 
+/// Only for the port the session is watching: an edge told to try another
+/// would be trying the wrong one.
+#[given(expr = "the edge reports the port {int} answers")]
+#[when(expr = "the edge reports the port {int} answers")]
+fn edge_reports_port_answers(world: &mut VardeWorld, port: u16) {
+    let watched = varde::debug::waiting_on(&world.state).map(|(_, watched)| watched);
+    assert_eq!(watched, Some(port));
+    world.send(Event::DapPortAnswers);
+}
+
 #[when(expr = "the edge reports the Debug adapter could not be started")]
 fn edge_reports_adapter_failed(world: &mut VardeWorld) {
     world.send(Event::DapGone {
@@ -14564,6 +14575,21 @@ fn adapter_sent_no(world: &mut VardeWorld, command: String) {
 #[then(expr = "the Debug adapter was sent a {string} request")]
 fn adapter_sent_a(world: &mut VardeWorld, command: String) {
     last_request(world, &command);
+}
+
+#[then(expr = "the Debug adapter was sent {int} {string} requests")]
+fn adapter_sent_count(world: &mut VardeWorld, count: usize, command: String) {
+    assert_eq!(dap_requests(world, &command).len(), count);
+}
+
+#[then(expr = "the Debug adapter was sent {int} {string} requests for {string}")]
+fn adapter_sent_count_for(world: &mut VardeWorld, count: usize, command: String, file: String) {
+    let path = json!(abs(world, &file));
+    let sent = dap_requests(world, &command)
+        .into_iter()
+        .filter(|request| request["arguments"]["source"]["path"] == path)
+        .count();
+    assert_eq!(sent, count);
 }
 
 #[then(expr = "the Debug adapter was sent a {string} request for thread {int}")]
@@ -14685,6 +14711,7 @@ fn debug_session_is(world: &mut VardeWorld, phase: String) {
     let actual = match world.state.debug.as_ref().map(|session| &session.phase) {
         Some(varde::debug::Phase::Running(_)) => "running",
         Some(varde::debug::Phase::Paused(_)) => "paused",
+        Some(varde::debug::Phase::Waiting) => "waiting",
         other => panic!("the session is {other:?}"),
     };
     assert_eq!(actual, phase);
@@ -14846,7 +14873,9 @@ fn variables_have_focus(world: &mut VardeWorld) {
     assert_eq!(world.state.focus, Pane::Variables);
 }
 
+/// The title is what the Transport's border says beside its Chips.
 #[then(expr = "the Variables title says {string}")]
+#[then(expr = "the Transport says {string}")]
 fn variables_title_says(world: &mut VardeWorld, said: String) {
     assert_eq!(varde::debug::title(&world.state), said);
 }

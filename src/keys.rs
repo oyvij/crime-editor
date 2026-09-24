@@ -4549,6 +4549,7 @@ mod tests {
                 adapter: "rust".to_string(),
                 request: "launch".to_string(),
                 args: serde_json::Map::new(),
+                reattach: true,
             },
         );
         for (key, word) in super::LAUNCH_LIST_KEYS {
