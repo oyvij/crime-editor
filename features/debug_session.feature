@@ -432,6 +432,13 @@ Feature: Starting and ending a Debug session
       Then no session picker is shown
       And the Transport has one "stop" Chip
 
+    Scenario: The Transport steps the child's thread being inspected
+      Given a Debug session was started from the Launch configuration "server"
+      And the Debug adapter asks to start a child session whose thread is "worker 1"
+      When I press "F8"
+      Then the child session was sent a "next" request for its thread
+      And the Debug adapter was sent no "next" request
+
     Scenario: Stopping the session stops its child sessions too
       Given a Debug session was started from the Launch configuration "server"
       And the Debug adapter asks to start a child session whose thread is "worker 1"
@@ -474,3 +481,13 @@ Feature: Starting and ending a Debug session
       Given the command "codelldb" is not on PATH
       When the tools list is shown
       Then the Debug adapter row for "rust" is "missing"
+
+    Scenario Outline: The JavaScript and TypeScript adapter is offered in Tools to install
+      Given the command "js-debug-adapter" is not on PATH
+      When the tools list is shown
+      Then the Debug adapter row for "<language>" is "available"
+
+      Examples:
+        | language   |
+        | javascript |
+        | typescript |

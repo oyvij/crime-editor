@@ -628,6 +628,25 @@ server = "java"
 command = "vscode.java.startDebugSession"
 plugin = { bundles = ["${java_debug_plugin}"] }
 
+# js-debug listens on the port it is given, and asks for a child session per
+# process and worker it attaches to, each over another connection to that port.
+# Nothing packages it and its release carries its version in the file name, so
+# the install asks GitHub which one is latest, unpacks it into `~/.varde/js-debug`
+# and puts a script on `PATH` that runs its server under node. One adapter for
+# both languages, as one server is for `[lsp.javascript]` and
+# `[lsp.typescript]`.
+[dap.javascript]
+command = "js-debug-adapter"
+args = ["${port}"]
+install.macos = "curl -sL --create-dirs $(curl -s https://api.github.com/repos/microsoft/vscode-js-debug/releases/latest | grep -o 'https://[^\"]*js-debug-dap-v[^\"]*[.]tar[.]gz' | head -1) -o ~/.varde/js-debug.tar.gz && tar xzf ~/.varde/js-debug.tar.gz -C ~/.varde && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec node %s \"$@\"\\n' ~/.varde/js-debug/src/dapDebugServer.js > ~/.local/bin/js-debug-adapter && chmod +x ~/.local/bin/js-debug-adapter"
+install.linux = "curl -sL --create-dirs $(curl -s https://api.github.com/repos/microsoft/vscode-js-debug/releases/latest | grep -o 'https://[^\"]*js-debug-dap-v[^\"]*[.]tar[.]gz' | head -1) -o ~/.varde/js-debug.tar.gz && tar xzf ~/.varde/js-debug.tar.gz -C ~/.varde && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec node %s \"$@\"\\n' ~/.varde/js-debug/src/dapDebugServer.js > ~/.local/bin/js-debug-adapter && chmod +x ~/.local/bin/js-debug-adapter"
+
+[dap.typescript]
+command = "js-debug-adapter"
+args = ["${port}"]
+install.macos = "curl -sL --create-dirs $(curl -s https://api.github.com/repos/microsoft/vscode-js-debug/releases/latest | grep -o 'https://[^\"]*js-debug-dap-v[^\"]*[.]tar[.]gz' | head -1) -o ~/.varde/js-debug.tar.gz && tar xzf ~/.varde/js-debug.tar.gz -C ~/.varde && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec node %s \"$@\"\\n' ~/.varde/js-debug/src/dapDebugServer.js > ~/.local/bin/js-debug-adapter && chmod +x ~/.local/bin/js-debug-adapter"
+install.linux = "curl -sL --create-dirs $(curl -s https://api.github.com/repos/microsoft/vscode-js-debug/releases/latest | grep -o 'https://[^\"]*js-debug-dap-v[^\"]*[.]tar[.]gz' | head -1) -o ~/.varde/js-debug.tar.gz && tar xzf ~/.varde/js-debug.tar.gz -C ~/.varde && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec node %s \"$@\"\\n' ~/.varde/js-debug/src/dapDebugServer.js > ~/.local/bin/js-debug-adapter && chmod +x ~/.local/bin/js-debug-adapter"
+
 # What reads a Selection aloud (F35). The synthesizer, the voice and the player
 # are named here and in no branch anywhere: a voice nobody has tried works for
 # the same reason an untried AI CLI does

@@ -336,6 +336,12 @@ struct FakeAdapter {
     filters: Vec<Value>,
     /// What the next `stopped` event says paused the program.
     text: Option<String>,
+    /// Every child session's connection the edge was asked to open, and what
+    /// was sent over it, by the number it was opened under.
+    children: BTreeMap<usize, Vec<Value>>,
+    /// The one thread a child session names, which stops as soon as the child
+    /// is configured, the way a worker started under a Breakpoint does.
+    child_thread: String,
 }
 
 impl VardeWorld {
@@ -766,7 +772,51 @@ impl VardeWorld {
     fn adapter_says(&mut self, message: Value) {
         self.send_now(Event::DapReceived {
             json: message.to_string(),
+            from: 0,
         });
+    }
+
+    /// A child session's side of the protocol: it starts when asked, names
+    /// its one thread, and that thread stops once it is configured. Its
+    /// thread is numbered 1, as the session's own is, which is the point.
+    fn child_answers(&mut self, child: usize, message: &Value) {
+        if message["type"] != "request" {
+            return;
+        }
+        let command = message["command"].as_str().unwrap_or_default();
+        let body = match command {
+            "threads" => json!({ "threads": [{ "id": 1, "name": self.dap.child_thread }] }),
+            "stackTrace" => json!({ "stackFrames": [] }),
+            _ => json!({}),
+        };
+        let says = |world: &mut Self, message: Value| {
+            world.send_now(Event::DapReceived {
+                json: message.to_string(),
+                from: child,
+            })
+        };
+        says(
+            self,
+            json!({
+                "type": "response",
+                "request_seq": message["seq"],
+                "success": true,
+                "command": command,
+                "body": body,
+            }),
+        );
+        match command {
+            "launch" | "attach" => says(self, json!({ "type": "event", "event": "initialized" })),
+            "configurationDone" => says(
+                self,
+                json!({
+                    "type": "event",
+                    "event": "stopped",
+                    "body": { "threadId": 1, "reason": "breakpoint" },
+                }),
+            ),
+            _ => {}
+        }
     }
 
     /// What the canned server said, driven straight in as the edge would.
@@ -889,7 +939,7 @@ impl VardeWorld {
                 self.dap.dialed.push(port);
                 if self.dap.ready {
                     self.dap.held = true;
-                    self.send_now(Event::DapStarted);
+                    self.send_now(Event::DapStarted { from: 0 });
                 }
             }
             Effect::StartDap { command, .. } => {
@@ -900,19 +950,38 @@ impl VardeWorld {
                 if !self.on_path.contains(&command) {
                     self.send_now(Event::DapGone {
                         why: varde::debug::Gone::Missing,
+                        from: 0,
                     });
                 } else if self.dap.ready {
                     self.dap.held = true;
-                    self.send_now(Event::DapStarted);
+                    self.send_now(Event::DapStarted { from: 0 });
                 }
             }
-            Effect::DapSend { json } => {
+            Effect::DapChild { child } => {
+                self.dap.children.insert(child, Vec::new());
+                self.send_now(Event::DapStarted { from: child });
+            }
+            // A child session's connection goes with the adapter's, so one
+            // let go hears what it was sent and answers nothing.
+            Effect::DapSend { to, json } if to != 0 => {
+                let message: Value = serde_json::from_str(&json).expect("valid DAP");
+                self.dap
+                    .children
+                    .get_mut(&to)
+                    .expect("a child session the edge was asked to open")
+                    .push(message.clone());
+                if self.dap.held {
+                    self.child_answers(to, &message);
+                }
+            }
+            Effect::DapSend { json, .. } => {
                 let message: Value = serde_json::from_str(&json).expect("valid DAP");
                 self.dap.sent.push(message.clone());
                 match self.dap.held {
                     true => self.adapter_answers(&message),
                     false => self.send_now(Event::DapGone {
                         why: varde::debug::Gone::Exited,
+                        from: 0,
                     }),
                 }
             }
@@ -924,6 +993,7 @@ impl VardeWorld {
                     self.output_pty = None;
                     self.send_now(Event::DapGone {
                         why: varde::debug::Gone::Exited,
+                        from: 0,
                     });
                 }
             }
@@ -14565,6 +14635,7 @@ fn edge_reports_adapter_gone(world: &mut VardeWorld) {
     world.dap.held = false;
     world.send(Event::DapGone {
         why: varde::debug::Gone::Exited,
+        from: 0,
     });
 }
 
@@ -14582,6 +14653,7 @@ fn edge_reports_port_answers(world: &mut VardeWorld, port: u16) {
 fn edge_reports_adapter_failed(world: &mut VardeWorld) {
     world.send(Event::DapGone {
         why: varde::debug::Gone::FailedToStart,
+        from: 0,
     });
 }
 
@@ -15429,6 +15501,84 @@ fn debug_adapter_row_is(world: &mut VardeWorld, language: String, expected: Stri
             .as_str(),
         expected
     );
+}
+
+// ---- R41.7: child sessions are more threads ----
+
+/// `startDebugging`, as js-debug sends it for a worker: a configuration of
+/// its own, which the child session is started with.
+#[given(expr = "the Debug adapter asks to start a child session whose thread is {string}")]
+#[when(expr = "the Debug adapter asks to start a child session whose thread is {string}")]
+fn adapter_asks_for_a_child(world: &mut VardeWorld, thread: String) {
+    world.dap.child_thread = thread;
+    let seq = 1000 + world.dap.sent.len();
+    adapter_event(
+        world,
+        json!({
+            "type": "request",
+            "seq": seq,
+            "command": "startDebugging",
+            "arguments": {
+                "request": "attach",
+                "configuration": { "type": "pwa-node", "name": "worker.js", "__pendingTargetId": "7" },
+            },
+        }),
+    );
+}
+
+#[then(expr = "the Frames list the thread {string}")]
+fn frames_list_the_thread(world: &mut VardeWorld, thread: String) {
+    let listed = varde::debug::frame_rows(&world.state)
+        .into_iter()
+        .any(|row| matches!(row, varde::debug::FrameRow::Thread { name, .. } if name == thread));
+    assert!(listed, "{:?}", varde::debug::frame_rows(&world.state));
+}
+
+/// One session, which is the one started: a child opened as a session of its
+/// own would have its adapter started again, or the session replaced by it.
+#[then(expr = "exactly one Debug session is shown")]
+fn exactly_one_session(world: &mut VardeWorld) {
+    assert!(world.state.debug.is_some());
+    assert_eq!(world.dap.spawned.len() + world.dap.dialed.len(), 1);
+    assert_eq!(dap_requests(world, "launch").len(), 1);
+}
+
+#[then(expr = "no session picker is shown")]
+fn no_session_picker(world: &mut VardeWorld) {
+    assert_eq!(world.state.modal, Modal::None);
+}
+
+#[then(expr = "the Transport has one {string} Chip")]
+fn transport_has_one_chip(world: &mut VardeWorld, name: String) {
+    let chips = varde::debug::strip_transport(&world.state);
+    assert_eq!(chips.iter().filter(|chip| chip.name == name).count(), 1);
+}
+
+/// In the id the child knows its thread by, which is the session's own
+/// thread's too: only the connection tells them apart.
+#[then(expr = "the child session was sent a {string} request for its thread")]
+fn child_was_sent_for_its_thread(world: &mut VardeWorld, command: String) {
+    let (child, sent) = world.dap.children.iter().next().expect("a child session");
+    let asked = sent
+        .iter()
+        .rev()
+        .find(|message| message["command"] == command)
+        .unwrap_or_else(|| panic!("child {child} was sent {sent:?}"));
+    assert_eq!(asked["arguments"]["threadId"], 1);
+}
+
+#[then(expr = "every child session was sent a {string} request")]
+fn every_child_was_sent(world: &mut VardeWorld, command: String) {
+    assert!(
+        !world.dap.children.is_empty(),
+        "no child session was opened"
+    );
+    for (child, sent) in &world.dap.children {
+        assert!(
+            sent.iter().any(|message| message["command"] == command),
+            "child {child} was sent {sent:?}"
+        );
+    }
 }
 
 // ---- F45: the Program output in the Debug group ----

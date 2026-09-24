@@ -568,8 +568,9 @@ pub struct Session {
     /// session and never reaches the line the user set or what is remembered.
     verdicts: BTreeMap<(PathBuf, usize), Verdict>,
     /// A pause asked for before any thread was known, so it waits on the
-    /// `threads` answer that names one.
-    pausing: bool,
+    /// `threads` answers that may name one: the requests it sent, one per
+    /// connection, until one names a thread or every one has answered.
+    pausing: BTreeSet<i64>,
     /// Every thread the adapter named, in its order, asked for again at every
     /// `stopped`: a worker started since the last pause is a thread nobody
     /// would otherwise find.
@@ -608,6 +609,32 @@ pub struct Session {
     /// when it ends.
     corner: layout::Corner,
     strip: layout::Group,
+    /// The child sessions the adapter asked Varde to start, by the connection
+    /// each is held on. Never a session of their own: their threads are this
+    /// one's, and stopping it stops them.
+    children: BTreeMap<usize, Child>,
+}
+
+/// A child session: what the adapter's `startDebugging` asked to be started,
+/// and the name its threads are grouped under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Child {
+    name: String,
+    request: String,
+    configuration: Value,
+}
+
+/// A thread as the session numbers it: the connection it lives on above the
+/// id the adapter gave it, since every child session numbers its threads from
+/// the start. The session's own connection is 0, so its threads keep the
+/// adapter's ids.
+fn thread_on(link: usize, id: i64) -> i64 {
+    ((link as i64) << 32) | (id & 0xFFFF_FFFF)
+}
+
+/// The connection a thread lives on and the id the adapter knows it by.
+fn link_of(thread: i64) -> (usize, i64) {
+    ((thread >> 32) as usize, thread & 0xFFFF_FFFF)
 }
 
 /// An Exception filter as the adapter listed it: the id it is switched by and
@@ -646,6 +673,7 @@ fn reported(filters: &Value) -> Option<Vec<Filter>> {
 struct Ask {
     command: String,
     arguments: Value,
+    to: usize,
 }
 
 /// Where a session has got to. An enum rather than flags, for the reason
@@ -978,9 +1006,10 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
         seq: 0,
         asked: BTreeMap::new(),
         verdicts: BTreeMap::new(),
-        pausing: false,
+        pausing: BTreeSet::new(),
         threads: Vec::new(),
         others: BTreeMap::new(),
+        children: BTreeMap::new(),
         previous: None,
         can_set: false,
         can_cancel: false,
@@ -1034,9 +1063,10 @@ pub fn reattach(next: &mut State) -> Vec<Effect> {
         phase: Phase::Spawning,
         asked: BTreeMap::new(),
         verdicts: BTreeMap::new(),
-        pausing: false,
+        pausing: BTreeSet::new(),
         threads: Vec::new(),
         others: BTreeMap::new(),
+        children: BTreeMap::new(),
         previous: None,
         ..session
     });
@@ -1097,14 +1127,20 @@ pub fn unhosted(next: &mut State, server: &str) -> Vec<Effect> {
 }
 
 /// The edge holds the adapter now, so the conversation begins.
-pub fn started(next: &mut State) -> Vec<Effect> {
-    let Some(session) = next.debug.as_mut().filter(|s| s.phase == Phase::Spawning) else {
+pub fn started(next: &mut State, from: usize) -> Vec<Effect> {
+    let Some(session) = next.debug.as_mut() else {
         return Vec::new();
     };
-    session.phase = Phase::Initializing;
+    match from {
+        0 if session.phase == Phase::Spawning => session.phase = Phase::Initializing,
+        0 => return Vec::new(),
+        child if !session.children.contains_key(&child) => return Vec::new(),
+        _ => {}
+    }
     let adapter = session.adapter.clone();
-    vec![ask(
+    vec![ask_on(
         session,
+        from,
         "initialize",
         json!({
             "clientID": "varde",
@@ -1113,16 +1149,23 @@ pub fn started(next: &mut State) -> Vec<Effect> {
             "pathFormat": "path",
             "linesStartAt1": true,
             "columnsStartAt1": true,
+            "supportsStartDebuggingRequest": true,
         }),
     )]
 }
 
 /// The edge stopped holding the adapter. Whatever the session was waiting on
 /// went with it; a session that was being stopped has already ended.
-pub fn gone(next: &mut State, why: Gone) -> Vec<Effect> {
-    let Some(session) = next.debug.as_ref() else {
+pub fn gone(next: &mut State, why: Gone, from: usize) -> Vec<Effect> {
+    let Some(session) = next.debug.as_mut() else {
         return Vec::new();
     };
+    // A child session going is its threads going, never the session: the
+    // program it belonged to is still the one being debugged.
+    if from != 0 {
+        forget(session, from);
+        return Vec::new();
+    }
     let command = session.command.clone();
     // Said twice: the refusal answers the event in the footer, and the notice
     // stays in the status line, because this arrives when the edge notices
@@ -1150,16 +1193,33 @@ pub fn gone(next: &mut State, why: Gone) -> Vec<Effect> {
 }
 
 /// One message the adapter sent, exactly as the edge read it.
-pub fn received(next: &mut State, json: &str) -> Vec<Effect> {
-    let Ok(message) = serde_json::from_str::<Value>(json) else {
+pub fn received(next: &mut State, json: &str, from: usize) -> Vec<Effect> {
+    let Ok(mut message) = serde_json::from_str::<Value>(json) else {
         return Vec::new();
     };
-    if next.debug.is_none() {
+    // A child this session never opened, or has forgotten, speaks for nothing
+    // on screen: its threads would be a session nobody started.
+    let Some(session) = next.debug.as_ref() else {
         return Vec::new();
+    };
+    if from != 0 && !session.children.contains_key(&from) {
+        return Vec::new();
+    }
+    // Every thread the message names, renumbered onto its connection here, so
+    // nothing past this line can mistake one child's thread 1 for another's.
+    if let Some(body) = message.get_mut("body") {
+        if let Some(id) = body["threadId"].as_i64() {
+            body["threadId"] = json!(thread_on(from, id));
+        }
+        for thread in body["threads"].as_array_mut().into_iter().flatten() {
+            if let Some(id) = thread["id"].as_i64() {
+                thread["id"] = json!(thread_on(from, id));
+            }
+        }
     }
     match message["type"].as_str() {
         Some("response") => answered(next, &message),
-        Some("event") => told(next, &message),
+        Some("event") => told(next, &message, from),
         Some("request") => {
             let session = next.debug.as_mut().expect("a session");
             let command = message["command"].as_str().unwrap_or_default();
@@ -1180,6 +1240,7 @@ pub fn received(next: &mut State, json: &str) -> Vec<Effect> {
                 if argv.is_empty() {
                     return vec![reply(
                         session,
+                        from,
                         &message,
                         json!({
                             "success": false,
@@ -1203,16 +1264,53 @@ pub fn received(next: &mut State, json: &str) -> Vec<Effect> {
                 return vec![
                     reply(
                         session,
+                        from,
                         &message,
                         json!({ "success": true, "command": command, "body": {} }),
                     ),
                     Effect::RunProgram { argv, cwd, env },
                 ];
             }
+            // A child session the adapter wants started, for a worker or a
+            // process the program spawned: another connection to the same
+            // adapter, folded into this session rather than offered as one to
+            // pick, since which sessions an adapter keeps is its bookkeeping.
+            if command == "startDebugging" {
+                let arguments = &message["arguments"];
+                // Numbered off `seq`, which never goes back, so a child that
+                // went is never confused with one opened after it.
+                let child = session.seq as usize + 1;
+                let configuration = arguments["configuration"].clone();
+                let name = configuration["name"]
+                    .as_str()
+                    .map_or_else(|| format!("child {child}"), printable);
+                let request = arguments["request"]
+                    .as_str()
+                    .unwrap_or("launch")
+                    .to_string();
+                session.children.insert(
+                    child,
+                    Child {
+                        name,
+                        request,
+                        configuration,
+                    },
+                );
+                return vec![
+                    reply(
+                        session,
+                        from,
+                        &message,
+                        json!({ "success": true, "command": command, "body": {} }),
+                    ),
+                    Effect::DapChild { child },
+                ];
+            }
             // A reverse request nothing here answers is refused out loud: an
             // adapter left waiting on a reply is a session that hangs.
             vec![reply(
                 session,
+                from,
                 &message,
                 json!({
                     "success": false,
@@ -1228,11 +1326,29 @@ pub fn received(next: &mut State, json: &str) -> Vec<Effect> {
 fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
     let session = next.debug.as_mut().expect("a session");
     let answering = message["request_seq"].as_i64().unwrap_or_default();
-    let Some(Ask { command, arguments }) = session.asked.remove(&answering) else {
+    let Some(Ask {
+        command,
+        arguments,
+        to,
+    }) = session.asked.remove(&answering)
+    else {
         return Vec::new();
     };
     if message["success"] != Value::Bool(true) {
         return match command.as_str() {
+            // A child session that would not start is one fewer set of
+            // threads, said in the status line, and the session goes on.
+            "initialize" | "launch" | "attach" | "disconnect" if to != 0 => {
+                forget(session, to);
+                let mut effects = vec![Effect::StopDapChild { child: to }];
+                if command != "disconnect" {
+                    effects.push(Effect::notify_about(
+                        "launch-failed",
+                        adapter_error(message, &command),
+                    ));
+                }
+                effects
+            }
             "initialize" | "launch" | "attach" => {
                 let why = adapter_error(message, &command);
                 // A session that watches a port goes back to watching it:
@@ -1255,7 +1371,7 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
             // A pause that could not learn a thread is not still waiting on
             // one, or F9 would never pause again.
             "threads" => {
-                session.pausing = false;
+                session.pausing.remove(&answering);
                 Vec::new()
             }
             // The adapter's reason, kept against the Watch that asked: a
@@ -1292,6 +1408,17 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
         };
     }
     match command.as_str() {
+        "initialize" if to != 0 => {
+            let Some(child) = session.children.get(&to) else {
+                return Vec::new();
+            };
+            let (request, configuration) = (child.request.clone(), child.configuration.clone());
+            vec![ask_on(session, to, &request, configuration)]
+        }
+        "disconnect" if to != 0 => {
+            forget(session, to);
+            vec![Effect::StopDapChild { child: to }]
+        }
         "initialize" => {
             session.can_set = message["body"]["supportsSetVariable"] == Value::Bool(true);
             session.can_cancel = message["body"]["supportsCancelRequest"] == Value::Bool(true);
@@ -1301,7 +1428,7 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
                 reported(&message["body"]["exceptionBreakpointFilters"]).unwrap_or_default();
             session.phase = Phase::Starting;
             let (request, args) = (session.request.clone(), session.args.clone());
-            vec![ask(session, &request, Value::Object(args))]
+            vec![ask_on(session, 0, &request, Value::Object(args))]
         }
         "stackTrace" => {
             let root = &next.root;
@@ -1472,19 +1599,25 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
             }
             Vec::new()
         }
+        // One connection's threads, in place of the ones it named before: the
+        // session's own first, then each child's in the order it started.
         "threads" => {
-            session.threads = message["body"]["threads"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|thread| {
-                    let name = printable(thread["name"].as_str().unwrap_or_default());
-                    Some((thread["id"].as_i64()?, name))
-                })
-                .collect();
-            if !std::mem::take(&mut session.pausing) {
+            session.threads.retain(|(id, _)| link_of(*id).0 != to);
+            let named = message["body"]["threads"].as_array().into_iter().flatten();
+            session.threads.extend(named.filter_map(|thread| {
+                let name = printable(thread["name"].as_str().unwrap_or_default());
+                Some((thread["id"].as_i64()?, name))
+            }));
+            session.threads.sort_by_key(|(id, _)| link_of(*id).0);
+            // Every connection is asked, and one with no threads of its own —
+            // an adapter's parent session often has none — does not end the
+            // pause while another may yet name one.
+            if !session.pausing.remove(&answering)
+                || (session.threads.is_empty() && !session.pausing.is_empty())
+            {
                 return Vec::new();
             }
+            session.pausing.clear();
             match session.threads.first() {
                 Some(&(thread, _)) => vec![ask(session, "pause", json!({ "threadId": thread }))],
                 None => Vec::new(),
@@ -1494,7 +1627,7 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
         // asked: only an adapter that says otherwise leaves the others Paused.
         "continue" => {
             if message["body"]["allThreadsContinued"] != Value::Bool(false) {
-                session.others.clear();
+                session.others.retain(|id, _| link_of(*id).0 != to);
             }
             Vec::new()
         }
@@ -1514,10 +1647,10 @@ fn let_go(next: &mut State) -> Vec<Effect> {
     effects
 }
 
-fn told(next: &mut State, message: &Value) -> Vec<Effect> {
+fn told(next: &mut State, message: &Value, from: usize) -> Vec<Effect> {
     let body = &message["body"];
     match message["event"].as_str() {
-        Some("initialized") => configured(next),
+        Some("initialized") => configured(next, from),
         Some("stopped") => {
             let session = next.debug.as_mut().expect("a session");
             let thread = body["threadId"].as_i64().unwrap_or_default();
@@ -1535,7 +1668,7 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
                 Phase::Paused(pause) if pause.thread == thread => {}
                 Phase::Paused(_) => {
                     session.others.insert(thread, (why, exception));
-                    return vec![ask(session, "threads", json!({}))];
+                    return ask_all(session, "threads", json!({}));
                 }
                 _ => return Vec::new(),
             }
@@ -1602,13 +1735,13 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
             let every = body["allThreadsContinued"] == Value::Bool(true);
             let thread = body["threadId"].as_i64().unwrap_or_default();
             match every {
-                true => session.others.clear(),
+                true => session.others.retain(|id, _| link_of(*id).0 != from),
                 false => {
                     session.others.remove(&thread);
                 }
             }
             if let Phase::Paused(pause) = &session.phase {
-                if every || pause.thread == thread {
+                if (every && link_of(pause.thread).0 == from) || pause.thread == thread {
                     session.phase = Phase::Running(Some(pause.clone()));
                 }
             }
@@ -1621,6 +1754,11 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
         // detaches rather than ending a program that may only be restarting.
         Some("terminated") => {
             let session = next.debug.as_mut().expect("a session");
+            // A child session's program ending is its threads going; the
+            // session's own is what ends the session.
+            if from != 0 {
+                return vec![ask_on(session, from, "disconnect", json!({}))];
+            }
             if matches!(session.phase, Phase::Stopping | Phase::Waiting) {
                 return Vec::new();
             }
@@ -1628,7 +1766,7 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
                 Some(_) => Phase::Waiting,
                 None => Phase::Stopping,
             };
-            let effects = vec![ask(session, "disconnect", json!({}))];
+            let effects = ask_all(session, "disconnect", json!({}));
             // Its letters step nothing while nothing is attached.
             next.stepping = false;
             effects
@@ -1638,12 +1776,15 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
 }
 
 /// `initialized`: the Breakpoints, the Exception filters and then
-/// `configurationDone`, in the protocol's order and in one batch.
-fn configured(next: &mut State) -> Vec<Effect> {
+/// `configurationDone`, in the protocol's order and in one batch — to the
+/// connection that said it, since a child session is configured as its own.
+fn configured(next: &mut State, from: usize) -> Vec<Effect> {
     let pause_on = pause_on(next);
     let session = next.debug.as_mut().expect("a session");
-    if session.phase != Phase::Starting {
-        return Vec::new();
+    match from {
+        0 if session.phase != Phase::Starting => return Vec::new(),
+        child if child != 0 && !session.children.contains_key(&child) => return Vec::new(),
+        _ => {}
     }
     let files: BTreeSet<&Path> = next
         .breakpoints
@@ -1652,11 +1793,13 @@ fn configured(next: &mut State) -> Vec<Effect> {
         .collect();
     let mut effects: Vec<Effect> = files
         .into_iter()
-        .map(|file| set_breakpoints(session, &next.breakpoints, file))
+        .map(|file| set_breakpoints(session, from, &next.breakpoints, file))
         .collect();
-    effects.push(ask(session, "setExceptionBreakpoints", pause_on));
-    effects.push(ask(session, "configurationDone", json!({})));
-    session.phase = Phase::Running(None);
+    effects.push(ask_on(session, from, "setExceptionBreakpoints", pause_on));
+    effects.push(ask_on(session, from, "configurationDone", json!({})));
+    if from == 0 {
+        session.phase = Phase::Running(None);
+    }
     effects
 }
 
@@ -1720,10 +1863,9 @@ pub fn switch(next: &mut State, at: usize) -> Vec<Effect> {
     };
     let arguments = pause_on(next);
     let session = next.debug.as_mut().expect("a session with switches");
-    vec![
-        ask(session, "setExceptionBreakpoints", arguments),
-        Effect::SaveState(crate::state_json(next)),
-    ]
+    let mut effects = ask_all(session, "setExceptionBreakpoints", arguments);
+    effects.push(Effect::SaveState(crate::state_json(next)));
+    effects
 }
 
 /// The exception-class box's Enter: the class is sent with the switches, and
@@ -1735,13 +1877,18 @@ pub fn name_class(next: &mut State, class: String) -> Vec<Effect> {
     session.class = Some(class);
     let arguments = pause_on(next);
     let session = next.debug.as_mut().expect("a session");
-    vec![ask(session, "setExceptionBreakpoints", arguments)]
+    ask_all(session, "setExceptionBreakpoints", arguments)
 }
 
 /// A file's whole list, as `setBreakpoints` replaces it: every Breakpoint in it
 /// but the Stale ones, whose line no longer holds what was set there. A file
 /// left with none is sent an empty list, or the adapter would keep the last.
-fn set_breakpoints(session: &mut Session, breakpoints: &[Breakpoint], file: &Path) -> Effect {
+fn set_breakpoints(
+    session: &mut Session,
+    to: usize,
+    breakpoints: &[Breakpoint],
+    file: &Path,
+) -> Effect {
     let lines: Vec<Value> = breakpoints
         .iter()
         .filter(|breakpoint| breakpoint.file == file && !breakpoint.stale)
@@ -1760,8 +1907,9 @@ fn set_breakpoints(session: &mut Session, breakpoints: &[Breakpoint], file: &Pat
             sent
         })
         .collect();
-    ask(
+    ask_on(
         session,
+        to,
         "setBreakpoints",
         json!({ "source": { "path": file }, "breakpoints": lines }),
     )
@@ -1774,9 +1922,10 @@ pub fn breakpoints_changed(next: &mut State, file: &Path) -> Vec<Effect> {
         return Vec::new();
     };
     match session.phase {
-        Phase::Running(_) | Phase::Paused(_) => {
-            vec![set_breakpoints(session, &next.breakpoints, file)]
-        }
+        Phase::Running(_) | Phase::Paused(_) => links(session)
+            .into_iter()
+            .map(|link| set_breakpoints(session, link, &next.breakpoints, file))
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -1802,9 +1951,11 @@ pub fn resume(next: &mut State) -> Vec<Effect> {
         }
         // Pausing needs a thread, and a program that has never paused has
         // named none, so the adapter is asked for them first.
-        Phase::Running(_) if !session.pausing => {
-            session.pausing = true;
-            vec![ask(session, "threads", json!({}))]
+        Phase::Running(_) if session.pausing.is_empty() => {
+            let before = session.seq;
+            let effects = ask_all(session, "threads", json!({}));
+            session.pausing = (before + 1..=session.seq).collect();
+            effects
         }
         _ => Vec::new(),
     };
@@ -1870,11 +2021,11 @@ pub fn stop(next: &mut State) -> Vec<Effect> {
         _ => {
             let terminate = session.request == "launch";
             session.phase = Phase::Stopping;
-            vec![ask(
+            ask_all(
                 session,
                 "disconnect",
                 json!({ "terminateDebuggee": terminate }),
-            )]
+            )
         }
     };
     lit(next, STOP, &effects);
@@ -1986,10 +2137,9 @@ fn inspect_thread(
         fetched: BTreeMap::new(),
         unfolded: BTreeSet::new(),
     });
-    vec![
-        ask(session, "stackTrace", json!({ "threadId": thread })),
-        ask(session, "threads", json!({})),
-    ]
+    let mut effects = vec![ask(session, "stackTrace", json!({ "threadId": thread }))];
+    effects.extend(ask_all(session, "threads", json!({})));
+    effects
 }
 
 /// What is on screen from the last pause: the pause itself while one holds,
@@ -2039,7 +2189,14 @@ pub fn frames(state: &State) -> &[Frame] {
 pub enum FrameRow {
     /// A thread, heading its Frames. `paused` flags a thread Paused other
     /// than the one being inspected: a request the reader is holding open.
-    Thread { id: i64, name: String, paused: bool },
+    /// `child` names the child session the thread belongs to, where it is
+    /// not the session's own.
+    Thread {
+        id: i64,
+        name: String,
+        paused: bool,
+        child: Option<String>,
+    },
     /// The inspected thread's Frame at this index of [`frames`].
     Frame(usize),
     /// A run of Library frames folded into one row, by where it starts and
@@ -2065,8 +2222,15 @@ pub fn frame_rows(state: &State) -> Vec<FrameRow> {
             .threads
             .iter()
             .find(|(named, _)| *named == id)
-            .map_or_else(|| format!("thread {id}"), |(_, name)| name.clone()),
+            .map_or_else(
+                || format!("thread {}", link_of(id).1),
+                |(_, name)| name.clone(),
+            ),
         paused: session.others.contains_key(&id),
+        child: session
+            .children
+            .get(&link_of(id).0)
+            .map(|child| child.name.clone()),
     };
     let mut rows = vec![thread(pause.thread)];
     let mut index = 0;
@@ -3104,7 +3268,10 @@ pub fn cancel(next: &mut State) -> Vec<Effect> {
     let Some(session) = next.debug.as_mut().filter(|session| session.can_cancel) else {
         return Vec::new();
     };
-    vec![ask(session, "cancel", json!({ "requestId": seq }))]
+    // Over the connection the request went out on, the only one whose
+    // numbering `requestId` means anything in.
+    let to = session.asked.get(&seq).map_or(0, |asked| asked.to);
+    vec![ask_on(session, to, "cancel", json!({ "requestId": seq }))]
 }
 
 /// Where the window goes: the rectangle a gesture named, placed on the screen
@@ -3674,8 +3841,22 @@ fn printable(text: &str) -> String {
         .collect()
 }
 
-/// One request, numbered and remembered until its answer arrives.
+/// One request, over the connection the thread it names lives on, or else the
+/// one the thread being inspected does — a Frame's scopes, a member's
+/// children and a Watch all belong to the child whose thread paused.
 fn ask(session: &mut Session, command: &str, arguments: Value) -> Effect {
+    let to = match (arguments["threadId"].as_i64(), &session.phase) {
+        (Some(thread), _) => link_of(thread).0,
+        (None, Phase::Paused(pause) | Phase::Running(Some(pause))) => link_of(pause.thread).0,
+        (None, _) => 0,
+    };
+    ask_on(session, to, command, arguments)
+}
+
+/// One request over connection `to`, numbered and remembered until its answer
+/// arrives. The numbering is the session's across every connection, so an
+/// answer is found by it alone whichever child sent it.
+fn ask_on(session: &mut Session, to: usize, command: &str, arguments: Value) -> Effect {
     session.seq += 1;
     // The request itself rather than a copy of the parts of it somebody
     // expected to need: the two could then say different things, and the
@@ -3685,26 +3866,64 @@ fn ask(session: &mut Session, command: &str, arguments: Value) -> Effect {
         Ask {
             command: command.to_string(),
             arguments: arguments.clone(),
+            to,
         },
     );
+    let mut sent = arguments;
+    if let Some(thread) = sent["threadId"].as_i64() {
+        sent["threadId"] = json!(link_of(thread).1);
+    }
     Effect::DapSend {
+        to,
         json: json!({
             "seq": session.seq,
             "type": "request",
             "command": command,
-            "arguments": arguments,
+            "arguments": sent,
         })
         .to_string(),
     }
 }
 
-/// The answer to a request the adapter made of Varde.
-fn reply(session: &mut Session, request: &Value, mut answer: Value) -> Effect {
+/// The same request over every connection: what is true of the whole program
+/// — its Breakpoints, its threads, that it is being stopped — is true of each
+/// child's part of it.
+fn ask_all(session: &mut Session, command: &str, arguments: Value) -> Vec<Effect> {
+    links(session)
+        .into_iter()
+        .map(|to| ask_on(session, to, command, arguments.clone()))
+        .collect()
+}
+
+/// The session's own connection and every child's.
+fn links(session: &Session) -> Vec<usize> {
+    std::iter::once(0)
+        .chain(session.children.keys().copied())
+        .collect()
+}
+
+/// A child session gone: its threads with it, and an inspection of one of
+/// them, which has nothing left to ask.
+fn forget(session: &mut Session, child: usize) {
+    session.children.remove(&child);
+    session.threads.retain(|(id, _)| link_of(*id).0 != child);
+    session.others.retain(|id, _| link_of(*id).0 != child);
+    if let Phase::Paused(pause) | Phase::Running(Some(pause)) = &session.phase {
+        if link_of(pause.thread).0 == child {
+            session.phase = Phase::Running(None);
+        }
+    }
+}
+
+/// The answer to a request the adapter made of Varde, over the connection it
+/// came from.
+fn reply(session: &mut Session, to: usize, request: &Value, mut answer: Value) -> Effect {
     session.seq += 1;
     answer["seq"] = json!(session.seq);
     answer["type"] = json!("response");
     answer["request_seq"] = request["seq"].clone();
     Effect::DapSend {
+        to,
         json: answer.to_string(),
     }
 }
@@ -3747,17 +3966,19 @@ pub(crate) fn paused(mut state: State) -> State {
         },
     );
     start(&mut state, "app");
-    started(&mut state);
+    started(&mut state, 0);
     let seq = outstanding(&state, "initialize");
     received(
         &mut state,
         &json!({"type": "response", "request_seq": seq, "success": true, "command": "initialize"})
             .to_string(),
+        0,
     );
-    received(&mut state, r#"{"type":"event","event":"initialized"}"#);
+    received(&mut state, r#"{"type":"event","event":"initialized"}"#, 0);
     received(
         &mut state,
         r#"{"type":"event","event":"stopped","body":{"threadId":1,"reason":"breakpoint"}}"#,
+        0,
     );
     let seq = outstanding(&state, "stackTrace");
     received(
@@ -3765,6 +3986,7 @@ pub(crate) fn paused(mut state: State) -> State {
         &json!({"type": "response", "request_seq": seq, "success": true, "command": "stackTrace",
             "body": {"stackFrames": [{"id": 1, "name": "main", "line": 1, "source": {"path": "/w/one.rs"}}]}})
         .to_string(),
+        0,
     );
     // Settled as `update` leaves every message the edge hands it, so the
     // first event a test sends is not the one that scrolls to the Frame.
@@ -3775,6 +3997,16 @@ pub(crate) fn paused(mut state: State) -> State {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// The session's own connection, which is what nearly every test speaks
+    /// over; the child-session tests name theirs.
+    fn received(next: &mut State, json: &str) -> Vec<Effect> {
+        super::received(next, json, 0)
+    }
+
+    fn started(next: &mut State) -> Vec<Effect> {
+        super::started(next, 0)
+    }
 
     /// What `\u{2423}e` names where a Hover would name less: the chain the
     /// cursor stands in, the groups each name in it carries, and the two
@@ -4033,7 +4265,7 @@ mod tests {
             effects
                 .iter()
                 .find_map(|effect| match effect {
-                    Effect::DapSend { json } => serde_json::from_str::<Value>(json).ok(),
+                    Effect::DapSend { json, .. } => serde_json::from_str::<Value>(json).ok(),
                     _ => None,
                 })
                 .expect("a request")["arguments"]
@@ -4261,10 +4493,285 @@ mod tests {
         effects
             .iter()
             .filter_map(|effect| match effect {
-                Effect::DapSend { json } => serde_json::from_str(json).ok(),
+                Effect::DapSend { json, .. } => serde_json::from_str(json).ok(),
                 _ => None,
             })
             .collect()
+    }
+
+    /// Every request and reply sent, with the connection it went over.
+    fn sent_on(effects: &[Effect]) -> Vec<(usize, Value)> {
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::DapSend { to, json } => Some((*to, serde_json::from_str(json).ok()?)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A session Paused on its own thread 1, and a child session the adapter
+    /// asked for, started and configured, whose own thread 1 has stopped and
+    /// is named "worker".
+    fn with_child() -> (State, usize) {
+        let mut state = paused(State::default());
+        let effects = received(
+            &mut state,
+            r#"{"seq":40,"type":"request","command":"startDebugging","arguments":
+                {"request":"attach","configuration":{"name":"worker.js","port":9229}}}"#,
+        );
+        let child = match effects.last() {
+            Some(Effect::DapChild { child }) => *child,
+            other => panic!("no child opened: {other:?}"),
+        };
+        let (to, reply) = &sent_on(&effects)[0];
+        assert_eq!(
+            (*to, &reply["request_seq"], &reply["success"]),
+            (0, &json!(40), &json!(true))
+        );
+        let initialize = sent_on(&super::started(&mut state, child));
+        assert_eq!(initialize[0].0, child);
+        let answer = |seq: &Value, command: &str, body: Value| {
+            json!({"type": "response", "request_seq": seq, "success": true,
+                "command": command, "body": body})
+            .to_string()
+        };
+        let attach = sent_on(&super::received(
+            &mut state,
+            &answer(&initialize[0].1["seq"], "initialize", json!({})),
+            child,
+        ));
+        assert_eq!(attach[0].0, child);
+        assert_eq!(
+            (&attach[0].1["command"], &attach[0].1["arguments"]["port"]),
+            (&json!("attach"), &json!(9229))
+        );
+        super::received(
+            &mut state,
+            r#"{"type":"event","event":"initialized"}"#,
+            child,
+        );
+        let asked = sent_on(&super::received(
+            &mut state,
+            r#"{"type":"event","event":"stopped","body":{"threadId":1,"reason":"breakpoint"}}"#,
+            child,
+        ));
+        let (_, threads) = asked
+            .iter()
+            .find(|(to, message)| *to == child && message["command"] == "threads")
+            .expect("the child asked for its threads");
+        super::received(
+            &mut state,
+            &answer(
+                &threads["seq"],
+                "threads",
+                json!({"threads": [{"id": 1, "name": "worker"}]}),
+            ),
+            child,
+        );
+        (state, child)
+    }
+
+    /// Two thread 1s, one the session's and one the child's, are two rows,
+    /// and the child's is labelled with the child session's name.
+    #[test]
+    fn a_childs_threads_join_the_frames_under_its_name() {
+        let (state, _) = with_child();
+        let threads: Vec<(String, bool, Option<String>)> = frame_rows(&state)
+            .into_iter()
+            .filter_map(|row| match row {
+                FrameRow::Thread {
+                    name,
+                    paused,
+                    child,
+                    ..
+                } => Some((name, paused, child)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            threads,
+            [
+                ("thread 1".to_string(), false, None),
+                ("worker".to_string(), true, Some("worker.js".to_string())),
+            ]
+        );
+    }
+
+    /// The Transport acts on the thread being inspected over the connection
+    /// that owns it, in the id that child knows it by.
+    #[test]
+    fn a_step_on_a_childs_thread_is_asked_of_the_child() {
+        let (mut state, child) = with_child();
+        next_thread(&mut state);
+        let asked = sent_on(&step(&mut state, Step::Over));
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].0, child);
+        assert_eq!(
+            (&asked[0].1["command"], &asked[0].1["arguments"]["threadId"]),
+            (&json!("next"), &json!(1))
+        );
+    }
+
+    /// A child session's connection going takes its threads, never the
+    /// session, and says nothing: the program being debugged is still there.
+    #[test]
+    fn a_child_that_goes_takes_only_its_threads() {
+        let (mut state, child) = with_child();
+        assert_eq!(super::gone(&mut state, Gone::Exited, child), []);
+        assert!(state.debug.is_some());
+        assert_eq!(state.refusal, None);
+        let rows = frame_rows(&state);
+        assert!(!rows
+            .iter()
+            .any(|row| matches!(row, FrameRow::Thread { child: Some(_), .. })));
+    }
+
+    /// A child the adapter refuses to start is said in the status line and
+    /// let go, and the session it would have joined goes on.
+    #[test]
+    fn a_child_that_will_not_start_is_let_go_and_the_session_goes_on() {
+        let mut state = paused(State::default());
+        let effects = received(
+            &mut state,
+            r#"{"seq":40,"type":"request","command":"startDebugging","arguments":
+                {"request":"launch","configuration":{"name":"worker.js"}}}"#,
+        );
+        let Some(&Effect::DapChild { child }) = effects.last() else {
+            panic!("no child opened");
+        };
+        let initialize = sent_on(&super::started(&mut state, child));
+        let effects = super::received(
+            &mut state,
+            &json!({"type": "response", "request_seq": initialize[0].1["seq"], "success": false,
+                "command": "initialize", "message": "no such target"})
+            .to_string(),
+            child,
+        );
+        assert_eq!(effects[0], Effect::StopDapChild { child });
+        assert!(matches!(
+            &effects[1],
+            Effect::NotifyAbout {
+                slug: "launch-failed",
+                ..
+            }
+        ));
+        assert!(matches!(
+            state.debug.as_ref().expect("a session").phase,
+            Phase::Paused(_)
+        ));
+        assert_eq!(state.refusal, None);
+    }
+
+    /// A child's program ending is its threads going and its connection let
+    /// go once it has answered, never the session.
+    #[test]
+    fn a_child_whose_program_ends_is_let_go_alone() {
+        let (mut state, child) = with_child();
+        let asked = sent_on(&super::received(
+            &mut state,
+            r#"{"type":"event","event":"terminated"}"#,
+            child,
+        ));
+        assert_eq!(asked.len(), 1);
+        assert_eq!(
+            (asked[0].0, &asked[0].1["command"]),
+            (child, &json!("disconnect"))
+        );
+        let effects = super::received(
+            &mut state,
+            &json!({"type": "response", "request_seq": asked[0].1["seq"], "success": true,
+                "command": "disconnect"})
+            .to_string(),
+            child,
+        );
+        assert_eq!(effects, [Effect::StopDapChild { child }]);
+        assert!(state.debug.is_some());
+        assert!(!frame_rows(&state)
+            .iter()
+            .any(|row| matches!(row, FrameRow::Thread { child: Some(_), .. })));
+    }
+
+    /// The session's own threads running on leaves a child's Paused thread
+    /// held: every thread continuing is every thread on that connection.
+    #[test]
+    fn continuing_the_sessions_threads_leaves_a_childs_paused() {
+        let (mut state, _) = with_child();
+        let asked = sent_on(&resume(&mut state));
+        assert_eq!(asked[0].0, 0);
+        super::received(
+            &mut state,
+            &json!({"type": "response", "request_seq": asked[0].1["seq"], "success": true,
+                "command": "continue", "body": {"allThreadsContinued": true}})
+            .to_string(),
+            0,
+        );
+        assert!(frame_rows(&state).iter().any(|row| matches!(
+            row,
+            FrameRow::Thread {
+                child: Some(_),
+                paused: true,
+                ..
+            }
+        )));
+    }
+
+    /// F9 while running asks every connection for its threads, and one that
+    /// cannot say does not stop another's thread being paused.
+    #[test]
+    fn a_pause_outlives_one_connection_failing_to_name_its_threads() {
+        let (mut state, child) = with_child();
+        resume(&mut state);
+        let asked = sent_on(&resume(&mut state));
+        let seq = |to: usize| {
+            let (_, message) = asked
+                .iter()
+                .find(|(on, _)| *on == to)
+                .expect("threads asked");
+            message["seq"].clone()
+        };
+        super::received(
+            &mut state,
+            &json!({"type": "response", "request_seq": seq(0), "success": false, "command": "threads"})
+                .to_string(),
+            0,
+        );
+        let paused = sent_on(&super::received(
+            &mut state,
+            &json!({"type": "response", "request_seq": seq(child), "success": true,
+                "command": "threads", "body": {"threads": [{"id": 1, "name": "worker"}]}})
+            .to_string(),
+            child,
+        ));
+        assert_eq!(paused.len(), 1);
+        assert_eq!(
+            (paused[0].0, &paused[0].1["command"]),
+            (child, &json!("pause"))
+        );
+    }
+
+    /// A connection the session never opened a child on is not heard: its
+    /// thread stopping would be a pause in a session nobody started.
+    #[test]
+    fn a_child_the_session_never_opened_is_not_heard() {
+        let mut state = paused(State::default());
+        let before = frame_rows(&state);
+        let effects = super::received(
+            &mut state,
+            r#"{"type":"event","event":"stopped","body":{"threadId":1,"reason":"breakpoint"}}"#,
+            7,
+        );
+        assert_eq!(effects, []);
+        assert_eq!(frame_rows(&state), before);
+    }
+
+    /// A Breakpoint set while running reaches every part of the program.
+    #[test]
+    fn a_breakpoint_changed_mid_session_reaches_every_child() {
+        let (mut state, child) = with_child();
+        let asked = sent_on(&breakpoints_changed(&mut state, Path::new("/w/one.rs")));
+        let to: Vec<usize> = asked.iter().map(|(to, _)| *to).collect();
+        assert_eq!(to, [0, child]);
     }
 
     /// A reverse request nothing answers yet is refused out loud, naming the

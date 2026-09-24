@@ -1105,18 +1105,25 @@ pub enum Event {
         why: lsp::Gone,
     },
     /// One message the Debug adapter sent, exactly as it arrived — the
-    /// language server's shape, for its reasons.
+    /// language server's shape, for its reasons. `from` is the connection it
+    /// came over: 0 for the one the session started, a child session's number
+    /// (`Effect::DapChild`) otherwise.
     DapReceived {
         json: String,
+        from: usize,
     },
-    /// The edge holds the adapter a Debug session asked for, so the
-    /// conversation can begin against a process rather than against the
-    /// asking.
-    DapStarted,
-    /// The edge stopped holding the adapter — pushed from every site that
-    /// stops holding one, `AiExited`'s rule.
+    /// The edge holds the adapter a Debug session asked for, or a connection
+    /// to it for a child session, so the conversation can begin against a
+    /// process rather than against the asking.
+    DapStarted {
+        from: usize,
+    },
+    /// The edge stopped holding the adapter, or one child session's
+    /// connection to it — pushed from every site that stops holding one,
+    /// `AiExited`'s rule.
     DapGone {
         why: debug::Gone,
+        from: usize,
     },
     /// The port a Waiting session watches accepted a connection, which only
     /// the edge can find out by trying.
@@ -1379,9 +1386,23 @@ pub enum Effect {
         args: Vec<String>,
         reach: debug::Reach,
     },
-    /// One Debug Adapter Protocol message for the adapter, built here.
+    /// One Debug Adapter Protocol message for the adapter, built here, over
+    /// the connection `to` — `Event::DapReceived`'s numbering.
     DapSend {
+        to: usize,
         json: String,
+    },
+    /// Open connection `child` to the adapter the session holds, the way that
+    /// one was reached, for a child session it asked Varde to start. Whether
+    /// it opened comes back as `Event::DapStarted` or `Event::DapGone` from
+    /// `child`. `StopDap` lets every one go with the adapter.
+    DapChild {
+        child: usize,
+    },
+    /// Let one child session's connection go, the rest of the session going
+    /// on. Answered with `Event::DapGone` from `child` where the edge held it.
+    StopDapChild {
+        child: usize,
     },
     /// Start the debugged program in the Debug group's own terminal, which is
     /// what the adapter's `runInTerminal` asks for. Never a shell: the Strip's
@@ -6612,8 +6633,8 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
 /// DebugStep, DebugStop, DebugRestart, LeaveStepping
 fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
-        Event::DapReceived { json } => debug::received(&mut next, &json),
-        Event::DapStarted => debug::started(&mut next),
+        Event::DapReceived { json, from } => debug::received(&mut next, &json, from),
+        Event::DapStarted { from } => debug::started(&mut next, from),
         // An adapter let go after its session ended is the tail of whatever
         // ended it, so the footer keeps saying why: a launch the adapter
         // refused would otherwise be explained for exactly as long as it took
@@ -6623,7 +6644,7 @@ fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answ
             next.refusal = state.refusal.clone();
             vec![]
         }
-        Event::DapGone { why } => debug::gone(&mut next, why),
+        Event::DapGone { why, from } => debug::gone(&mut next, why, from),
         Event::DapPortAnswers => debug::reattach(&mut next),
         Event::StartLaunch(name) => {
             next.modal = Modal::None;

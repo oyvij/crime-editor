@@ -563,6 +563,15 @@ struct Status {
     tone: ui::Tone,
 }
 
+/// Where a Debug adapter answers: the port it listens on, or the command that
+/// starts another one over stdio, which is the only way to have a second
+/// conversation with an adapter that has no port.
+#[derive(Clone)]
+enum Again {
+    Dial(u16),
+    Spawn { command: String, args: Vec<String> },
+}
+
 struct Edge {
     /// The terminal strip's shells, side by side, never empty while the loop
     /// runs: the last one exiting is how Varde ends.
@@ -649,6 +658,13 @@ struct Edge {
     /// holding the adapter: nothing is told the core until it connects, and
     /// letting it go is a site that stops holding one.
     connecting: Option<Receiver<std::io::Result<rpc::Adapter>>>,
+    /// How the adapter was reached, so a child session's connection to it is
+    /// reached the same way.
+    again: Option<Again>,
+    /// The child sessions' connections, by the number the core gave each, and
+    /// the ones still being made. The adapter's: let go wherever it is.
+    children: BTreeMap<usize, rpc::Adapter>,
+    joining: BTreeMap<usize, Receiver<std::io::Result<rpc::Adapter>>>,
     /// A Waiting session's port being tried, off the main loop because a
     /// remote host that drops the packets holds a connect for as long as its
     /// timeout, and when it was last tried.
@@ -845,6 +861,9 @@ fn run(
         probe: None,
         probed: Instant::now(),
         connecting: None,
+        again: None,
+        children: BTreeMap::new(),
+        joining: BTreeMap::new(),
     };
 
     let (watch_tx, watch_rx) = channel();
@@ -1308,7 +1327,7 @@ fn drain_adapter(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
             Ok(Ok(adapter)) => {
                 edge.connecting = None;
                 edge.adapter = Some(adapter);
-                queue.push_back(Event::DapStarted);
+                queue.push_back(Event::DapStarted { from: 0 });
                 return true;
             }
             Ok(Err(error)) => format!("the Debug adapter never listened: {error}"),
@@ -1329,12 +1348,73 @@ fn drain_adapter(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
         return false;
     };
     let arrived = adapter.drain();
-    let dirty = !arrived.is_empty() || !adapter.alive;
-    queue.extend(arrived.into_iter().map(|json| Event::DapReceived { json }));
+    let mut dirty = !arrived.is_empty() || !adapter.alive;
+    queue.extend(
+        arrived
+            .into_iter()
+            .map(|json| Event::DapReceived { json, from: 0 }),
+    );
     if !adapter.alive {
         adapter_is_gone(edge, queue, varde::debug::Gone::Exited);
+        return dirty;
+    }
+    // Each child session's connection the same way, told apart by its number.
+    let mut joined = Vec::new();
+    for (&child, joining) in &edge.joining {
+        match joining.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Ok(Ok(adapter)) => joined.push((child, Ok(adapter))),
+            Ok(Err(error)) => joined.push((child, Err(error.to_string()))),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                joined.push((child, Err("the connection was lost".to_string())))
+            }
+        }
+    }
+    for (child, adapter) in joined {
+        edge.joining.remove(&child);
+        dirty = true;
+        match adapter {
+            Ok(adapter) => {
+                edge.children.insert(child, adapter);
+                queue.push_back(Event::DapStarted { from: child });
+            }
+            Err(why) => child_never_joined(edge, queue, child, why),
+        }
+    }
+    let mut ended = Vec::new();
+    for (&child, adapter) in edge.children.iter_mut() {
+        let arrived = adapter.drain();
+        dirty |= !arrived.is_empty() || !adapter.alive;
+        queue.extend(
+            arrived
+                .into_iter()
+                .map(|json| Event::DapReceived { json, from: child }),
+        );
+        if !adapter.alive {
+            ended.push(child);
+        }
+    }
+    for child in ended {
+        edge.children.remove(&child);
+        queue.push_back(Event::DapGone {
+            why: varde::debug::Gone::Exited,
+            from: child,
+        });
     }
     dirty
+}
+
+/// A child session's connection that could not be made: the core hears it
+/// failed, and the reason, which only the edge has, goes to the status line.
+fn child_never_joined(edge: &mut Edge, queue: &mut VecDeque<Event>, child: usize, why: String) {
+    edge.status = Status {
+        text: format!("a child Debug session could not reach its adapter: {why}"),
+        tone: ui::Tone::Warning,
+    };
+    queue.push_back(Event::DapGone {
+        why: varde::debug::Gone::FailedToStart,
+        from: child,
+    });
 }
 
 /// The port a Waiting session watches, tried about once a second while — and
@@ -1387,8 +1467,11 @@ fn probe_waiting(state: &State, edge: &mut Edge, queue: &mut VecDeque<Event>) ->
 fn adapter_is_gone(edge: &mut Edge, queue: &mut VecDeque<Event>, why: varde::debug::Gone) {
     edge.adapter = None;
     edge.connecting = None;
+    edge.again = None;
+    edge.children.clear();
+    edge.joining.clear();
     edge.output = None;
-    queue.push_back(Event::DapGone { why });
+    queue.push_back(Event::DapGone { why, from: 0 });
 }
 
 /// Asking git which paths are ignored costs milliseconds, so it is asked when
@@ -2802,6 +2885,10 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
             args,
             reach,
         } => {
+            // A new session numbers its children afresh, so none of the last
+            // one's may still answer to a number.
+            edge.children.clear();
+            edge.joining.clear();
             // Truncated per spawn, for the reason a server's log is.
             let log = varde_dir(&edge.root, edge.sidecar.as_deref()).join("dap.log");
             let log = match std::fs::File::create(&log) {
@@ -2818,7 +2905,11 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                 varde::debug::Reach::Stdio => rpc::Adapter::spawn(&command, &args, &edge.root, log)
                     .map(|adapter| {
                         edge.adapter = Some(adapter);
-                        queue.push_back(Event::DapStarted);
+                        edge.again = Some(Again::Spawn {
+                            command: command.clone(),
+                            args: args.clone(),
+                        });
+                        queue.push_back(Event::DapStarted { from: 0 });
                     }),
                 // A port nothing holds, asked of the OS and let go for the
                 // adapter to take: the only way to learn one that is free.
@@ -2828,12 +2919,14 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                         .and_then(|address| {
                             let port = address.port();
                             let args = varde::debug::on_port(&args, port);
+                            edge.again = Some(Again::Dial(port));
                             rpc::Adapter::connect(&command, &args, &edge.root, log, port)
                         })
                         .map(|connected| edge.connecting = Some(connected))
                 }
                 varde::debug::Reach::Port(port) => {
                     edge.connecting = Some(rpc::Adapter::dial(port, None));
+                    edge.again = Some(Again::Dial(port));
                     Ok(())
                 }
             };
@@ -2845,23 +2938,57 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                         std::io::ErrorKind::NotFound => varde::debug::Gone::Missing,
                         _ => varde::debug::Gone::FailedToStart,
                     },
+                    from: 0,
                 });
             }
         }
-        Effect::DapSend { json } => match edge.adapter.as_mut() {
-            Some(adapter) => {
+        Effect::DapSend { to, json } => {
+            let adapter = match to {
+                0 => edge.adapter.as_mut(),
+                child => edge.children.get_mut(&child),
+            };
+            let alive = adapter.is_some_and(|adapter| {
                 adapter.send(&json);
-                if !adapter.alive {
-                    edge.adapter = None;
-                    queue.push_back(Event::DapGone {
-                        why: varde::debug::Gone::Exited,
-                    });
+                adapter.alive
+            });
+            if !alive {
+                match to {
+                    0 => edge.adapter = None,
+                    child => {
+                        edge.children.remove(&child);
+                    }
+                }
+                queue.push_back(Event::DapGone {
+                    why: varde::debug::Gone::Exited,
+                    from: to,
+                });
+            }
+        }
+        // Another conversation with the adapter the session holds, for a child
+        // session: its port dialled again, or another one of it spawned.
+        Effect::DapChild { child } => match edge.again.clone() {
+            Some(Again::Dial(port)) => {
+                edge.joining.insert(child, rpc::Adapter::dial(port, None));
+            }
+            Some(Again::Spawn { command, args }) => {
+                match rpc::Adapter::spawn(&command, &args, &edge.root, None) {
+                    Ok(adapter) => {
+                        edge.children.insert(child, adapter);
+                        queue.push_back(Event::DapStarted { from: child });
+                    }
+                    Err(error) => child_never_joined(edge, queue, child, error.to_string()),
                 }
             }
-            None => queue.push_back(Event::DapGone {
-                why: varde::debug::Gone::Exited,
-            }),
+            None => child_never_joined(edge, queue, child, "no adapter is held".to_string()),
         },
+        Effect::StopDapChild { child } => {
+            if edge.children.remove(&child).is_some() || edge.joining.remove(&child).is_some() {
+                queue.push_back(Event::DapGone {
+                    why: varde::debug::Gone::Exited,
+                    from: child,
+                });
+            }
+        }
         Effect::StopDap => {
             if edge.adapter.is_some() || edge.connecting.is_some() {
                 adapter_is_gone(edge, queue, varde::debug::Gone::Exited);

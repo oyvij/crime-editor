@@ -960,15 +960,24 @@ fn frames_lines(state: &State, width: u16) -> Vec<Line<'static>> {
                 false => Style::default(),
             };
             let frame = match row {
-                FrameRow::Thread { name, paused, .. } => {
+                FrameRow::Thread {
+                    name,
+                    paused,
+                    child,
+                    ..
+                } => {
                     let flag = match paused {
                         true => " \u{2016}",
                         false => "",
                     };
+                    let name = match child {
+                        Some(child) => format!("{child} \u{203a} {name}"),
+                        None => name.clone(),
+                    };
                     let room = inner.saturating_sub(flag.width() + 1);
                     return Line::from(vec![
                         Span::styled(
-                            format!(" {:<room$}", truncate(name, room)),
+                            format!(" {:<room$}", truncate(&name, room)),
                             style.add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(flag, style.fg(Color::Yellow)),
