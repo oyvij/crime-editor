@@ -4320,7 +4320,174 @@ fn breakpoint_on(world: &mut VardeWorld, file: String, line: usize) {
         line,
         text,
         stale: false,
+        properties: Default::default(),
     });
+}
+
+/// Written straight onto the Breakpoint the step before it set, the way a
+/// project that remembered one with its properties would hold it.
+fn with_property(
+    world: &mut VardeWorld,
+    file: String,
+    line: usize,
+    set: impl FnOnce(&mut varde::debug::Properties),
+) {
+    breakpoint_on(world, file, line);
+    set(&mut world
+        .state
+        .breakpoints
+        .last_mut()
+        .expect("a Breakpoint")
+        .properties);
+}
+
+#[given(expr = "a Breakpoint on {string} line {int} with the condition {string}")]
+fn breakpoint_with_condition(world: &mut VardeWorld, file: String, line: usize, text: String) {
+    with_property(world, file, line, |properties| properties.condition = text);
+}
+
+#[given(expr = "a Breakpoint on {string} line {int} with the hit count {string}")]
+fn breakpoint_with_hit_count(world: &mut VardeWorld, file: String, line: usize, text: String) {
+    with_property(world, file, line, |properties| properties.hit_count = text);
+}
+
+#[given(expr = "a Logpoint on {string} line {int} with the message {string}")]
+fn logpoint_with_message(world: &mut VardeWorld, file: String, line: usize, text: String) {
+    with_property(world, file, line, |properties| {
+        properties.log_message = text
+    });
+}
+
+/// The Breakpoint as the adapter was told of it, found by its line among
+/// every `setBreakpoints` request sent.
+fn sent_breakpoint(world: &VardeWorld, line: usize) -> Value {
+    dap_requests(world, "setBreakpoints")
+        .into_iter()
+        .flat_map(|request| {
+            request["arguments"]["breakpoints"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .find(|breakpoint| breakpoint["line"] == line)
+        .unwrap_or_else(|| {
+            panic!(
+                "no Breakpoint on line {line} sent; sent {:?}",
+                world.dap.sent
+            )
+        })
+}
+
+#[then(
+    expr = "the Debug adapter was sent a \"setBreakpoints\" request for line {int} with the condition {string}"
+)]
+fn sent_condition(world: &mut VardeWorld, line: usize, text: String) {
+    assert_eq!(sent_breakpoint(world, line)["condition"], text);
+}
+
+#[then(
+    expr = "the Debug adapter was sent a \"setBreakpoints\" request for line {int} with the hit condition {string}"
+)]
+fn sent_hit_condition(world: &mut VardeWorld, line: usize, text: String) {
+    assert_eq!(sent_breakpoint(world, line)["hitCondition"], text);
+}
+
+#[then(
+    expr = "the Debug adapter was sent a \"setBreakpoints\" request for line {int} with the log message {string}"
+)]
+fn sent_log_message(world: &mut VardeWorld, line: usize, text: String) {
+    assert_eq!(sent_breakpoint(world, line)["logMessage"], text);
+}
+
+#[then(expr = "the Breakpoint on {string} line {int} suspends {string}")]
+fn breakpoint_suspends(world: &mut VardeWorld, file: String, line: usize, scope: String) {
+    let file = abs(world, &file);
+    let breakpoint = world
+        .state
+        .breakpoints
+        .iter()
+        .find(|breakpoint| breakpoint.file == file && breakpoint.line == line)
+        .expect("a Breakpoint there");
+    let suspends = match breakpoint.properties.suspend {
+        varde::debug::Suspend::Thread => "thread",
+        varde::debug::Suspend::All => "all",
+    };
+    assert_eq!(suspends, scope);
+}
+
+/// Through `␣B`'s event, on the buffer on screen: the box is only ever opened
+/// on a Breakpoint somebody is looking at.
+#[given(expr = "the Breakpoint box is open for {string} line {int}")]
+fn breakpoint_box_opened(world: &mut VardeWorld, file: String, line: usize) {
+    assert_eq!(world.state.current_buffer, Some(abs(world, &file)));
+    world.send(Event::EditBreakpoint(line));
+    breakpoint_box_is_open(world, file, line);
+}
+
+#[then(expr = "the Breakpoint box is open for {string} line {int}")]
+fn breakpoint_box_is_open(world: &mut VardeWorld, file: String, line: usize) {
+    let file = abs(world, &file);
+    match &world.state.modal {
+        Modal::Breakpoint {
+            file: open,
+            line: at,
+            ..
+        } => assert_eq!((open, *at), (&file, line)),
+        other => panic!("expected the Breakpoint box, got {other:?}"),
+    }
+}
+
+/// Tab to the switch, then Space: the keys, so the switch is one a keyboard
+/// can reach.
+#[when("I switch the Breakpoint's suspend scope")]
+fn switch_suspend_scope(world: &mut VardeWorld) {
+    while !matches!(
+        world.state.modal,
+        Modal::Breakpoint {
+            field: varde::debug::Field::Suspend,
+            ..
+        }
+    ) {
+        press_key(world, terminput::KeyCode::Tab);
+    }
+    press_key(world, terminput::KeyCode::Char(' '));
+}
+
+/// Typed a key at a time into the row the box opens on, which is the
+/// condition's.
+#[given(expr = "I write the condition {string} in the Breakpoint box")]
+#[when(expr = "I write the condition {string} in the Breakpoint box")]
+fn write_condition(world: &mut VardeWorld, text: String) {
+    assert!(matches!(
+        world.state.modal,
+        Modal::Breakpoint {
+            field: varde::debug::Field::Condition,
+            ..
+        }
+    ));
+    for c in text.chars() {
+        press_key(world, terminput::KeyCode::Char(c));
+    }
+}
+
+#[when("I confirm the Breakpoint box")]
+fn confirm_breakpoint_box(world: &mut VardeWorld) {
+    press_key(world, terminput::KeyCode::Enter);
+}
+
+/// The `✎` on the line is drawn on the cursor's line while the editor has the
+/// keyboard, so both are put there first; the click then lands on the cell
+/// `debug::edit_chip` names, which `ui` draws it at.
+#[when(expr = "I click the {string} Chip on line {int}'s Breakpoint")]
+fn click_line_chip(world: &mut VardeWorld, chip: String, line: usize) {
+    assert_eq!(chip, "edit", "unknown line Chip {chip:?}");
+    world.state.focus = Pane::Editor;
+    current_buffer_mut(world).go_to_place(Place { line, column: 1 });
+    let (column, row) =
+        varde::debug::edit_chip(&world.state, &world.panes()).expect("the Chip on screen");
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, row);
+    world.report(mouse::Kind::LeftUp, column, row);
 }
 
 fn breakpoint_lines(world: &VardeWorld, file: &str) -> Vec<usize> {
@@ -4530,6 +4697,8 @@ fn workspace_has_no_breakpoints(world: &mut VardeWorld) {
 fn gutter_draws_breakpoint(world: &mut VardeWorld, line: usize, kind: String) {
     let drawn = match varde::debug::marks(&world.state).get(&line) {
         Some(varde::debug::Mark::Plain) => "plain",
+        Some(varde::debug::Mark::Conditional) => "conditional",
+        Some(varde::debug::Mark::Logpoint) => "logpoint",
         Some(varde::debug::Mark::Stale) => "stale",
         Some(varde::debug::Mark::Unverified) => "unverified",
         None => "none",
@@ -8362,6 +8531,7 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::Restart => "restart",
         Modal::SetValue => "set-value",
         Modal::NewWatch => "new-watch",
+        Modal::Breakpoint { .. } => "breakpoint",
     };
     assert_eq!(actual, expected);
 }

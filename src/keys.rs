@@ -13,7 +13,7 @@
 //! the wrong pane, a modal not claiming what belonged to it, or a modifier
 //! discarded on the way in.
 
-use crate::{tree, Direction, Event, Modal, Pane, Resolution, Selection, State, Tap, View};
+use crate::{debug, tree, Direction, Event, Modal, Pane, Resolution, Selection, State, Tap, View};
 use terminput::{
     Encoding, Event as Input, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
 };
@@ -236,8 +236,10 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
 /// every row spells its chord, and the hint reads the key off that spelling —
 /// beside which a row may name the other ways to the same thing. Space is
 /// shared — other features may claim other letters later.
-pub const CHORDS: [(&str, &str, &[View]); 2] = [
+pub const CHORDS: [(&str, &str, &[View]); 3] = [
     ("␣b", "breakpoint", &[View::Edit]),
+    // The Breakpoint key's shifted letter, as `D` is the list's `d`.
+    ("␣B", "breakpoint properties", &[View::Edit]),
     // Here rather than in [`DEBUG_CHORDS`] because it is the one debug chord
     // that answers with no session: rerunning the last one is what it is for.
     // Both spellings on one row, the way `C-p C-n gp gn` carries two: the key
@@ -505,6 +507,9 @@ pub fn chord(state: &State, key: char) -> Option<Event> {
         'b' => Some(Event::ToggleBreakpoint(
             crate::current_buffer(state).map_or(0, |buffer| buffer.line),
         )),
+        'B' => Some(Event::EditBreakpoint(
+            crate::current_buffer(state).map_or(0, |buffer| buffer.line),
+        )),
         'q' => Some(Event::DebugStop),
         'e' if state.debug.is_some() => Some(Event::OpenEvaluator),
         // The two that open a mode rather than acting: the window is moved
@@ -742,6 +747,7 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
         // identical — Enter is where they part, and that is `update`'s to
         // tell from the modal it is in.
         Modal::NameBox { .. } | Modal::SetValue | Modal::NewWatch => name_box(drafts, event),
+        Modal::Breakpoint { field, draft, .. } => breakpoint_box(*field, draft, event),
         Modal::Candidates(_) => candidate_list(state, drafts, event),
         // Two keys, and everything else goes on to the buffer: typing at a tab
         // stop is ordinary typing, so this passes keys through for the same
@@ -823,6 +829,7 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         | Modal::NameBox { .. }
         | Modal::SetValue
         | Modal::NewWatch
+        | Modal::Breakpoint { .. }
         | Modal::Palette
         | Modal::Chord
         | Modal::Tools { .. }
@@ -1326,6 +1333,43 @@ fn comment_kind(key: char) -> Option<&'static str> {
         's' => Some("SUGGESTION"),
         'c' => Some("COMMENT"),
         _ => None,
+    }
+}
+
+/// The Breakpoint box: Tab and the arrows walk its rows, Space flips the
+/// switch on the last one, and every other row is typed into. Its text is the
+/// core's rather than a `Drafts` field, because there are three of it.
+fn breakpoint_box(field: debug::Field, draft: &debug::Properties, event: KeyEvent) -> Vec<Event> {
+    let walk = |by: usize| {
+        let at = debug::FIELDS
+            .iter()
+            .position(|row| *row == field)
+            .unwrap_or(0);
+        debug::FIELDS[(at + by) % debug::FIELDS.len()]
+    };
+    let back = event.modifiers.contains(KeyModifiers::SHIFT);
+    match event.code {
+        KeyCode::Esc => vec![Event::Cancel],
+        KeyCode::Enter => vec![Event::ConfirmBreakpoint],
+        KeyCode::Tab if back => vec![Event::BreakpointField(walk(debug::FIELDS.len() - 1))],
+        KeyCode::Up => vec![Event::BreakpointField(walk(debug::FIELDS.len() - 1))],
+        KeyCode::Tab | KeyCode::Down => vec![Event::BreakpointField(walk(1))],
+        _ if field == debug::Field::Suspend => match typed(event) {
+            Some(' ') => vec![Event::SwitchSuspend],
+            _ => vec![],
+        },
+        KeyCode::Backspace => {
+            let mut text = debug::field_text(draft, field).to_string();
+            text.pop();
+            vec![Event::BreakpointDraft(text)]
+        }
+        _ => match typed(event) {
+            Some(c) => vec![Event::BreakpointDraft(format!(
+                "{}{c}",
+                debug::field_text(draft, field)
+            ))],
+            None => vec![],
+        },
     }
 }
 
@@ -1961,6 +2005,48 @@ mod tests {
             focus: pane,
             ..State::default()
         }
+    }
+
+    /// Tab and the arrows walk the Breakpoint box's rows and wrap; a key is
+    /// typed onto the row it is on, Space included — except on the switch,
+    /// where Space is the one key that does anything.
+    #[test]
+    fn the_breakpoint_box_types_into_its_rows_and_flips_its_switch() {
+        use crate::debug::{Field, Properties};
+        let draft = Properties {
+            condition: "a".to_string(),
+            ..Properties::default()
+        };
+        let key = |field, event| super::breakpoint_box(field, &draft, event);
+        let plain = KeyEvent::new;
+        assert_eq!(
+            key(Field::Condition, plain(KeyCode::Char(' '))),
+            vec![Event::BreakpointDraft("a ".to_string())]
+        );
+        assert_eq!(
+            key(Field::Condition, plain(KeyCode::Backspace)),
+            vec![Event::BreakpointDraft(String::new())]
+        );
+        assert_eq!(
+            key(Field::Suspend, plain(KeyCode::Char(' '))),
+            vec![Event::SwitchSuspend]
+        );
+        assert_eq!(key(Field::Suspend, plain(KeyCode::Char('x'))), vec![]);
+        assert_eq!(
+            key(Field::Suspend, plain(KeyCode::Tab)),
+            vec![Event::BreakpointField(Field::Condition)]
+        );
+        assert_eq!(
+            key(Field::Condition, plain(KeyCode::Up)),
+            vec![Event::BreakpointField(Field::Suspend)]
+        );
+        assert_eq!(
+            key(
+                Field::HitCount,
+                plain(KeyCode::Tab).modifiers(KeyModifiers::SHIFT)
+            ),
+            vec![Event::BreakpointField(Field::Condition)]
+        );
     }
 
     #[test]

@@ -417,6 +417,15 @@ pub enum Modal {
     Launches {
         row: usize,
     },
+    /// The Breakpoint box: which Breakpoint, which row the keys type into,
+    /// and what has been written so far — held here rather than on the
+    /// Breakpoint until Enter, so Escape leaves it as it was.
+    Breakpoint {
+        file: PathBuf,
+        line: usize,
+        field: debug::Field,
+        draft: debug::Properties,
+    },
     /// The branch picker `:story?` opens: the repository's branches, and which
     /// row Enter acts on. One variant serves whatever repository was listed —
     /// the two flows differ only in that, so a second variant would be one
@@ -516,6 +525,17 @@ pub enum Event {
     /// Set or remove a Breakpoint on this line of the buffer on screen: a click
     /// in the gutter's Breakpoint column, or `␣b` on the cursor's line.
     ToggleBreakpoint(usize),
+    /// Open the Breakpoint box for the Breakpoint on this line of the buffer
+    /// on screen, setting one first if the line has none: `␣B`, or the `✎`
+    /// Chip on the cursor's line.
+    EditBreakpoint(usize),
+    /// What the Breakpoint box's focused row reads now.
+    BreakpointDraft(String),
+    BreakpointField(debug::Field),
+    /// The box's one switch. Applied as it is flipped rather than at Enter:
+    /// a switch is not something written, so there is nothing to discard.
+    SwitchSuspend,
+    ConfirmBreakpoint,
     /// What a file holding remembered Breakpoints holds now, read by the edge
     /// because the core reads no files. Answers [`Effect::ReadBreakpointFile`].
     BreakpointFileRead {
@@ -3831,15 +3851,17 @@ fn on_key_3(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
         }
 
         // The Breakpoint list's own keys: `j` and `k` as every list in the
-        // corner has, and `d` and `D` for its two Chips — vim's delete, and
-        // its shifted letter for the whole of it. Not in `CHEATSHEET`, for the
-        // reason the Risk list's are not; the Transport's Chip names `D`.
-        Event::Key(key @ ('j' | 'k' | 'd' | 'D'))
+        // corner has, `e` and `d` for its row's Chips, and `D` for the
+        // Transport's — vim's delete, and its shifted letter for the whole of
+        // it. Not in `CHEATSHEET`, for the reason the Risk list's are not; the
+        // Transport's Chip names `D`.
+        Event::Key(key @ ('j' | 'k' | 'e' | 'd' | 'D'))
             if state.focus == Pane::Breakpoints && state.modal == Modal::None =>
         {
             Ok(match key {
                 'j' => update(state, Event::MoveSelection(Direction::Down)),
                 'k' => update(state, Event::MoveSelection(Direction::Up)),
+                'e' => update(state, Event::RowAction(debug::EDIT)),
                 'd' => update(state, Event::RowAction(debug::REMOVE)),
                 _ => update(state, Event::PaneAction(debug::CLEAR_ALL)),
             })
@@ -6248,9 +6270,78 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
     Ok(settle(next, effects, wheeled))
 }
 
-/// ToggleBreakpoint, BreakpointFileRead
+/// ToggleBreakpoint, BreakpointFileRead, EditBreakpoint, BreakpointDraft,
+/// BreakpointField, SwitchSuspend, ConfirmBreakpoint
 fn on_breakpoint(mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
+        // Setting one first is what makes `␣B` a way to write a conditional
+        // Breakpoint in one gesture, rather than a key that does nothing on
+        // every line but the few that already hold one.
+        Event::EditBreakpoint(line) => {
+            let Some(file) = next.current_buffer.clone() else {
+                return Ok((next, vec![]));
+            };
+            let held = next
+                .breakpoints
+                .iter()
+                .any(|breakpoint| breakpoint.file == file && breakpoint.line == line);
+            let (mut opened, effects) = match held {
+                true => (next, vec![]),
+                false => update(&next, Event::ToggleBreakpoint(line)),
+            };
+            debug::open_box(&mut opened, file, line);
+            return Ok(settle(opened, effects, wheeled));
+        }
+        Event::BreakpointDraft(text) => {
+            if let Modal::Breakpoint { field, draft, .. } = &mut next.modal {
+                match field {
+                    debug::Field::Condition => draft.condition = text,
+                    debug::Field::HitCount => draft.hit_count = text,
+                    debug::Field::LogMessage => draft.log_message = text,
+                    debug::Field::Suspend => {}
+                }
+            }
+            vec![]
+        }
+        Event::BreakpointField(to) => {
+            if let Modal::Breakpoint { field, .. } = &mut next.modal {
+                *field = to;
+            }
+            vec![]
+        }
+        Event::SwitchSuspend => {
+            let Modal::Breakpoint {
+                file, line, draft, ..
+            } = &mut next.modal
+            else {
+                return Ok((next, vec![]));
+            };
+            draft.suspend = match draft.suspend {
+                debug::Suspend::Thread => debug::Suspend::All,
+                debug::Suspend::All => debug::Suspend::Thread,
+            };
+            let (file, line, suspend) = (file.clone(), *line, draft.suspend);
+            for breakpoint in next.breakpoints.iter_mut() {
+                if breakpoint.file == file && breakpoint.line == line {
+                    breakpoint.properties.suspend = suspend;
+                }
+            }
+            vec![Effect::SaveState(state_json(&next))]
+        }
+        Event::ConfirmBreakpoint => {
+            let Modal::Breakpoint {
+                file, line, draft, ..
+            } = std::mem::take(&mut next.modal)
+            else {
+                return Ok((next, vec![]));
+            };
+            for breakpoint in next.breakpoints.iter_mut() {
+                if breakpoint.file == file && breakpoint.line == line {
+                    breakpoint.properties = draft.clone();
+                }
+            }
+            vec![Effect::SaveState(state_json(&next))]
+        }
         Event::ToggleBreakpoint(line) => {
             let Some((file, text)) = next.current_buffer.clone().and_then(|file| {
                 let text = debug::held(next.buffers.get(&file)?.shown(), line)?.to_string();
@@ -6271,6 +6362,7 @@ fn on_breakpoint(mut next: State, event: Event, wheeled: bool) -> Answered {
                     line,
                     text,
                     stale: false,
+                    properties: debug::Properties::default(),
                 }),
             }
             vec![Effect::SaveState(state_json(&next))]
@@ -8690,6 +8782,12 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
             }
             vec![]
         }
+        Event::RowAction(debug::EDIT) => {
+            if let Some(chosen) = debug::selected(state).cloned() {
+                debug::open_box(&mut next, chosen.file, chosen.line);
+            }
+            vec![]
+        }
         Event::RowAction(debug::REMOVE) => match debug::selected(state).cloned() {
             Some(gone) => {
                 next.breakpoints.retain(|breakpoint| *breakpoint != gone);
@@ -9005,11 +9103,27 @@ pub(crate) fn state_json(state: &State) -> String {
         .breakpoints
         .iter()
         .filter_map(|breakpoint| {
-            Some(serde_json::json!({
+            let mut saved = serde_json::json!({
                 "file": breakpoint.file.strip_prefix(&state.root).ok()?,
                 "line": breakpoint.line,
                 "text": breakpoint.text,
-            }))
+            });
+            // Only what was set, so a plain Breakpoint is recorded as it
+            // always was.
+            let properties = &breakpoint.properties;
+            for (key, text) in [
+                ("condition", &properties.condition),
+                ("hit_count", &properties.hit_count),
+                ("log_message", &properties.log_message),
+            ] {
+                if !text.is_empty() {
+                    saved[key] = serde_json::json!(text);
+                }
+            }
+            if properties.suspend == debug::Suspend::All {
+                saved["suspend"] = serde_json::json!("all");
+            }
+            Some(saved)
         })
         .collect();
     serde_json::json!({
@@ -11900,6 +12014,7 @@ mod tests {
                     line: 1,
                     text: String::new(),
                     stale: false,
+                    properties: Default::default(),
                 })
                 .collect(),
             ..State::default()
@@ -11921,6 +12036,58 @@ mod tests {
         assert!(cleared.breakpoints.is_empty());
         assert_eq!(debug::transport(&cleared)[0].tone, Tone::Dimmed);
         assert_eq!(update(&cleared, Event::Key('D')).1, vec![]);
+    }
+
+    /// The list's `e` is its `✎` Chip: the box opens on the row the keyboard
+    /// is on, and what Enter keeps is saved with the Breakpoint.
+    #[test]
+    fn the_breakpoint_lists_e_opens_the_box_on_its_row() {
+        let state = State {
+            breakpoints: ["/w/a.rs", "/w/b.rs"]
+                .into_iter()
+                .map(|file| debug::Breakpoint {
+                    file: PathBuf::from(file),
+                    line: 1,
+                    text: String::new(),
+                    stale: false,
+                    properties: Default::default(),
+                })
+                .collect(),
+            ..State::default()
+        };
+        let shown = update(&state, Event::ToggleBreakpointList).0;
+        let open = update(&update(&shown, Event::Key('j')).0, Event::Key('e')).0;
+        assert!(matches!(
+            &open.modal,
+            Modal::Breakpoint { file, .. } if file == Path::new("/w/b.rs")
+        ));
+        let written = update(&open, Event::BreakpointDraft("n > 1".to_string())).0;
+        let (kept, effects) = update(&written, Event::ConfirmBreakpoint);
+        assert_eq!(kept.breakpoints[1].properties.condition, "n > 1");
+        assert!(matches!(
+            &effects[..],
+            [Effect::SaveState(json)] if json.contains("\"condition\":\"n > 1\"")
+        ));
+    }
+
+    /// `␣B` on a line with no Breakpoint sets one and opens its box, so it is
+    /// never a key that does nothing.
+    #[test]
+    fn opening_the_box_on_a_bare_line_sets_a_breakpoint_there() {
+        let source = update(
+            &State::default(),
+            Event::BufferOpened {
+                path: PathBuf::from("/a.rs"),
+                contents: "one\ntwo".to_string(),
+                preview: false,
+                at: None,
+            },
+        )
+        .0;
+        let (open, effects) = update(&source, Event::EditBreakpoint(2));
+        assert_eq!(open.breakpoints[0].line, 2);
+        assert!(matches!(open.modal, Modal::Breakpoint { line: 2, .. }));
+        assert!(matches!(effects[..], [Effect::SaveState(_)]));
     }
 
     /// A line the buffer does not have is not a place for a Breakpoint: a

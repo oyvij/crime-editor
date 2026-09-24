@@ -286,6 +286,13 @@ pub fn draw(
     }
     draw_ai_pane(frame, state, &areas, ai, &chrome, caret_is_free);
     draw_status(frame, state, &chrome);
+    // On the editor's text, under everything that floats over it.
+    if let Some((x, y)) = varde::debug::edit_chip(state, &areas.panes) {
+        frame.render_widget(
+            Paragraph::new(action_icon(varde::debug::EDIT)),
+            Rect::new(x, y, 1, 1),
+        );
+    }
 
     // Over the panes rather than under them: the box is wrapped to the screen,
     // so it overhangs the editor's own rectangle, and anything drawn after it
@@ -443,6 +450,9 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
             rows_lines(palette_rows(frame.area().height)),
         ),
         Modal::Chord => overlay(frame, "SPACE", rows_lines(keys::chord_rows(state))),
+        Modal::Breakpoint { field, draft, .. } => {
+            overlay(frame, "BREAKPOINT", breakpoint_box_lines(*field, draft))
+        }
         Modal::NameBox { .. } => overlay(
             frame,
             "NAME",
@@ -2208,12 +2218,52 @@ fn folded(lines: Vec<Line<'static>>, state: &State) -> Vec<Line<'static>> {
         .collect()
 }
 
+/// The Breakpoint box's rows, the one the keys type into marked. The switch
+/// names the scope it is set to.
+fn breakpoint_box_lines(
+    field: varde::debug::Field,
+    draft: &varde::debug::Properties,
+) -> Vec<Line<'static>> {
+    varde::debug::FIELDS
+        .iter()
+        .map(|row| {
+            let label = match row {
+                varde::debug::Field::Condition => "condition",
+                varde::debug::Field::HitCount => "hit count",
+                varde::debug::Field::LogMessage => "log message",
+                varde::debug::Field::Suspend => "suspend",
+            };
+            let value = match row {
+                varde::debug::Field::Suspend => match draft.suspend {
+                    varde::debug::Suspend::Thread => "thread  (space: all)".to_string(),
+                    varde::debug::Suspend::All => "all  (space: thread)".to_string(),
+                },
+                _ => varde::debug::field_text(draft, *row).to_string(),
+            };
+            let style = match *row == field {
+                true => Style::default().add_modifier(Modifier::REVERSED),
+                false => Style::default(),
+            };
+            Line::from(vec![
+                Span::styled(
+                    format!(" {label:<12}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(format!(" {value} "), style),
+            ])
+        })
+        .collect()
+}
+
 /// One line with its Breakpoint in the gutter's first column, which every
 /// gutter leaves blank for it: `layout::BREAKPOINT_COLUMN`, where `mouse`
 /// hit-tests the click that set it.
 fn with_breakpoint(line: Line<'static>, mark: varde::debug::Mark) -> Line<'static> {
     let glyph = match mark {
         varde::debug::Mark::Plain => Span::styled("●", Style::default().fg(Color::Red)),
+        varde::debug::Mark::Conditional => Span::styled("◉", Style::default().fg(Color::Red)),
+        // A diamond, as most debuggers draw one: it prints rather than pauses.
+        varde::debug::Mark::Logpoint => Span::styled("◆", Style::default().fg(Color::Yellow)),
         // Dotted and grey: remembered against text its line no longer holds,
         // so not a place the program will pause. Not the hollow circle, which
         // is an Unverified breakpoint's.
@@ -4213,6 +4263,7 @@ fn action_icon(action: &str) -> &'static str {
         // One cell in every font, as ADR 0022 asks of a Chip's glyph: the
         // debugger's first row action, built after the rule.
         varde::debug::REMOVE => "\u{2715}",
+        varde::debug::EDIT => "\u{270e}",
         varde::risk::REFACTOR => "\u{f0ad}",
         varde::risk::RECOMPUTE => "\u{f021}",
         varde::risk::START_LOOP => "\u{f04b}",
@@ -5323,6 +5374,7 @@ mod tests {
             line: 3,
             text: String::new(),
             stale: true,
+            properties: Default::default(),
         }];
         let line = super::breakpoints_lines(&state, 30).remove(0);
         let text: String = line

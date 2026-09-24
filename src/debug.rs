@@ -28,12 +28,51 @@ pub struct Breakpoint {
     /// was remembered with and the line it was set on: never re-pointed at
     /// whatever moved into its place.
     pub stale: bool,
+    pub properties: Properties,
 }
+
+/// What a Breakpoint does when it is hit, beyond pausing. The three texts are
+/// the program's own language, handed to the adapter as written and never
+/// read here; empty is unset, because that is what an empty field in the
+/// Breakpoint box means.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Properties {
+    pub condition: String,
+    pub hit_count: String,
+    pub log_message: String,
+    pub suspend: Suspend,
+}
+
+/// Which threads a hit pauses.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Suspend {
+    #[default]
+    Thread,
+    All,
+}
+
+/// The Breakpoint box's rows, in the order Tab walks them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Field {
+    Condition,
+    HitCount,
+    LogMessage,
+    Suspend,
+}
+
+pub const FIELDS: [Field; 4] = [
+    Field::Condition,
+    Field::HitCount,
+    Field::LogMessage,
+    Field::Suspend,
+];
 
 /// How the gutter draws a Breakpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mark {
     Plain,
+    Conditional,
+    Logpoint,
     Stale,
     Unverified,
 }
@@ -60,10 +99,20 @@ fn drawn<'a>(state: &'a State, breakpoint: &Breakpoint) -> (usize, Mark, Option<
                 .verdicts
                 .get(&(breakpoint.file.clone(), breakpoint.line))
         });
+    // A Logpoint with a condition is still a Logpoint: what it does when hit
+    // is print, which is the thing worth seeing at a glance.
+    let properties = &breakpoint.properties;
+    let kind = if !properties.log_message.is_empty() {
+        Mark::Logpoint
+    } else if !properties.condition.is_empty() || !properties.hit_count.is_empty() {
+        Mark::Conditional
+    } else {
+        Mark::Plain
+    };
     match (breakpoint.stale, verdict) {
         (true, _) => (breakpoint.line, Mark::Stale, None),
-        (false, None) => (breakpoint.line, Mark::Plain, None),
-        (false, Some(Verdict::Bound(line))) => (*line, Mark::Plain, None),
+        (false, None) => (breakpoint.line, kind, None),
+        (false, Some(Verdict::Bound(line))) => (*line, kind, None),
         (false, Some(Verdict::Unbound(why))) => (breakpoint.line, Mark::Unverified, Some(why)),
     }
 }
@@ -132,7 +181,67 @@ pub fn selected(state: &crate::State) -> Option<&Breakpoint> {
     list(state).get(state.breakpoints_selection).copied()
 }
 
+/// Opens the Breakpoint box on the Breakpoint at `line` of `file`, drafted
+/// from what it carries now; a line with no Breakpoint opens nothing.
+pub fn open_box(next: &mut State, file: PathBuf, line: usize) {
+    let Some(breakpoint) = next
+        .breakpoints
+        .iter()
+        .find(|breakpoint| breakpoint.file == file && breakpoint.line == line)
+    else {
+        return;
+    };
+    next.modal = crate::Modal::Breakpoint {
+        draft: breakpoint.properties.clone(),
+        file,
+        line,
+        field: Field::Condition,
+    };
+}
+
+/// The screen cell of the `✎` Chip on the cursor's line, while that line
+/// holds a Breakpoint and the editor has the keyboard: hard against the text's
+/// right edge, where the tree draws its focused row's icons. Read by `ui` to
+/// draw it and by `mouse` to hit-test it, so the two cannot land a row apart.
+pub fn edit_chip(state: &State, panes: &layout::Layout) -> Option<(u16, u16)> {
+    if state.focus != Pane::Editor
+        || state.view != crate::View::Edit
+        || state.diff.is_some()
+        || state.walking.is_some()
+        || crate::previewing(state)
+    {
+        return None;
+    }
+    let line = crate::current_buffer(state)?.line;
+    // The line it was set on rather than the one the adapter drew it at: the
+    // box opens on the Breakpoint that line holds.
+    state.breakpoints.iter().find(|breakpoint| {
+        Some(&breakpoint.file) == state.current_buffer.as_ref() && breakpoint.line == line
+    })?;
+    let (_, rows, columns) = crate::fits_in(state, panes);
+    let row = crate::story::row_of(state, line as u32)
+        .checked_sub(1 + state.editor_scroll)
+        .filter(|row| *row < rows)?;
+    let column = (columns as u16).checked_sub(1)?;
+    Some((
+        panes.editor.x + 1 + crate::gutter(state) + column,
+        panes.editor.y + 1 + row as u16,
+    ))
+}
+
+/// What a row of the Breakpoint box reads, for the keys to type onto and
+/// `ui` to draw. The switch has no text of its own.
+pub fn field_text(draft: &Properties, field: Field) -> &str {
+    match field {
+        Field::Condition => &draft.condition,
+        Field::HitCount => &draft.hit_count,
+        Field::LogMessage => &draft.log_message,
+        Field::Suspend => "",
+    }
+}
+
 pub const REMOVE: &str = "remove-breakpoint";
+pub const EDIT: &str = "edit-breakpoint";
 pub const TOGGLE_OUTPUT: &str = "toggle-output";
 pub const CLEAR_ALL: &str = "clear-all-breakpoints";
 pub const RESUME: &str = "debug-resume";
@@ -153,10 +262,11 @@ pub const EVALUATE: &str = "debug-evaluate";
 pub const ROW_ASK_AI: &str = "debug-ask-ai-value";
 pub const NEXT_THREAD: &str = "debug-next-thread";
 
-/// What the focused row offers: removing the Breakpoint it names.
+/// What the focused row offers: editing the Breakpoint it names, and
+/// removing it.
 pub fn row_actions(state: &crate::State) -> Vec<&'static str> {
     match selected(state) {
-        Some(_) => vec![REMOVE],
+        Some(_) => vec![EDIT, REMOVE],
         None => Vec::new(),
     }
 }
@@ -1195,16 +1305,24 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
 /// `initialized`: the Breakpoints, the Exception filters and then
 /// `configurationDone`, in the protocol's order and in one batch.
 fn configured(next: &mut State) -> Vec<Effect> {
-    let mut files: BTreeMap<&Path, Vec<usize>> = BTreeMap::new();
+    let mut files: BTreeMap<&Path, Vec<Value>> = BTreeMap::new();
     for breakpoint in &next.breakpoints {
-        files
-            .entry(&breakpoint.file)
-            .or_default()
-            .push(breakpoint.line);
+        let properties = &breakpoint.properties;
+        let mut sent = json!({ "line": breakpoint.line });
+        for (key, text) in [
+            ("condition", &properties.condition),
+            ("hitCondition", &properties.hit_count),
+            ("logMessage", &properties.log_message),
+        ] {
+            if !text.is_empty() {
+                sent[key] = json!(text);
+            }
+        }
+        files.entry(&breakpoint.file).or_default().push(sent);
     }
-    let files: Vec<(PathBuf, Vec<usize>)> = files
+    let files: Vec<(PathBuf, Vec<Value>)> = files
         .into_iter()
-        .map(|(file, lines)| (file.to_path_buf(), lines))
+        .map(|(file, breakpoints)| (file.to_path_buf(), breakpoints))
         .collect();
     let session = next.debug.as_mut().expect("a session");
     if session.phase != Phase::Starting {
@@ -1212,9 +1330,7 @@ fn configured(next: &mut State) -> Vec<Effect> {
     }
     let mut effects: Vec<Effect> = files
         .into_iter()
-        .map(|(file, lines)| {
-            let breakpoints: Vec<Value> =
-                lines.iter().map(|line| json!({ "line": line })).collect();
+        .map(|(file, breakpoints)| {
             ask(
                 session,
                 "setBreakpoints",
@@ -3401,7 +3517,34 @@ mod tests {
             line,
             text: text.to_string(),
             stale: false,
+            properties: Default::default(),
         }
+    }
+
+    /// What a Breakpoint does when hit decides its glyph: a Logpoint prints
+    /// whatever condition it also carries, and a Stale one pauses nowhere.
+    #[test]
+    fn a_breakpoint_is_drawn_as_what_it_does_when_hit() {
+        let drawn = |stale: bool, condition: &str, log_message: &str| {
+            let state = State {
+                current_buffer: Some(PathBuf::from("/w/a.rs")),
+                breakpoints: vec![Breakpoint {
+                    stale,
+                    properties: Properties {
+                        condition: condition.to_string(),
+                        log_message: log_message.to_string(),
+                        ..Properties::default()
+                    },
+                    ..on(1, "")
+                }],
+                ..State::default()
+            };
+            marks(&state)[&1]
+        };
+        assert_eq!(drawn(false, "", ""), Mark::Plain);
+        assert_eq!(drawn(false, "x > 1", ""), Mark::Conditional);
+        assert_eq!(drawn(false, "x > 1", "x is {x}"), Mark::Logpoint);
+        assert_eq!(drawn(true, "x > 1", "x is {x}"), Mark::Stale);
     }
 
     fn followed(breakpoints: &[Breakpoint], old: &str, new: &str) -> Vec<(usize, String)> {
@@ -3654,6 +3797,7 @@ mod tests {
             line,
             text: String::new(),
             stale,
+            properties: Default::default(),
         };
         let mut state = paused(State {
             breakpoints: vec![at(2, false), at(3, true), at(5, false)],
@@ -3688,6 +3832,7 @@ mod tests {
             line,
             text: String::new(),
             stale: false,
+            properties: Default::default(),
         };
         let mut state = paused(State {
             breakpoints: vec![at(2), at(5)],

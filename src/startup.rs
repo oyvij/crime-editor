@@ -1918,11 +1918,27 @@ fn saved_breakpoints(root: &Path, state_json: Option<&str>) -> Vec<crate::debug:
     saved
         .iter()
         .filter_map(|breakpoint| {
+            let text = |key: &str| {
+                breakpoint
+                    .get(key)
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string()
+            };
             Some(crate::debug::Breakpoint {
                 file: root.join(breakpoint.get("file")?.as_str()?),
                 line: usize::try_from(breakpoint.get("line")?.as_u64()?).ok()?,
                 text: breakpoint.get("text")?.as_str()?.to_string(),
                 stale: false,
+                properties: crate::debug::Properties {
+                    condition: text("condition"),
+                    hit_count: text("hit_count"),
+                    log_message: text("log_message"),
+                    suspend: match breakpoint.get("suspend").and_then(|value| value.as_str()) {
+                        Some("all") => crate::debug::Suspend::All,
+                        _ => crate::debug::Suspend::Thread,
+                    },
+                },
             })
         })
         .collect()
@@ -2028,6 +2044,34 @@ mod tests {
         })
         .expect("started");
         assert_eq!(state.corner, crate::layout::Corner::Breakpoints);
+    }
+
+    /// A Breakpoint's properties, written by `state_json` and read back by a
+    /// start — both halves in one test, for the reason the Evaluator's are.
+    #[test]
+    fn a_breakpoints_properties_survive_a_restart() {
+        let properties = crate::debug::Properties {
+            condition: "count > 1".to_string(),
+            hit_count: "10".to_string(),
+            log_message: "count is {count}".to_string(),
+            suspend: crate::debug::Suspend::All,
+        };
+        let saved = crate::State {
+            breakpoints: vec![crate::debug::Breakpoint {
+                file: std::path::PathBuf::from("src/main.rs"),
+                line: 3,
+                text: "let count = 3;".to_string(),
+                stale: false,
+                properties: properties.clone(),
+            }],
+            ..crate::State::default()
+        };
+        let (state, _, _) = start(&Startup {
+            state_json: Some(crate::state_json(&saved)),
+            ..Startup::default()
+        })
+        .expect("started");
+        assert_eq!(state.breakpoints[0].properties, properties);
     }
 
     /// What a project keeps of the Evaluator, written by `state_json` and read

@@ -649,6 +649,13 @@ fn pressed(
                 input.row,
             ))]
         }
+        (Pane::Editor, _)
+            if crate::debug::edit_chip(state, panes) == Some((input.column, input.row)) =>
+        {
+            vec![Event::EditBreakpoint(
+                crate::current_buffer(state).map_or(0, |buffer| buffer.line),
+            )]
+        }
         // The gutter's leftmost column is the Breakpoint column, and the line
         // numbers beside it set nothing.
         (Pane::Editor, _) if breakpoint_column(state, panes, input) => {
@@ -2262,6 +2269,7 @@ mod tests {
                 line,
                 text: String::new(),
                 stale: false,
+                properties: Default::default(),
             })
             .collect();
         let click = |state: &State, column, row| {
@@ -2290,6 +2298,10 @@ mod tests {
             .events
         };
         assert_eq!(click(&state, 5, 19), vec![Event::ClickBreakpointRow(0)]);
+        assert_eq!(
+            click(&state, 25, 19),
+            vec![Event::RowAction(crate::debug::EDIT)]
+        );
         assert_eq!(
             click(&state, 27, 19),
             vec![Event::RowAction(crate::debug::REMOVE)]
