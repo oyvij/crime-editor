@@ -328,6 +328,9 @@ struct FakeAdapter {
     /// that plants a member can drive the same pause again and have the
     /// Variables hold it.
     stopped: Option<Value>,
+    /// The Exception filters it lists in its `initialize` answer, as the
+    /// protocol shapes them.
+    filters: Vec<Value>,
     /// What the next `stopped` event says paused the program.
     text: Option<String>,
 }
@@ -682,7 +685,10 @@ impl VardeWorld {
             return;
         }
         let body = match message["command"].as_str() {
-            Some("initialize") => json!({ "supportsConfigurationDoneRequest": true }),
+            Some("initialize") => json!({
+                "supportsConfigurationDoneRequest": true,
+                "exceptionBreakpointFilters": self.dap.filters,
+            }),
             Some("threads") => json!({ "threads": [{ "id": 1, "name": "main" }] }),
             Some("stackTrace") => {
                 let thread = message["arguments"]["threadId"]
@@ -8531,6 +8537,7 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::Restart => "restart",
         Modal::SetValue => "set-value",
         Modal::NewWatch => "new-watch",
+        Modal::ExceptionClass => "exception-class",
         Modal::Breakpoint { .. } => "breakpoint",
     };
     assert_eq!(actual, expected);
@@ -15491,13 +15498,14 @@ fn chip_names_the_keys(world: &mut VardeWorld, name: String, step: &Step) {
 }
 
 /// The Chip that says what pressing it does, found by that name — on the
-/// Variables' Transport, or on the row the keyboard is on, since both are
-/// Chips and a scenario names one by what pressing it does.
+/// Variables' Transport, the Breakpoint list's, or on the row the keyboard is
+/// on, since all are Chips and a scenario names one by what pressing it does.
 fn chip(world: &VardeWorld, name: &str) -> varde::Chip {
     row_chip(world, name)
         .or_else(|| {
             varde::debug::strip_transport(&world.state)
                 .into_iter()
+                .chain(varde::debug::transport(&world.state))
                 .find(|offered| offered.name == name)
         })
         .unwrap_or_else(|| panic!("no {name:?} Chip"))
@@ -16939,4 +16947,146 @@ fn adapter_sent_evaluate_in_frame(world: &mut VardeWorld, command: String, name:
     assert_eq!(command, "evaluate");
     adapter_sent_evaluate_in_context(world, command.clone(), "repl".to_string());
     that_request_names_the_frame(world, name);
+}
+
+/// In the `initialize` answer for a session still to come, and in a
+/// `capabilities` event for one already running — the two places an adapter
+/// says what it can pause on.
+#[given("the Debug adapter reported the Exception filters:")]
+fn adapter_reported_exception_filters(world: &mut VardeWorld, step: &Step) {
+    let table = step.table().expect("a table of filters");
+    world.dap.filters = table.rows[1..]
+        .iter()
+        .map(|row| json!({ "filter": row[0], "label": row[1] }))
+        .collect();
+    if world.state.debug.is_some() {
+        let filters = world.dap.filters.clone();
+        adapter_event(
+            world,
+            json!({
+                "type": "event",
+                "event": "capabilities",
+                "body": { "capabilities": { "exceptionBreakpointFilters": filters } },
+            }),
+        );
+    }
+}
+
+#[then("the Breakpoint list switches are:")]
+fn breakpoint_list_switches_are(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("a list of filters")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let shown: Vec<String> = varde::debug::switches(&world.state)
+        .into_iter()
+        .map(|(filter, _)| filter.id.clone())
+        .collect();
+    assert_eq!(shown, expected);
+}
+
+/// The keyboard's route: along the Breakpoint list to the switch, and Enter.
+#[when(expr = "I switch the Exception filter {string} on")]
+fn switch_exception_filter_on(world: &mut VardeWorld, id: String) {
+    let at = varde::debug::switches(&world.state)
+        .iter()
+        .position(|(filter, _)| filter.id == id)
+        .unwrap_or_else(|| panic!("no {id:?} switch"));
+    assert!(
+        !varde::debug::switches(&world.state)[at].1,
+        "{id:?} is already on"
+    );
+    world.state.focus = Pane::Breakpoints;
+    while world.state.breakpoints_selection > at {
+        route_key(world, "k", 0);
+    }
+    while world.state.breakpoints_selection < at {
+        route_key(world, "j", 0);
+    }
+    route_key(world, "Enter", 0);
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request with the filters:")]
+fn adapter_sent_with_the_filters(world: &mut VardeWorld, command: String, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("a list of filters")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    assert_eq!(
+        last_request(world, &command)["arguments"]["filters"],
+        json!(expected)
+    );
+}
+
+#[given(expr = "the project {string} records the Exception filter {string} on for {string}")]
+fn state_records_exception_filter(
+    world: &mut VardeWorld,
+    path: String,
+    id: String,
+    adapter: String,
+) {
+    assert_eq!(path, ".varde/state.json");
+    let mut saved: Value = world
+        .startup
+        .state_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_else(|| json!({}));
+    saved["exception_filters"][adapter.as_str()] = json!([id]);
+    world.startup.state_json = Some(saved.to_string());
+}
+
+#[then(expr = "the project {string} records the Exception filter {string} on for {string}")]
+fn records_exception_filter(world: &mut VardeWorld, path: String, id: String, adapter: String) {
+    assert_eq!(path, ".varde/state.json");
+    let saved: Value =
+        serde_json::from_str(world.startup.state_json.as_deref().expect("state saved"))
+            .expect("json");
+    assert_eq!(saved["exception_filters"][adapter.as_str()], json!([id]));
+}
+
+#[given("the Debug adapter reported it supports exception options")]
+#[given("the Debug adapter reported it does not support exception options")]
+fn adapter_reported_exception_options(world: &mut VardeWorld, step: &Step) {
+    let supports = !step.value.contains("does not");
+    adapter_event(
+        world,
+        json!({
+            "type": "event",
+            "event": "capabilities",
+            "body": { "capabilities": { "supportsExceptionOptions": supports } },
+        }),
+    );
+}
+
+/// Through the box the exception-class Chip's key opens: the key, the name,
+/// Enter — so a box that never opened fails here.
+#[when(expr = "I pause on the exception class {string}")]
+fn pause_on_exception_class(world: &mut VardeWorld, class: String) {
+    corner_shows_breakpoint_list(world);
+    world.state.focus = Pane::Breakpoints;
+    route_key(world, "x", 0);
+    assert_eq!(
+        world.state.modal,
+        Modal::ExceptionClass,
+        "the exception-class box did not open"
+    );
+    for character in class.chars() {
+        route_key(world, &character.to_string(), 0);
+    }
+    route_key(world, "Enter", 0);
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request naming {string}")]
+fn adapter_sent_naming(world: &mut VardeWorld, command: String, class: String) {
+    assert_eq!(
+        last_request(world, &command)["arguments"]["exceptionOptions"][0]["path"][0]["names"],
+        json!([class])
+    );
 }

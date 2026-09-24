@@ -816,7 +816,7 @@ fn pressed_in_breakpoints(state: &State, panes: &Layout, input: Input) -> Vec<Ev
     if let Some(action) = breakpoint_action_at(state, panes, input.column, index) {
         return vec![Event::RowAction(action)];
     }
-    match crate::debug::list(state).len() > index {
+    match crate::debug::rows(state) > index {
         true => vec![Event::ClickBreakpointRow(index)],
         false => vec![Event::ClickPane(Pane::Breakpoints)],
     }

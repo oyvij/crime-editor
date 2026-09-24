@@ -746,7 +746,9 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
         // value and a new Watch. One routing arm because the typing is
         // identical — Enter is where they part, and that is `update`'s to
         // tell from the modal it is in.
-        Modal::NameBox { .. } | Modal::SetValue | Modal::NewWatch => name_box(drafts, event),
+        Modal::NameBox { .. } | Modal::SetValue | Modal::NewWatch | Modal::ExceptionClass => {
+            name_box(drafts, event)
+        }
         Modal::Breakpoint { field, draft, .. } => breakpoint_box(*field, draft, event),
         Modal::Candidates(_) => candidate_list(state, drafts, event),
         // Two keys, and everything else goes on to the buffer: typing at a tab
@@ -829,6 +831,7 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         | Modal::NameBox { .. }
         | Modal::SetValue
         | Modal::NewWatch
+        | Modal::ExceptionClass
         | Modal::Breakpoint { .. }
         | Modal::Palette
         | Modal::Chord

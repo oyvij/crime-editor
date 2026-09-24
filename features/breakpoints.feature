@@ -308,10 +308,11 @@ Feature: Breakpoints
     Scenario: The next session starts with the remembered filters on
       Given the project ".varde/state.json" records the Exception filter "uncaught" on for "rust"
       And Varde starts in the project
-      And a Debug session was started from the Launch configuration "server"
+      And the Debug adapter for "rust" is ready
       And the Debug adapter reported the Exception filters:
         | id       | label    |
         | uncaught | Uncaught |
+      And I start the Launch configuration "server" from the palette
       When the Debug adapter sends the event "initialized"
       Then the Debug adapter was sent a "setExceptionBreakpoints" request with the filters:
         | uncaught |

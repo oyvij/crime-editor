@@ -1579,6 +1579,12 @@ fn initial_state(
         // Debug adapter's.
         snippets: saved_list(input.state_json.as_deref(), "snippets"),
         evaluator_at: saved_window(input.state_json.as_deref()),
+        exception_filters: input
+            .state_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|mut parsed| serde_json::from_value(parsed["exception_filters"].take()).ok())
+            .unwrap_or_default(),
         // Beside the editor unless the project was last worked in the tall
         // shape — including state recorded before `:tall` existed, which names
         // no shape at all.

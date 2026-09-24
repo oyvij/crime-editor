@@ -458,6 +458,11 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
             "NAME",
             vec![Line::from(chrome.name_draft.to_string())],
         ),
+        Modal::ExceptionClass => overlay(
+            frame,
+            "PAUSE ON EXCEPTION CLASS",
+            vec![Line::from(chrome.name_draft.to_string())],
+        ),
         // Drawn by `variables_lines`, in the row being acted on: an overlay
         // would cover the very row whose value is being written.
         Modal::SetValue | Modal::NewWatch => {}
@@ -856,40 +861,63 @@ fn breakpoints_widget(state: &State, width: u16) -> Paragraph<'static> {
 /// hit-tests it from. A Stale one says so, dimmed.
 fn breakpoints_lines(state: &State, width: u16) -> Vec<Line<'static>> {
     let inner = width.saturating_sub(2) as usize;
-    varde::debug::list(state)
+    let switches = varde::debug::switches(state);
+    let above = switches.len();
+    let mut lines: Vec<Line<'static>> = switches
         .into_iter()
         .enumerate()
-        .map(|(index, breakpoint)| {
-            let on_this_row = index == state.breakpoints_selection;
-            let selected = match on_this_row {
+        .map(|(index, (filter, on))| {
+            let style = match index == state.breakpoints_selection {
                 true => Style::default().add_modifier(Modifier::REVERSED),
                 false => Style::default(),
             };
-            let actions = match on_this_row {
-                true => varde::debug::row_actions(state),
-                false => Vec::new(),
+            let glyph = match on {
+                true => "\u{25a0}",
+                false => "\u{25a1}",
             };
-            let tail = match breakpoint.stale {
-                true => format!(":{} stale ", breakpoint.line),
-                false => format!(":{} ", breakpoint.line),
-            };
-            let room = inner.saturating_sub(tail.width() + 1 + actions.len() * 2);
-            let path = match room {
-                0 => String::new(),
-                room => truncate(&varde::relative(state, &breakpoint.file), room),
-            };
-            let mut spans = vec![Span::styled(format!(" {path:<room$}"), selected)];
-            spans.push(Span::styled(tail, selected.fg(Color::DarkGray)));
-            for (at, action) in actions.iter().enumerate() {
-                spans.push(Span::styled(
-                    action_icon(action),
-                    action_style(state, action, state.selected_action == Some(at)),
-                ));
-                spans.push(Span::raw(" "));
-            }
-            Line::from(spans)
+            Line::from(Span::styled(
+                truncate(&format!(" {glyph} {}", filter.label), inner),
+                style,
+            ))
         })
-        .collect()
+        .collect();
+    lines.extend(
+        varde::debug::list(state)
+            .into_iter()
+            .enumerate()
+            .map(|(index, breakpoint)| {
+                let index = index + above;
+                let on_this_row = index == state.breakpoints_selection;
+                let selected = match on_this_row {
+                    true => Style::default().add_modifier(Modifier::REVERSED),
+                    false => Style::default(),
+                };
+                let actions = match on_this_row {
+                    true => varde::debug::row_actions(state),
+                    false => Vec::new(),
+                };
+                let tail = match breakpoint.stale {
+                    true => format!(":{} stale ", breakpoint.line),
+                    false => format!(":{} ", breakpoint.line),
+                };
+                let room = inner.saturating_sub(tail.width() + 1 + actions.len() * 2);
+                let path = match room {
+                    0 => String::new(),
+                    room => truncate(&varde::relative(state, &breakpoint.file), room),
+                };
+                let mut spans = vec![Span::styled(format!(" {path:<room$}"), selected)];
+                spans.push(Span::styled(tail, selected.fg(Color::DarkGray)));
+                for (at, action) in actions.iter().enumerate() {
+                    spans.push(Span::styled(
+                        action_icon(action),
+                        action_style(state, action, state.selected_action == Some(at)),
+                    ));
+                    spans.push(Span::raw(" "));
+                }
+                Line::from(spans)
+            }),
+    );
+    lines
 }
 
 /// One row per Frame of the Paused thread, the inspected one marked.

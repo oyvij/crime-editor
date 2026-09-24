@@ -372,6 +372,9 @@ pub enum Modal {
     /// with two authors.
     SetValue,
     NewWatch,
+    /// The one exception class to pause on, typed in the program's own
+    /// spelling and never checked by Varde.
+    ExceptionClass,
     /// Submitting clears whatever the AI's CLI is showing, which can be a
     /// half-written message. It cannot be read back, so it is announced.
     ConfirmSubmit,
@@ -1932,6 +1935,11 @@ pub struct State {
     /// reason a Watch is: code written to ask a program something outlives
     /// the run it was first asked in.
     pub snippets: Vec<String>,
+    /// The Exception filters switched on, by the ids each Debug adapter
+    /// reported them under, keyed by the adapter's row name and remembered
+    /// per project. Outside the session so the next one starts with them,
+    /// and keyed by adapter because one adapter's `uncaught` is not another's.
+    pub exception_filters: BTreeMap<String, BTreeSet<String>>,
     /// The expressions kept at the top of the Variables, in the order they
     /// were added. Beside the Breakpoints rather than inside the session for
     /// the same reason: a Watch is a question about the program, and it
@@ -2422,6 +2430,7 @@ impl Default for State {
             evaluator_at: None,
             arranging: None,
             snippets: Vec::new(),
+            exception_filters: BTreeMap::new(),
             contents: BTreeMap::new(),
             expanded: BTreeSet::new(),
             ignored: BTreeSet::new(),
@@ -2700,7 +2709,7 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
         // Clamped here and not in the arms that remove one, so a Breakpoint
         // gone by any route — a row's Chip, a deleted line — leaves the
         // highlight on a row that exists.
-        let breakpoint_rows = next.breakpoints.len();
+        let breakpoint_rows = debug::rows(&next);
         next.breakpoints_selection = next
             .breakpoints_selection
             .min(breakpoint_rows.saturating_sub(1));
@@ -3584,6 +3593,7 @@ fn on_enter_name(state: &State, mut next: State, event: Event, wheeled: bool) ->
             // watched as written.
             Modal::SetValue => debug::set_value(&mut next, name),
             Modal::NewWatch => debug::add_watch(&mut next, name),
+            Modal::ExceptionClass => debug::name_class(&mut next, name),
             _ => vec![],
         },
 
@@ -3851,11 +3861,11 @@ fn on_key_3(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
         }
 
         // The Breakpoint list's own keys: `j` and `k` as every list in the
-        // corner has, `e` and `d` for its row's Chips, and `D` for the
+        // corner has, `e` and `d` for its row's Chips, and `D` and `x` for the
         // Transport's — vim's delete, and its shifted letter for the whole of
-        // it. Not in `CHEATSHEET`, for the reason the Risk list's are not; the
-        // Transport's Chip names `D`.
-        Event::Key(key @ ('j' | 'k' | 'e' | 'd' | 'D'))
+        // it; `x` for the exception. Not in `CHEATSHEET`, for the reason the
+        // Risk list's are not; the Transport's Chips name them.
+        Event::Key(key @ ('j' | 'k' | 'e' | 'd' | 'D' | 'x'))
             if state.focus == Pane::Breakpoints && state.modal == Modal::None =>
         {
             Ok(match key {
@@ -3863,6 +3873,7 @@ fn on_key_3(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
                 'k' => update(state, Event::MoveSelection(Direction::Up)),
                 'e' => update(state, Event::RowAction(debug::EDIT)),
                 'd' => update(state, Event::RowAction(debug::REMOVE)),
+                'x' => update(state, Event::PaneAction(debug::EXCEPTION_CLASS)),
                 _ => update(state, Event::PaneAction(debug::CLEAR_ALL)),
             })
         }
@@ -8068,6 +8079,16 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
             next.breakpoints.clear();
             vec![Effect::SaveState(state_json(&next))]
         }
+        // Read off the Chip, as the set-value box is: dimmed, it does nothing.
+        Event::PaneAction(debug::EXCEPTION_CLASS) => {
+            let offered = debug::transport(state)
+                .iter()
+                .any(|chip| chip.action == debug::EXCEPTION_CLASS && chip.tone != Tone::Dimmed);
+            if offered {
+                next.modal = Modal::ExceptionClass;
+            }
+            vec![]
+        }
         // Unreachable from any gesture — the key, the icon and the hit-test all
         // read `risk::pane_actions` — and here because a `&str` match has to be
         // exhaustive. Nothing rather than a guess: a pane action is a name, and
@@ -8230,7 +8251,7 @@ fn on_move_selection(state: &State, mut next: State, event: Event, wheeled: bool
         }
 
         Event::MoveSelection(direction) if state.focus == Pane::Breakpoints => {
-            let last = state.breakpoints.len().saturating_sub(1);
+            let last = debug::rows(state).saturating_sub(1);
             next.breakpoints_selection = match direction {
                 Direction::Down => (state.breakpoints_selection + 1).min(last),
                 Direction::Up => state.breakpoints_selection.saturating_sub(1),
@@ -8430,6 +8451,12 @@ fn on_activate_2(state: &State, mut next: State, event: Event, wheeled: bool) ->
         // The file opened if it is not, and the cursor put on the
         // Breakpoint's line either way — the Risk list's Enter below, for a
         // line rather than a Function.
+        Event::Activate
+            if state.focus == Pane::Breakpoints
+                && state.breakpoints_selection < debug::switches(state).len() =>
+        {
+            debug::switch(&mut next, state.breakpoints_selection)
+        }
         Event::Activate if state.focus == Pane::Breakpoints => match debug::selected(state) {
             Some(breakpoint) => {
                 next.focus = Pane::Editor;
@@ -9143,6 +9170,7 @@ pub(crate) fn state_json(state: &State) -> String {
         "current_buffer": state.current_buffer.as_deref().and_then(relative),
         "breakpoints": breakpoints,
         "snippets": state.snippets,
+        "exception_filters": state.exception_filters,
         "evaluator": state.evaluator_at.map(|at| serde_json::json!({
             "column": at.x,
             "row": at.y,
@@ -12034,7 +12062,11 @@ mod tests {
         );
         let cleared = update(&removed, Event::Key('D')).0;
         assert!(cleared.breakpoints.is_empty());
-        assert_eq!(debug::transport(&cleared)[0].tone, Tone::Dimmed);
+        let clear_all = debug::transport(&cleared)
+            .into_iter()
+            .find(|chip| chip.action == debug::CLEAR_ALL)
+            .expect("the clear-all Chip");
+        assert_eq!(clear_all.tone, Tone::Dimmed);
         assert_eq!(update(&cleared, Event::Key('D')).1, vec![]);
     }
 

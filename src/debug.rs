@@ -178,7 +178,10 @@ pub fn list(state: &crate::State) -> Vec<&Breakpoint> {
 
 /// The row the keyboard is on in the Breakpoint list, if it names one.
 pub fn selected(state: &crate::State) -> Option<&Breakpoint> {
-    list(state).get(state.breakpoints_selection).copied()
+    let at = state
+        .breakpoints_selection
+        .checked_sub(switches(state).len())?;
+    list(state).get(at).copied()
 }
 
 /// Opens the Breakpoint box on the Breakpoint at `line` of `file`, drafted
@@ -244,6 +247,7 @@ pub const REMOVE: &str = "remove-breakpoint";
 pub const EDIT: &str = "edit-breakpoint";
 pub const TOGGLE_OUTPUT: &str = "toggle-output";
 pub const CLEAR_ALL: &str = "clear-all-breakpoints";
+pub const EXCEPTION_CLASS: &str = "debug-exception-class";
 pub const RESUME: &str = "debug-resume";
 pub const STEP_OVER: &str = "debug-step-over";
 pub const STEP_INTO: &str = "debug-step-into";
@@ -273,19 +277,38 @@ pub fn row_actions(state: &crate::State) -> Vec<&'static str> {
 
 /// The Chips on the Breakpoint list's top border. Clearing is dimmed with
 /// nothing to clear, and never lit: once it has run there is nothing left for
-/// it to say it did.
+/// it to say it did. Naming an exception class is dimmed wherever the adapter
+/// has not said it can take one — dimmed, never hidden, so it is findable
+/// before a session that could use it.
 pub fn transport(state: &crate::State) -> Vec<crate::Chip> {
-    vec![crate::Chip {
-        action: CLEAR_ALL,
-        name: "clear-all",
-        glyph: "\u{2715}".to_string(),
-        keys: "D",
-        hue: crate::Hue::Halt,
-        tone: match state.breakpoints.is_empty() {
-            true => crate::Tone::Dimmed,
-            false => crate::Tone::Plain,
+    let can_name = state
+        .debug
+        .as_ref()
+        .is_some_and(|session| session.can_name_class);
+    vec![
+        crate::Chip {
+            action: EXCEPTION_CLASS,
+            name: "exception-class",
+            glyph: "\u{25c7}".to_string(),
+            keys: "x",
+            hue: crate::Hue::Hold,
+            tone: match can_name {
+                true => crate::Tone::Plain,
+                false => crate::Tone::Dimmed,
+            },
         },
-    }]
+        crate::Chip {
+            action: CLEAR_ALL,
+            name: "clear-all",
+            glyph: "\u{2715}".to_string(),
+            keys: "D",
+            hue: crate::Hue::Halt,
+            tone: match state.breakpoints.is_empty() {
+                true => crate::Tone::Dimmed,
+                false => crate::Tone::Plain,
+            },
+        },
+    ]
 }
 
 /// The Chips on the Variables' top border: every debug action, then the
@@ -547,10 +570,40 @@ pub struct Session {
     /// `can_set` is its word: a cancel Chip that looked enabled and did
     /// nothing is worse than one that says it cannot.
     can_cancel: bool,
+    /// The Exception filters the adapter reported, in its order — the only
+    /// ones a switch is drawn for or an id is sent under — and whether it
+    /// said one exception class can be named, and the one that was.
+    filters: Vec<Filter>,
+    can_name_class: bool,
+    class: Option<String>,
     /// What the Corner and the Strip held when the session began, given back
     /// when it ends.
     corner: layout::Corner,
     strip: layout::Group,
+}
+
+/// An Exception filter as the adapter listed it: the id it is switched by and
+/// what it is called on screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Filter {
+    pub id: String,
+    pub label: String,
+}
+
+/// The adapter's list of Exception filters, or `None` where the message
+/// carries none — a `capabilities` event that says nothing about them leaves
+/// the ones already reported alone.
+fn reported(filters: &Value) -> Option<Vec<Filter>> {
+    let listed = filters.as_array()?;
+    Some(
+        listed
+            .iter()
+            .map(|filter| Filter {
+                id: filter["filter"].as_str().unwrap_or_default().to_string(),
+                label: printable(filter["label"].as_str().unwrap_or_default()),
+            })
+            .collect(),
+    )
 }
 
 /// A request waiting for its answer: the command, which is how the response is
@@ -827,6 +880,9 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
         previous: None,
         can_set: false,
         can_cancel: false,
+        filters: Vec::new(),
+        can_name_class: false,
+        class: None,
         corner: next.corner,
         strip: next.strip,
     });
@@ -1027,6 +1083,10 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
         "initialize" => {
             session.can_set = message["body"]["supportsSetVariable"] == Value::Bool(true);
             session.can_cancel = message["body"]["supportsCancelRequest"] == Value::Bool(true);
+            session.can_name_class =
+                message["body"]["supportsExceptionOptions"] == Value::Bool(true);
+            session.filters =
+                reported(&message["body"]["exceptionBreakpointFilters"]).unwrap_or_default();
             session.phase = Phase::Starting;
             let (request, args) = (session.request.clone(), session.args.clone());
             vec![ask(session, &request, Value::Object(args))]
@@ -1267,6 +1327,12 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
             if let Some(can_cancel) = body["capabilities"]["supportsCancelRequest"].as_bool() {
                 session.can_cancel = can_cancel;
             }
+            if let Some(can_name) = body["capabilities"]["supportsExceptionOptions"].as_bool() {
+                session.can_name_class = can_name;
+            }
+            if let Some(filters) = reported(&body["capabilities"]["exceptionBreakpointFilters"]) {
+                session.filters = filters;
+            }
             Vec::new()
         }
         // What the program printed, as the adapter repeats it. It goes to the
@@ -1324,6 +1390,7 @@ fn configured(next: &mut State) -> Vec<Effect> {
         .into_iter()
         .map(|(file, breakpoints)| (file.to_path_buf(), breakpoints))
         .collect();
+    let pause_on = pause_on(next);
     let session = next.debug.as_mut().expect("a session");
     if session.phase != Phase::Starting {
         return Vec::new();
@@ -1338,14 +1405,88 @@ fn configured(next: &mut State) -> Vec<Effect> {
             )
         })
         .collect();
-    effects.push(ask(
-        session,
-        "setExceptionBreakpoints",
-        json!({ "filters": [] }),
-    ));
+    effects.push(ask(session, "setExceptionBreakpoints", pause_on));
     effects.push(ask(session, "configurationDone", json!({})));
     session.phase = Phase::Running(None);
     effects
+}
+
+/// What `setExceptionBreakpoints` carries: every switch that is on, and the
+/// one named class where there is one. Whole every time, since the request
+/// replaces what the adapter held rather than adding to it.
+fn pause_on(state: &State) -> Value {
+    let on: Vec<&str> = switches(state)
+        .into_iter()
+        .filter(|(_, on)| *on)
+        .map(|(filter, _)| filter.id.as_str())
+        .collect();
+    let mut arguments = json!({ "filters": on });
+    if let Some(class) = state
+        .debug
+        .as_ref()
+        .and_then(|session| session.class.as_ref())
+    {
+        arguments["exceptionOptions"] =
+            json!([{ "path": [{ "names": [class] }], "breakMode": "always" }]);
+    }
+    arguments
+}
+
+/// The switches at the top of the Breakpoint list: each filter the adapter
+/// reported, and whether this project has it on for this adapter. None
+/// without a session, since the filters are the adapter's and never Varde's.
+pub fn switches(state: &State) -> Vec<(&Filter, bool)> {
+    let Some(session) = &state.debug else {
+        return Vec::new();
+    };
+    let on = state.exception_filters.get(&session.adapter);
+    session
+        .filters
+        .iter()
+        .map(|filter| (filter, on.is_some_and(|on| on.contains(&filter.id))))
+        .collect()
+}
+
+/// Every row of the Breakpoint list: the switches, then the Breakpoints.
+pub fn rows(state: &State) -> usize {
+    switches(state).len() + state.breakpoints.len()
+}
+
+/// Enter on the switch at `at`: flipped, remembered, and sent at once.
+pub fn switch(next: &mut State, at: usize) -> Vec<Effect> {
+    let Some((id, on)) = switches(next)
+        .get(at)
+        .map(|(filter, on)| (filter.id.clone(), *on))
+    else {
+        return Vec::new();
+    };
+    let session = next.debug.as_ref().expect("a session with switches");
+    let chosen = next
+        .exception_filters
+        .entry(session.adapter.clone())
+        .or_default();
+    match on {
+        true => chosen.remove(&id),
+        false => chosen.insert(id),
+    };
+    let arguments = pause_on(next);
+    let session = next.debug.as_mut().expect("a session with switches");
+    vec![
+        ask(session, "setExceptionBreakpoints", arguments),
+        Effect::SaveState(crate::state_json(next)),
+    ]
+}
+
+/// The exception-class box's Enter: the class is sent with the switches, and
+/// kept for the session so switching a filter later does not drop it.
+pub fn name_class(next: &mut State, class: String) -> Vec<Effect> {
+    let Some(session) = next.debug.as_mut() else {
+        return Vec::new();
+    };
+    session.class = Some(class);
+    let arguments = pause_on(next);
+    let session = next.debug.as_mut().expect("a session");
+    vec![ask(session, "setExceptionBreakpoints", arguments)]
 }
 
 /// F9: continue the inspected thread while Paused, pause the program while
@@ -3398,6 +3539,40 @@ mod tests {
             r#"{"type":"event","event":"capabilities","body":{"capabilities":{"supportsSetVariable":false}}}"#,
         );
         assert!(!can.debug.as_ref().expect("a session").can_set);
+    }
+
+    /// The halves of R42.8 no scenario reaches: a switch turned back off is
+    /// sent without it, a remembered filter this adapter did not report is
+    /// never sent under its id, and a class once named survives a switch —
+    /// the request replaces what the adapter held, so leaving either out of
+    /// a later one would quietly undo it.
+    #[test]
+    fn exception_requests_carry_exactly_what_is_on() {
+        let mut state = paused(State::default());
+        state.exception_filters.insert(
+            "rust".to_string(),
+            ["gone".to_string()].into_iter().collect(),
+        );
+        received(
+            &mut state,
+            r#"{"type":"event","event":"capabilities","body":{"capabilities":{"exceptionBreakpointFilters":[{"filter":"caught","label":"Caught"}]}}}"#,
+        );
+        let sent = |effects: &[Effect]| {
+            effects
+                .iter()
+                .find_map(|effect| match effect {
+                    Effect::DapSend { json } => serde_json::from_str::<Value>(json).ok(),
+                    _ => None,
+                })
+                .expect("a request")["arguments"]
+                .clone()
+        };
+        assert_eq!(sent(&switch(&mut state, 0))["filters"], json!(["caught"]));
+        let named = sent(&name_class(&mut state, "Oops".to_string()));
+        assert_eq!(named["filters"], json!(["caught"]));
+        let off = sent(&switch(&mut state, 0));
+        assert_eq!(off["filters"], json!([]));
+        assert_eq!(off["exceptionOptions"], named["exceptionOptions"]);
     }
 
     /// A Watch typed rather than taken off a row — the `a` key's box, which
