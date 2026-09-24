@@ -41,6 +41,56 @@ max_iterations = 10
 # file a human writes (R35.7).
 [speech]
 speed = 1.0
+
+# What a Run mark stands beside and starts (F41): the files a row looks in, a
+# tree-sitter query whose `@run` capture is the line it marks, a command for a
+# shell whose prompt is waiting, and a Launch configuration for Debug. Each
+# `${…}` is filled from the query capture of that name, and `${file}` with the
+# file's path — quoted in `run`, since both are text from the folder.
+#
+# A row per kind of thing to start, because each runs its own way. Debugging a
+# Rust binary starts at its path, which cargo names only as it builds, so LLDB
+# builds it and reads the path out of cargo's own report.
+[run.rust_main]
+extensions = ["rs"]
+query = '((function_item name: (identifier) @name @run) (#eq? @name "main"))'
+run = "cargo run"
+debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo build --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"] } }
+
+# The first test binary cargo builds, which is the crate's own tests; a test
+# under `tests/` is in a binary of its own.
+[run.rust_test]
+extensions = ["rs"]
+query = '((attribute_item (attribute (identifier) @attribute)) . (function_item name: (identifier) @name @run) (#eq? @attribute "test"))'
+run = "cargo test ${name} -- --exact"
+debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo test --no-run --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"], args = ["${name}", "--exact"] } }
+
+# The source-file launcher, which compiles the file it is handed: no build to
+# ask for a class path.
+[run.java_main]
+extensions = ["java"]
+query = '((method_declaration name: (identifier) @name @run) (#eq? @name "main"))'
+run = "java ${file}"
+debug = { adapter = "java", request = "launch", args = { mainClass = "${file}" } }
+
+# No `debug`: a test is started by its runner, which is on the class path the
+# project's build knows and Varde does not.
+[run.java_test]
+extensions = ["java"]
+query = '(class_declaration name: (identifier) @class body: (class_body (method_declaration (modifiers (marker_annotation name: (identifier) @annotation)) name: (identifier) @name @run) (#eq? @annotation "Test")))'
+run = "mvn test -Dtest=${class}#${name}"
+
+[run.javascript_test]
+extensions = ["js", "jsx", "mjs", "cjs"]
+query = '((call_expression function: (identifier) @function arguments: (arguments . (string (string_fragment) @name))) @run (#match? @function "^(test|it)$"))'
+run = "npx vitest run ${file} -t ${name}"
+debug = { adapter = "javascript", request = "launch", args = { type = "pwa-node", runtimeExecutable = "npx", runtimeArgs = ["vitest", "run", "${file}", "-t", "${name}"] } }
+
+[run.typescript_test]
+extensions = ["ts", "tsx", "mts", "cts"]
+query = '((call_expression function: (identifier) @function arguments: (arguments . (string (string_fragment) @name))) @run (#match? @function "^(test|it)$"))'
+run = "npx vitest run ${file} -t ${name}"
+debug = { adapter = "typescript", request = "launch", args = { type = "pwa-node", runtimeExecutable = "npx", runtimeArgs = ["vitest", "run", "${file}", "-t", "${name}"] } }
 "#;
 
 /// The Program rows the binary carries: the rows [`template`] seeds
@@ -800,6 +850,46 @@ const TEMPLATE_SETTINGS: &str = r#"# Varde reads this file on every start. A pro
 # How many times the Gate may hand a refactor back before it stops.
 # max_iterations = 10
 
+# What a Run mark stands beside and starts: the files a row looks in, a
+# tree-sitter query whose `@run` capture is the line it marks, a command for a
+# shell whose prompt is waiting, and a Launch configuration for Debug. Each
+# `${…}` is filled from the query capture of that name, and `${file}` with the
+# file's path. A row of your own gives a language one without a release.
+[run.rust_main]
+# extensions = ["rs"]
+# query = '((function_item name: (identifier) @name @run) (#eq? @name "main"))'
+# run = "cargo run"
+# debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo build --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"] } }
+
+[run.rust_test]
+# extensions = ["rs"]
+# query = '((attribute_item (attribute (identifier) @attribute)) . (function_item name: (identifier) @name @run) (#eq? @attribute "test"))'
+# run = "cargo test ${name} -- --exact"
+# debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo test --no-run --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"], args = ["${name}", "--exact"] } }
+
+[run.java_main]
+# extensions = ["java"]
+# query = '((method_declaration name: (identifier) @name @run) (#eq? @name "main"))'
+# run = "java ${file}"
+# debug = { adapter = "java", request = "launch", args = { mainClass = "${file}" } }
+
+[run.java_test]
+# extensions = ["java"]
+# query = '(class_declaration name: (identifier) @class body: (class_body (method_declaration (modifiers (marker_annotation name: (identifier) @annotation)) name: (identifier) @name @run) (#eq? @annotation "Test")))'
+# run = "mvn test -Dtest=${class}#${name}"
+
+[run.javascript_test]
+# extensions = ["js", "jsx", "mjs", "cjs"]
+# query = '((call_expression function: (identifier) @function arguments: (arguments . (string (string_fragment) @name))) @run (#match? @function "^(test|it)$"))'
+# run = "npx vitest run ${file} -t ${name}"
+# debug = { adapter = "javascript", request = "launch", args = { type = "pwa-node", runtimeExecutable = "npx", runtimeArgs = ["vitest", "run", "${file}", "-t", "${name}"] } }
+
+[run.typescript_test]
+# extensions = ["ts", "tsx", "mts", "cts"]
+# query = '((call_expression function: (identifier) @function arguments: (arguments . (string (string_fragment) @name))) @run (#match? @function "^(test|it)$"))'
+# run = "npx vitest run ${file} -t ${name}"
+# debug = { adapter = "typescript", request = "launch", args = { type = "pwa-node", runtimeExecutable = "npx", runtimeArgs = ["vitest", "run", "${file}", "-t", "${name}"] } }
+
 "#;
 
 /// What `~/.varde/config.toml` starts as, when Varde starts and the edge read
@@ -1195,6 +1285,24 @@ fn attaches_again() -> bool {
     true
 }
 
+/// What a Run mark stands beside and what it starts: the files it looks in, a
+/// syntax-tree query whose `@run` capture is the line it marks, and the two
+/// commands it fills from the query's other captures — `${name}` from `@name`
+/// — and from `${file}`. Named freely rather than by language, since a
+/// language has more than one kind of thing to start and each runs its own
+/// way; `debug` names its adapter the way a Launch configuration does.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Run {
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub run: String,
+    #[serde(default)]
+    pub debug: Option<Launch>,
+}
+
 /// A path on this machine a server's configuration may name, and how to find
 /// it. Data for the reason a command is data: which marker file means "this
 /// directory configures the language" is the whole of what differs between
@@ -1279,6 +1387,8 @@ struct Layer {
     dap: BTreeMap<String, Adapter>,
     #[serde(default)]
     launch: BTreeMap<String, Launch>,
+    #[serde(default)]
+    run: BTreeMap<String, Run>,
 }
 
 /// The same two tables read off a layer's source text, keeping where each entry
@@ -1298,6 +1408,8 @@ struct SourceLayer {
     dap: BTreeMap<String, toml::Spanned<Adapter>>,
     #[serde(default)]
     launch: BTreeMap<String, toml::Spanned<Launch>>,
+    #[serde(default)]
+    run: BTreeMap<String, toml::Spanned<Run>>,
 }
 
 /// Where each layer named an `[lsp.*]` or `[facts.*]` entry: the dotted name
@@ -1348,6 +1460,11 @@ impl Config {
     /// The Launch configurations both layers name, by name.
     pub fn launches(&self) -> BTreeMap<String, Launch> {
         self.layer().launch
+    }
+
+    /// What Run marks stand beside, by row.
+    pub fn runs(&self) -> BTreeMap<String, Run> {
+        self.layer().run
     }
 
     /// The typed tables of the merged config. Nothing here can fail for a
@@ -1521,7 +1638,27 @@ pub(crate) fn merged_config(
     }
     refuse_incomplete(&table, &origins)?;
     refuse_claimed_twice(&table, &origins)?;
+    refuse_unusable_runs(&table, &origins)?;
     Ok(table)
+}
+
+/// A `[run.*]` row that could never mark a line, refused rather than left to
+/// read as configured (R41.1): its query is compiled against the grammar of
+/// every extension it claims.
+fn refuse_unusable_runs(table: &Table, origins: &Origins) -> Result<(), ConfigError> {
+    let runs = Config(table.clone()).runs();
+    for (name, row) in &runs {
+        if let Some(why) = crate::run::unusable(row) {
+            let entry = format!("run.{name}");
+            let (file, line) = origins.get(&entry).cloned().unwrap_or_default();
+            return Err(ConfigError {
+                file,
+                line,
+                fault: ConfigFault::WrongType(format!("[{entry}] {why}")),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The merged table is what must be complete. The one key an entry cannot be
@@ -1732,6 +1869,7 @@ fn initial_state(
         facts: config.facts(),
         adapters: config.adapters(),
         launches: config.launches(),
+        runs: config.runs(),
         speech: speech(config, &input.os),
         os: input.os.clone(),
         arch: input.arch.clone(),
@@ -1947,6 +2085,12 @@ fn parse(source: &str, label: &str) -> Result<(Table, Origins), ConfigError> {
                 .launch
                 .iter()
                 .map(|(name, entry)| (format!("launch.{name}"), entry.span())),
+        )
+        .chain(
+            layer
+                .run
+                .iter()
+                .map(|(name, entry)| (format!("run.{name}"), entry.span())),
         )
         .map(|(entry, span)| (entry, (label.to_string(), line(span.start))))
         .collect();
@@ -2805,6 +2949,25 @@ mod tests {
     /// file is here". Seeding over it would be a silent delete of settings
     /// Varde could not parse, which is the one way this feature can destroy
     /// something.
+    /// A Run row that could never mark a line is refused where it was
+    /// written, rather than read as configured and silently marking nothing.
+    #[test]
+    fn a_run_row_whose_query_cannot_mark_anything_is_refused_at_its_line() {
+        let refused = merged_config(
+            Some("[view]\n\n[run.zig]\nextensions = [\"zig\"]\nquery = \"(test_declaration) @run\"\n"),
+            None,
+        )
+        .expect_err("a row no grammar can parse");
+        assert_eq!(
+            refused,
+            ConfigError {
+                file: GLOBAL_LABEL.to_string(),
+                line: 3,
+                fault: ConfigFault::WrongType("[run.zig] no grammar parses .zig".to_string()),
+            }
+        );
+    }
+
     #[test]
     fn a_config_that_is_there_but_says_nothing_is_not_seeded_over() {
         let (_state, _config, effects) = start(&Startup {
@@ -2895,18 +3058,23 @@ mod tests {
         let mut live: toml::Table = template().parse().expect("valid TOML");
         let programs: toml::Table = PROGRAMS.parse().expect("valid TOML");
         let settings: toml::Table = DEFAULTS.parse().expect("valid TOML");
+        // A header over commented keys, which is how a Setting that is a
+        // table of tables — a `[run.*]` row — is named and left unset.
+        fn blank(value: &toml::Value) -> bool {
+            value
+                .as_table()
+                .is_some_and(|table| table.values().all(blank))
+        }
         for (table, keys) in &settings {
             for key in keys.as_table().expect("a table").keys() {
                 assert!(
-                    live[table].get(key).is_none(),
+                    live[table].get(key).is_none_or(blank),
                     "a live Setting in the template: {table}.{key}"
                 );
             }
         }
         assert_eq!(uncommented(&template()), fresh().0);
-        live.retain(|table, keys| {
-            programs.contains_key(table) || !keys.as_table().is_some_and(toml::Table::is_empty)
-        });
+        live.retain(|table, keys| programs.contains_key(table) || !blank(keys));
         assert_eq!(live, programs);
     }
 

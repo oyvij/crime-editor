@@ -939,17 +939,22 @@ pub fn launches(state: &State) -> Vec<&str> {
     state.launches.keys().map(String::as_str).collect()
 }
 
-/// Starts the Launch configuration `name`: refused by name if it names no
-/// configured adapter, and otherwise a spawn asked of the edge, whose answer
-/// is the session's first fact.
+/// Starts the Launch configuration `name`.
 pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
+    match next.launches.get(name).cloned() {
+        Some(launch) => launch_with(next, launch),
+        None => Vec::new(),
+    }
+}
+
+/// Starts a session from `launch`: refused by name if it names no configured
+/// adapter, and otherwise a spawn asked of the edge, whose answer is the
+/// session's first fact.
+pub fn launch_with(next: &mut State, launch: crate::startup::Launch) -> Vec<Effect> {
     if next.debug.is_some() {
         next.refusal = Some(Refusal::SessionRunning);
         return Vec::new();
     }
-    let Some(launch) = next.launches.get(name).cloned() else {
-        return Vec::new();
-    };
     let Some(adapter) = next.adapters.get(&launch.adapter).cloned() else {
         next.refusal = Some(Refusal::NoDebugAdapter(launch.adapter.clone()));
         return Vec::new();
@@ -994,7 +999,7 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
     };
     // Remembered before the session exists and kept after it ends: what
     // restart reruns is the configuration, not the session.
-    next.last_launch = Some(name.to_string());
+    next.last_launch = Some(launch.clone());
     next.debug = Some(Session {
         adapter: launch.adapter.clone(),
         command: adapter.command.clone(),
@@ -2036,11 +2041,11 @@ pub fn stop(next: &mut State) -> Vec<Effect> {
 /// started again. Refused by name with none — a key that quietly did nothing
 /// would read as a key that failed.
 pub fn restart(next: &mut State) -> Vec<Effect> {
-    let Some(name) = next.last_launch.clone() else {
+    let Some(launch) = next.last_launch.clone() else {
         next.refusal = Some(Refusal::NoLastSession);
         return Vec::new();
     };
-    let effects = start(next, &name);
+    let effects = launch_with(next, launch);
     lit(next, RESTART, &effects);
     effects
 }

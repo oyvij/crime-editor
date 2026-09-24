@@ -167,6 +167,8 @@ pub enum Refusal {
     /// Restart with nothing to rerun: no Launch configuration has been
     /// started this session, so there is no last one.
     NoLastSession,
+    /// `␣x` on a line no Run mark stands on.
+    NoRunMark,
     /// The adapter would not write a member back, in its own words: a value
     /// the program's language will not take, or one its type will not hold.
     SetValueFailed(String),
@@ -189,6 +191,7 @@ impl Refusal {
             Refusal::DebugAdapterExited => "debug-adapter-exited",
             Refusal::LaunchFailed(_) => "launch-failed",
             Refusal::NoLastSession => "no-last-session",
+            Refusal::NoRunMark => "no-run-mark",
             Refusal::SetValueFailed(_) => "set-value-failed",
         }
     }

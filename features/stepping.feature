@@ -159,6 +159,7 @@ Feature: Stepping and the Transport
         | r |
         | b |
         | B |
+        | x |
         | e |
         | a |
         | s |
@@ -191,6 +192,7 @@ Feature: Stepping and the Transport
       Then the Chord hint lists the keys:
         | b |
         | B |
+        | x |
         | r |
 
   Rule: A chord leaves Stepping mode on, and any other key leaves it

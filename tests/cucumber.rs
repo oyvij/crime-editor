@@ -4378,6 +4378,76 @@ fn click_breakpoint_column(world: &mut VardeWorld, line: usize) {
     world.report(mouse::Kind::LeftUp, column, row);
 }
 
+// ---- F41: Run marks ----
+
+#[then(expr = "line {int} carries a Run mark")]
+fn carries_run_mark(world: &mut VardeWorld, line: usize) {
+    load_debug_config(world);
+    let marks = varde::run::marks(&world.state);
+    assert!(marks.contains_key(&line), "Run marks: {marks:?}");
+}
+
+#[then(expr = "line {int} carries no Run mark")]
+fn carries_no_run_mark(world: &mut VardeWorld, line: usize) {
+    load_debug_config(world);
+    let marks = varde::run::marks(&world.state);
+    assert!(!marks.contains_key(&line), "Run marks: {marks:?}");
+}
+
+#[then("no line carries a Run mark")]
+fn no_run_marks(world: &mut VardeWorld) {
+    load_debug_config(world);
+    assert_eq!(varde::run::marks(&world.state), BTreeMap::new());
+}
+
+/// Through the hit-test, on the Breakpoint column the ▶ is drawn in.
+#[when(expr = "I click the Run mark on line {int}")]
+fn click_run_mark(world: &mut VardeWorld, line: usize) {
+    load_debug_config(world);
+    click_breakpoint_column(world, line);
+}
+
+#[then("the Run mark offers:")]
+fn run_mark_offers(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("a table of choices")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let offered: Vec<&str> = varde::run::chips(&world.state)
+        .iter()
+        .map(|chip| chip.action)
+        .collect();
+    assert_eq!(offered, expected);
+}
+
+/// The click, then the key the chosen Chip names. The adapter answers, so a
+/// Debug session gets as far as its launch request.
+#[when(expr = "I choose {string} on the Run mark on line {int}")]
+fn choose_on_run_mark(world: &mut VardeWorld, choice: String, line: usize) {
+    click_run_mark(world, line);
+    let chip = varde::run::chips(&world.state)
+        .into_iter()
+        .find(|chip| chip.action == choice)
+        .unwrap_or_else(|| panic!("the Run mark does not offer {choice:?}"));
+    world.dap.ready = true;
+    route_key(world, chip.keys, 0);
+}
+
+#[then(expr = "the Debug adapter's launch arguments name {string}")]
+fn launch_arguments_name(world: &mut VardeWorld, name: String) {
+    let arguments = last_request(world, "launch")["arguments"].to_string();
+    assert!(arguments.contains(&name), "launch arguments: {arguments}");
+}
+
+#[then(expr = "the Debug adapter's launch arguments do not name {string}")]
+fn launch_arguments_do_not_name(world: &mut VardeWorld, name: String) {
+    let arguments = last_request(world, "launch")["arguments"].to_string();
+    assert!(!arguments.contains(&name), "launch arguments: {arguments}");
+}
+
 /// The column right of the Breakpoint column, where the number starts.
 #[when(expr = "I click the line number of line {int}")]
 fn click_line_number(world: &mut VardeWorld, line: usize) {
@@ -8641,6 +8711,7 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::NewWatch => "new-watch",
         Modal::ExceptionClass => "exception-class",
         Modal::Breakpoint { .. } => "breakpoint",
+        Modal::RunMark { .. } => "run-mark",
     };
     assert_eq!(actual, expected);
 }
@@ -14424,6 +14495,7 @@ fn no_marked_brackets(world: &mut VardeWorld) {
 fn load_debug_config(world: &mut VardeWorld) {
     let (loaded, _, _) = startup::start(&world.startup).expect("the scenario's config starts");
     world.state.launches = loaded.launches;
+    world.state.runs = loaded.runs;
     for (language, adapter) in loaded.adapters {
         world.state.adapters.entry(language).or_insert(adapter);
     }
@@ -15821,6 +15893,7 @@ fn nothing_reached_the_output(world: &mut VardeWorld) {
 /// adapter row gives — which is what a scenario means by "asked for": whether
 /// a process exists is the edge's to say.
 #[then(expr = "the Debug adapter for {string} is asked for")]
+#[then(expr = "a Debug adapter for {string} is asked for")]
 fn adapter_is_asked_for(world: &mut VardeWorld, language: String) {
     let command = world
         .state

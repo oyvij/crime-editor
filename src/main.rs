@@ -595,6 +595,9 @@ struct Edge {
     /// Parsed tokens for the current buffer, kept until it changes. Re-parsing
     /// a whole file every frame is what made a big file feel heavy.
     highlighted: (PathBuf, u64, Vec<Vec<varde::highlight::Token>>),
+    /// The lines a Run mark stands on, found with the tokens and for their
+    /// reason: a syntax tree is a parse too.
+    run_marks: Vec<usize>,
     /// The new and old sides of the diff under review, each parsed whole when
     /// the diff was read. No key: a diff is only ever on screen because a
     /// `ReadDiff` put it there, and that is the one place either side changes.
@@ -832,6 +835,7 @@ fn run(
         pointer: mouse::Pointer::default(),
         cursor_style: "",
         highlighted: (PathBuf::new(), u64::MAX, Vec::new()),
+        run_marks: Vec::new(),
         diff_sides: (Vec::new(), Vec::new()),
         previewed: (PathBuf::new(), u64::MAX, 0, Vec::new()),
         faint: ui::faint(palette),
@@ -1704,6 +1708,7 @@ fn cache_highlight(state: &State, edge: &mut Edge) {
     let Some((path, buffer)) = current else {
         if !edge.highlighted.2.is_empty() {
             edge.highlighted = (PathBuf::new(), u64::MAX, Vec::new());
+            edge.run_marks.clear();
         }
         return;
     };
@@ -1714,6 +1719,7 @@ fn cache_highlight(state: &State, edge: &mut Edge) {
             buffer.revision(),
             varde::highlight::highlight(&name, buffer.shown()),
         );
+        edge.run_marks = varde::run::marks(state).into_keys().collect();
     }
 }
 
@@ -1766,6 +1772,7 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
                 comment_kind: &edge.drafts.comment_kind,
                 filter_draft: edge.drafts.filter.as_deref(),
                 tokens: &edge.highlighted.2,
+                run_marks: &edge.run_marks,
                 diff_new: &edge.diff_sides.0,
                 diff_old: &edge.diff_sides.1,
                 preview: &edge.previewed.3,

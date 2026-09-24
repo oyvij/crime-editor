@@ -236,10 +236,12 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
 /// every row spells its chord, and the hint reads the key off that spelling —
 /// beside which a row may name the other ways to the same thing. Space is
 /// shared — other features may claim other letters later.
-pub const CHORDS: [(&str, &str, &[View]); 3] = [
+pub const CHORDS: [(&str, &str, &[View]); 4] = [
     ("␣b", "breakpoint", &[View::Edit]),
     // The Breakpoint key's shifted letter, as `D` is the list's `d`.
     ("␣B", "breakpoint properties", &[View::Edit]),
+    // What a click on the line's ▶ offers, from the keyboard.
+    ("␣x", "run / debug this line", &[View::Edit]),
     // Here rather than in [`DEBUG_CHORDS`] because it is the one debug chord
     // that answers with no session: rerunning the last one is what it is for.
     // Both spellings on one row, the way `C-p C-n gp gn` carries two: the key
@@ -511,6 +513,9 @@ pub fn chord(state: &State, key: char) -> Option<Event> {
         'B' => Some(Event::EditBreakpoint(
             crate::current_buffer(state).map_or(0, |buffer| buffer.line),
         )),
+        'x' => Some(Event::OfferRun(
+            crate::current_buffer(state).map_or(0, |buffer| buffer.line),
+        )),
         'q' => Some(Event::DebugStop),
         'e' if state.debug.is_some() => Some(Event::OpenEvaluator),
         // The two that open a mode rather than acting: the window is moved
@@ -776,7 +781,8 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
         | Modal::StepDetail
         | Modal::ConfirmStory { .. }
         | Modal::Prediction { .. }
-        | Modal::Restart => answered(&state.modal, event),
+        | Modal::Restart
+        | Modal::RunMark { .. } => answered(&state.modal, event),
         // The keyboard in a Hover reads it and nothing else: a letter that
         // reached the buffer would edit code the box is covering.
         Modal::None if state.hover.as_ref().is_some_and(|hover| hover.focused) => {
@@ -832,6 +838,7 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         Modal::ConfirmStory { .. } => yes_no(Event::ConfirmStory, event),
         Modal::Prediction { .. } => prediction_answer(event),
         Modal::Restart => yes_no(Event::Restart, event),
+        Modal::RunMark { .. } => run_mark_answer(event),
         Modal::None
         | Modal::NameBox { .. }
         | Modal::SetValue
@@ -889,6 +896,18 @@ fn step_detail_answer(event: KeyEvent) -> Vec<Event> {
         KeyCode::Esc => vec![Event::Cancel],
         _ => match typed(event) {
             Some('D') => vec![Event::Key('D')],
+            _ => vec![],
+        },
+    }
+}
+
+/// The two Chips' keys, and Escape for neither.
+fn run_mark_answer(event: KeyEvent) -> Vec<Event> {
+    match event.code {
+        KeyCode::Esc => vec![Event::Cancel],
+        _ => match typed(event) {
+            Some('r') => vec![Event::ChooseRun(crate::run::RUN)],
+            Some('d') => vec![Event::ChooseRun(crate::run::DEBUG)],
             _ => vec![],
         },
     }

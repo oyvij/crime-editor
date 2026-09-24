@@ -620,6 +620,11 @@ fn pressed(
     if let Some(key) = palette_entry_at(state, panes, input.column, input.row) {
         return vec![Event::ClickPaletteEntry(key)];
     }
+    // The screen, read off the panes for the reason `palette_entry_at` gives.
+    let screen = (panes.ai.right(), panes.tree.height + panes.terminal.height);
+    if let Some(action) = crate::run::chip_at(state, screen.0, screen.1, input.column, input.row) {
+        return vec![Event::ChooseRun(action)];
+    }
     if let Some(index) = buffer_dot_at(state, panes, input.column, input.row) {
         return match state.buffers.keys().nth(index) {
             Some(path) => vec![Event::ShowBuffer(path.clone())],
@@ -657,10 +662,17 @@ fn pressed(
             )]
         }
         // The gutter's leftmost column is the Breakpoint column, and the line
-        // numbers beside it set nothing.
+        // numbers beside it set nothing. A Run mark shares it, and the click
+        // is whichever of the two the column draws: a Breakpoint over a Run
+        // mark, so the one drawn is the one a click takes away.
         (Pane::Editor, _) if breakpoint_column(state, panes, input) => {
             let at = place_in(state, panes, pane, (input.column, input.row));
-            vec![Event::ToggleBreakpoint(at.line)]
+            let offered = !crate::debug::marks(state).contains_key(&at.line)
+                && crate::run::marks(state).contains_key(&at.line);
+            match offered {
+                true => vec![Event::OfferRun(at.line)],
+                false => vec![Event::ToggleBreakpoint(at.line)],
+            }
         }
         // The toggle in the gutter and the dots at the end of a folded line are
         // one affordance drawn in two places, so a press on either is one
@@ -2904,6 +2916,41 @@ mod tests {
             click(&editing(), column, border).as_slice(),
             [Event::ToggleBreakpoint(_)]
         ));
+    }
+
+    /// A Run mark shares the Breakpoint column and takes its click, unless a
+    /// Breakpoint is drawn over it: the one drawn is the one a click takes.
+    /// With the offer up, each of its Chips is a click on that choice.
+    #[test]
+    fn a_click_on_a_run_mark_offers_it_unless_a_breakpoint_is_drawn_over_it() {
+        let mut state = editing();
+        state.runs = crate::startup::start(&crate::startup::Startup::default())
+            .expect("the defaults start")
+            .0
+            .runs;
+        state.buffers.insert(
+            PathBuf::from("/w/a.rs"),
+            crate::editor::Buffer::open("\n\nfn main() {}\n", false, 4),
+        );
+        let panes = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        let column = panes.editor.x + 1 + crate::layout::BREAKPOINT_COLUMN;
+        assert_eq!(click(&state, column, 3), vec![Event::OfferRun(3)]);
+        let offered = crate::update(&state, Event::OfferRun(3)).0;
+        for action in [crate::run::RUN, crate::run::DEBUG] {
+            let clicked = (0..26).any(|row| {
+                (0..120)
+                    .any(|column| click(&offered, column, row) == vec![Event::ChooseRun(action)])
+            });
+            assert!(clicked, "the offer's {action} cannot be clicked");
+        }
+        state.breakpoints.push(crate::debug::Breakpoint {
+            file: PathBuf::from("/w/a.rs"),
+            line: 3,
+            text: "fn main() {}".to_string(),
+            stale: false,
+            properties: crate::debug::Properties::default(),
+        });
+        assert_eq!(click(&state, column, 3), vec![Event::ToggleBreakpoint(3)]);
     }
 
     /// Every entry the palette offers is clickable at some cell, at the two

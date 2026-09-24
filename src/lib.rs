@@ -32,6 +32,7 @@ pub mod queries;
 pub mod reading;
 pub mod review;
 pub mod risk;
+pub mod run;
 pub mod search;
 pub mod startup;
 pub mod story;
@@ -420,6 +421,12 @@ pub enum Modal {
     Launches {
         row: usize,
     },
+    /// A Run mark's offer of Run and Debug, on the line it stands on. What
+    /// the mark starts is read afresh when one is chosen, for the reason
+    /// [`Modal::StepDetail`] carries nothing: the buffer may change under it.
+    RunMark {
+        line: usize,
+    },
     /// The Breakpoint box: which Breakpoint, which row the keys type into,
     /// and what has been written so far — held here rather than on the
     /// Breakpoint until Enter, so Escape leaves it as it was.
@@ -532,6 +539,11 @@ pub enum Event {
     /// on screen, setting one first if the line has none: `␣B`, or the `✎`
     /// Chip on the cursor's line.
     EditBreakpoint(usize),
+    /// Offer Run and Debug for the Run mark on this line of the buffer on
+    /// screen: a click on it, or `␣x` on its line.
+    OfferRun(usize),
+    /// Run or Debug, chosen on the offer: its key or its Chip.
+    ChooseRun(&'static str),
     /// What the Breakpoint box's focused row reads now.
     BreakpointDraft(String),
     BreakpointField(debug::Field),
@@ -2202,10 +2214,13 @@ pub struct State {
     /// `servers` is (ADR 0021).
     pub adapters: BTreeMap<String, startup::Adapter>,
     pub launches: BTreeMap<String, startup::Launch>,
+    /// What Run marks stand beside and start, by row (R41.1).
+    pub runs: BTreeMap<String, startup::Run>,
     /// The Launch configuration the last session was started from, which
     /// restart reruns. Outlives the session on purpose: rerunning is what the
-    /// reader reaches for once a program has ended.
-    pub last_launch: Option<String>,
+    /// reader reaches for once a program has ended. The configuration and not
+    /// its name, because a Run mark's has none.
+    pub last_launch: Option<startup::Launch>,
     /// The Debug session, if one exists.
     pub debug: Option<debug::Session>,
     /// Stepping mode: a Space chord has just run, so the stepping letters act
@@ -2511,6 +2526,7 @@ impl Default for State {
             variables_scroll: 0,
             adapters: BTreeMap::new(),
             launches: BTreeMap::new(),
+            runs: BTreeMap::new(),
             last_launch: None,
             debug: None,
             stepping: false,
@@ -6307,9 +6323,15 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
 }
 
 /// ToggleBreakpoint, BreakpointFileRead, EditBreakpoint, BreakpointDraft,
-/// BreakpointField, SwitchSuspend, ConfirmBreakpoint
+/// BreakpointField, SwitchSuspend, ConfirmBreakpoint, and the Run mark the
+/// gutter's same column holds: OfferRun, ChooseRun
 fn on_breakpoint(mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
+        Event::OfferRun(line) => {
+            run::offer(&mut next, line);
+            vec![]
+        }
+        Event::ChooseRun(action) => run::choose(&mut next, action),
         // Setting one first is what makes `␣B` a way to write a conditional
         // Breakpoint in one gesture, rather than a key that does nothing on
         // every line but the few that already hold one.

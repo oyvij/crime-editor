@@ -54,17 +54,19 @@ Feature: Starting and ending a Debug session
         """
       Then no line carries a Run mark
 
-    Scenario: A language Varde has never heard of gets Run marks from a configuration row
+    Scenario: A language Varde ships no Run mark row for gets Run marks from a configuration row
       Given the global config is:
         """
-        [run.zig]
-        query = "(test_declaration) @run"
-        run = "zig test ${file} --test-filter ${name}"
-        debug = "zig-test-debug"
+        [run.pytest]
+        extensions = ["py"]
+        query = '((function_definition name: (identifier) @name) @run (#match? @name "^test_"))'
+        run = "pytest ${file} -k ${name}"
+        debug = { adapter = "python", request = "launch", args = { module = "pytest", args = ["${file}", "-k", "${name}"] } }
         """
-      And "src/main.zig" is open in the editor holding:
+      And "tests/test_sum.py" is open in the editor holding:
         """
-        test "adds" {}
+        def test_adds():
+            pass
         """
       Then line 1 carries a Run mark
 

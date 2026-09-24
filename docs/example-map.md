@@ -3171,12 +3171,20 @@ memory, disassembly, reverse stepping, browser targets, and any per-language pat
 
 Scenarios live in `features/debug_session.feature`.
 
-**R41.1** A **Run mark** stands beside what a `[run.<language>]` row's syntax-tree `query` matches.
-The row also carries the `run` and `debug` command templates. A language with no row has no Run
-marks, and one Varde has never heard of gets them from a row alone.
-**R41.2** Clicking a Run mark offers `run` and `debug`. **Run** goes to a shell whose prompt is
-waiting, exactly as a tree action does (R38.5), and never starts a session. **Debug** starts a
-session for exactly the marked function.
+**R41.1** A **Run mark** stands beside what a `[run.<name>]` row's tree-sitter `query` matches, on
+the line of its `@run` capture, in the files its `extensions` claim. The row also carries `run`, a
+command template, and `debug`, a Launch configuration (R41.3) — each `${…}` filled from the query
+capture of that name, and `${file}` with the file's path, quoted in `run`. Rows are named freely
+because a language has more than one kind of thing to start. They ship in the built-in defaults, so a
+global config written before them still has them. A language with no row has no Run marks, and one
+with a grammar and no shipped row gets them from a row alone. The grammars are the ones
+`rust-code-analysis` already builds; a row claiming an extension none of them parses, or whose query
+does not compile, is refused at start (docs/stack.md). A row with no `debug` dims the Debug Chip.
+**R41.2** Clicking a Run mark, or `␣x` on its line, offers `run` and `debug` as two Chips keyed
+`r` and `d`. A Breakpoint on the line is drawn over the mark and takes the click, so it can be taken
+away; `␣x` on a line with no mark refuses as `no-run-mark`. **Run** goes to a shell whose prompt is
+waiting, exactly as a tree action does (R38.5), takes the keyboard there, and never starts a
+session. **Debug** starts a session for exactly the marked function, and restart reruns it.
 **R41.3** A **Launch configuration** is a `[launch.<name>]` table with `adapter`, `request`
 (`launch` or `attach`), `args` and optionally `reattach`. It is allowed in both config layers, and a
 project entry beats a global one of the same name — R9's precedence, applied by name. `args` reach the

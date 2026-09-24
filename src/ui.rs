@@ -86,6 +86,10 @@ pub struct Chrome<'a> {
     /// The current buffer's tokens, by line, parsed once per edit rather than
     /// per frame.
     pub tokens: &'a [Vec<highlight::Token>],
+    /// The lines of the current buffer a Run mark stands on, found with the
+    /// tokens and for their reason: a syntax tree per frame is a parse per
+    /// frame.
+    pub run_marks: &'a [usize],
     /// The new and old sides of the diff under review, each parsed whole when
     /// the diff was read. Whole, and both of them, because a diff interleaves
     /// two sources and neither is one when it is cut into rows — the argument
@@ -184,7 +188,7 @@ pub fn draw(
         editor_widget(
             state,
             typing.as_deref(),
-            chrome.tokens,
+            (chrome.tokens, chrome.run_marks),
             (chrome.diff_new, chrome.diff_old),
             chrome.preview,
             areas.editor.width,
@@ -513,6 +517,7 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
                 Line::from("  (y) quit, so you can start Varde again    (n) stay"),
             ],
         ),
+        Modal::RunMark { .. } => run_offer(frame, state),
         Modal::Diverged => overlay(frame, "DIVERGED", diverged_lines(state)),
         Modal::StepDetail => overlay(frame, "STEP", step_detail_lines(state)),
         Modal::Prediction { .. } => overlay(frame, "PREDICTION", prediction_lines(state)),
@@ -1843,7 +1848,7 @@ fn remainder_lines(remainder: &story::Remainder, selected: bool) -> Vec<Line<'st
 fn editor_widget(
     state: &State,
     command: Option<&str>,
-    tokens: &[Vec<highlight::Token>],
+    (tokens, run_marks): (&[Vec<highlight::Token>], &[usize]),
     diff_sides: (&[Vec<highlight::Token>], &[Vec<highlight::Token>]),
     preview: &[varde::preview::Row],
     width: u16,
@@ -2121,8 +2126,10 @@ fn editor_widget(
         .into_iter()
         .zip((1..).filter(|number| !hidden.contains(number)))
         .map(|(line, number)| {
+            // A Breakpoint over a Run mark, as a click in the column takes it.
             let line = match marks.get(&number) {
                 Some(mark) => with_breakpoint(line, *mark),
+                None if run_marks.contains(&number) => with_run_mark(line),
                 None => line,
             };
             match paused {
@@ -2345,6 +2352,56 @@ fn with_breakpoint(line: Line<'static>, mark: varde::debug::Mark) -> Line<'stati
     };
     let rest: String = first.content.chars().skip(1).collect();
     let mut drawn = vec![glyph, Span::styled(rest, first.style)];
+    drawn.extend(spans);
+    Line::from(drawn).style(style)
+}
+
+/// A Run mark's offer: what it would start, and the Run and Debug Chips on
+/// the box's top border, at the columns `run::chip_at` hit-tests.
+fn run_offer(frame: &mut Frame, state: &State) {
+    let screen = frame.area();
+    let Some(offer) = varde::run::offer_area(state, screen.width, screen.height) else {
+        return;
+    };
+    let box_area = rect(offer);
+    frame.render_widget(Clear, box_area);
+    frame.render_widget(
+        Paragraph::new(format!(
+            "  {}",
+            varde::run::offered(state).unwrap_or_default()
+        ))
+        .block(Block::default().borders(Borders::ALL).title("RUN")),
+        box_area,
+    );
+    let chips = varde::run::chips(state);
+    let labels = layout::chip_labels(&chips, offer.width, 0);
+    let Some(mut x) =
+        (offer.x + offer.width.saturating_sub(1)).checked_sub(layout::strip_width(&labels))
+    else {
+        return;
+    };
+    for (chip, label) in chips.iter().zip(labels) {
+        let columns = label.width() as u16;
+        frame.render_widget(
+            Line::from(chip_spans(state, chip, label).to_vec()),
+            Rect::new(x, offer.y, columns, 1),
+        );
+        x += columns + 1;
+    }
+}
+
+/// One line with the ▶ of a Run mark in the Breakpoint column.
+fn with_run_mark(line: Line<'static>) -> Line<'static> {
+    let style = line.style;
+    let mut spans = line.spans.into_iter();
+    let first = spans.next().unwrap_or_default();
+    let mut drawn = vec![
+        Span::styled("\u{25b6}", Style::default().fg(Color::Green)),
+        Span::styled(
+            first.content.chars().skip(1).collect::<String>(),
+            first.style,
+        ),
+    ];
     drawn.extend(spans);
     Line::from(drawn).style(style)
 }
@@ -2740,6 +2797,7 @@ fn refusal_spans(state: &State) -> Vec<Span<'static>> {
         varde::preview::Refusal::NoLastSession => {
             " nothing to restart — start a launch configuration first ".to_string()
         }
+        varde::preview::Refusal::NoRunMark => " nothing on this line to run ".to_string(),
         varde::preview::Refusal::SetValueFailed(why) => format!(" could not set: {why} "),
     };
     vec![Span::styled(wording, Style::default().fg(WARNING))]
