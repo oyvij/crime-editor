@@ -416,13 +416,24 @@ pub fn strip_transport(state: &crate::State) -> Vec<crate::Chip> {
             // a Chip that lies. What it is for is the session that ended,
             // below.
             restart(true),
-            // The last two name no key and do nothing yet: `\u{2423}a` is issue
-            // #70's to bind and the thread to jump to is #65's to count, and a
-            // Chip teaching a key nobody bound is the cheatsheet contract
-            // broken from the other end. Dimmed until then, because a dimmed
-            // Chip does nothing and that is exactly what these do.
+            // Ask-AI names no key and does nothing yet: `\u{2423}a` is issue
+            // #70's to bind, and a Chip teaching a key nobody bound is the
+            // cheatsheet contract broken from the other end. Dimmed until
+            // then, because a dimmed Chip does nothing and that is exactly
+            // what it does.
             chip(ASK_AI, "ask-ai", "\u{2736}", "", Hue::Plain, true),
-            chip(NEXT_THREAD, "next-thread", "\u{21c9}", "", Hue::Plain, true),
+            // Counting the other Paused threads, dimmed at none. No key of
+            // its own: Enter on a flagged thread in the Frames is the
+            // keyboard's way there, and it reaches every one, not only the
+            // next.
+            chip(
+                NEXT_THREAD,
+                "next-thread",
+                &format!("\u{21c9}{}", session.others.len()),
+                "",
+                Hue::Plain,
+                session.others.is_empty(),
+            ),
         ]);
     }
     if state.debug.is_none() && state.last_launch.is_some() {
@@ -551,6 +562,15 @@ pub struct Session {
     /// A pause asked for before any thread was known, so it waits on the
     /// `threads` answer that names one.
     pausing: bool,
+    /// Every thread the adapter named, in its order, asked for again at every
+    /// `stopped`: a worker started since the last pause is a thread nobody
+    /// would otherwise find.
+    threads: Vec<(i64, String)>,
+    /// The Paused threads other than the one being inspected, and why each
+    /// stopped — so the one jumped to shows its exception as it would have
+    /// had it been first. The inspected thread is never in it: one thread in
+    /// two places is a count that is off by one.
+    others: BTreeMap<i64, (Why, Option<String>)>,
     /// What the locals held at the pause before this one, by name, under the
     /// name of the Frame they belong to — and `None` until a pause has been
     /// left behind. This is what an Inline value is marked as changed against,
@@ -666,6 +686,9 @@ pub struct Pause {
     /// How many children of a reference have arrived, which is where its next
     /// page starts.
     fetched: BTreeMap<i64, usize>,
+    /// The runs of Library frames the reader unfolded, by the index of the
+    /// run's first Frame. Per pause, since the next stack is another stack.
+    unfolded: BTreeSet<usize>,
 }
 
 /// One member of the Variables tree as the adapter named it.
@@ -829,6 +852,8 @@ pub struct Frame {
     pub name: String,
     pub file: Option<PathBuf>,
     pub line: usize,
+    /// Outside the workspace, or hinted by the adapter as not worth showing.
+    pub library: bool,
 }
 
 /// Why the edge stopped holding an adapter. Missing is its own case because it
@@ -877,6 +902,8 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
         asked: BTreeMap::new(),
         verdicts: BTreeMap::new(),
         pausing: false,
+        threads: Vec::new(),
+        others: BTreeMap::new(),
         previous: None,
         can_set: false,
         can_cancel: false,
@@ -1092,26 +1119,41 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
             vec![ask(session, &request, Value::Object(args))]
         }
         "stackTrace" => {
+            let root = &next.root;
             let frames = message["body"]["stackFrames"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .map(|frame| Frame {
-                    id: frame["id"].as_i64().unwrap_or_default(),
-                    name: printable(frame["name"].as_str().unwrap_or_default()),
-                    file: frame["source"]["path"]
+                .map(|frame| {
+                    let file = frame["source"]["path"]
                         .as_str()
                         .map(printable)
-                        .map(PathBuf::from),
-                    line: frame["line"].as_u64().unwrap_or_default() as usize,
+                        .map(PathBuf::from);
+                    Frame {
+                        id: frame["id"].as_i64().unwrap_or_default(),
+                        name: printable(frame["name"].as_str().unwrap_or_default()),
+                        // A Frame with no source is outside the workspace
+                        // too: there is nothing of the reader's to open.
+                        library: file.as_ref().is_none_or(|file| !file.starts_with(root))
+                            || frame["presentationHint"] == "subtle"
+                            || frame["source"]["presentationHint"] == "deemphasize",
+                        file,
+                        line: frame["line"].as_u64().unwrap_or_default() as usize,
+                    }
                 })
                 .collect();
+            // Filed only against the thread it was asked about: a jump to
+            // another thread while one was in flight would otherwise show
+            // this thread's calls under that one's name.
             let Phase::Paused(pause) = &mut session.phase else {
                 return Vec::new();
             };
+            if arguments["threadId"].as_i64() != Some(pause.thread) {
+                return Vec::new();
+            }
             pause.frames = frames;
             pause.chosen = 0;
-            next.frames_selection = 0;
+            next.frames_selection = row_of(next, 0);
             inspect(next)
         }
         // One level of one reference. Appended, never replacing: the only
@@ -1245,12 +1287,31 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
             }
             Vec::new()
         }
-        "threads" if session.pausing => {
-            session.pausing = false;
-            match message["body"]["threads"][0]["id"].as_i64() {
-                Some(thread) => vec![ask(session, "pause", json!({ "threadId": thread }))],
+        "threads" => {
+            session.threads = message["body"]["threads"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|thread| {
+                    let name = printable(thread["name"].as_str().unwrap_or_default());
+                    Some((thread["id"].as_i64()?, name))
+                })
+                .collect();
+            if !std::mem::take(&mut session.pausing) {
+                return Vec::new();
+            }
+            match session.threads.first() {
+                Some(&(thread, _)) => vec![ask(session, "pause", json!({ "threadId": thread }))],
                 None => Vec::new(),
             }
+        }
+        // The protocol's default is that every thread ran, whatever was
+        // asked: only an adapter that says otherwise leaves the others Paused.
+        "continue" => {
+            if message["body"]["allThreadsContinued"] != Value::Bool(false) {
+                session.others.clear();
+            }
+            Vec::new()
         }
         "disconnect" => {
             let mut effects = end(next);
@@ -1268,12 +1329,22 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
         Some("stopped") => {
             let session = next.debug.as_mut().expect("a session");
             let thread = body["threadId"].as_i64().unwrap_or_default();
+            let why = match body["reason"].as_str() {
+                Some("exception") => Why::Exception,
+                _ => Why::Paused,
+            };
+            let exception = body["text"].as_str().map(printable);
             // Only a running program, or the thread being inspected, moves the
-            // inspection: a second thread pausing leaves the view where it is,
-            // and a session being stopped is not brought back.
+            // inspection: a second thread pausing leaves the view where it is
+            // and is counted instead, and a session being stopped is not
+            // brought back.
             match &session.phase {
                 Phase::Running(_) => {}
                 Phase::Paused(pause) if pause.thread == thread => {}
+                Phase::Paused(_) => {
+                    session.others.insert(thread, (why, exception));
+                    return vec![ask(session, "threads", json!({}))];
+                }
                 _ => return Vec::new(),
             }
             // What the pause now ending held, kept for the one pause that
@@ -1292,28 +1363,14 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
                     .unwrap_or_default();
                 (frame, locals(pause))
             });
-            session.phase = Phase::Paused(Pause {
-                thread,
-                why: match body["reason"].as_str() {
-                    Some("exception") => Why::Exception,
-                    _ => Why::Paused,
-                },
-                exception: body["text"].as_str().map(printable),
-                frames: Vec::new(),
-                chosen: 0,
-                scopes: Vec::new(),
-                children: BTreeMap::new(),
-                open: BTreeSet::new(),
-                fetched: BTreeMap::new(),
-            });
-            let effect = ask(session, "stackTrace", json!({ "threadId": thread }));
+            let effects = inspect_thread(session, thread, why, exception);
             // The Debug group and the Frames come forward; the keyboard stays
             // where it was, since a pause is something the program did, not
             // the reader. What the reader shows instead is not moved again
             // until the next pause.
             next.corner = layout::Corner::Frames;
             next.strip = layout::Group::Debug;
-            vec![effect]
+            effects
         }
         // An adapter may learn what it can do after `initialize` answered —
         // a language plugin loading, a program attached to — and says so with
@@ -1346,10 +1403,22 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
             }
             Vec::new()
         }
+        // Another thread running on is one fewer held, and only the one
+        // being inspected running on dims the view.
         Some("continued") => {
             let session = next.debug.as_mut().expect("a session");
+            let every = body["allThreadsContinued"] == Value::Bool(true);
+            let thread = body["threadId"].as_i64().unwrap_or_default();
+            match every {
+                true => session.others.clear(),
+                false => {
+                    session.others.remove(&thread);
+                }
+            }
             if let Phase::Paused(pause) = &session.phase {
-                session.phase = Phase::Running(Some(pause.clone()));
+                if every || pause.thread == thread {
+                    session.phase = Phase::Running(Some(pause.clone()));
+                }
             }
             Vec::new()
         }
@@ -1500,7 +1569,13 @@ pub fn resume(next: &mut State) -> Vec<Effect> {
         Phase::Paused(pause) => {
             let (thread, last) = (pause.thread, pause.clone());
             session.phase = Phase::Running(Some(last));
-            vec![ask(session, "continue", json!({ "threadId": thread }))]
+            // Only this thread: the others are Paused requests the reader is
+            // holding open, and it is theirs to let go of one at a time.
+            vec![ask(
+                session,
+                "continue",
+                json!({ "threadId": thread, "singleThread": true }),
+            )]
         }
         // Pausing needs a thread, and a program that has never paused has
         // named none, so the adapter is asked for them first.
@@ -1596,18 +1671,102 @@ pub fn restart(next: &mut State) -> Vec<Effect> {
     effects
 }
 
-/// The Frame at `index` of the Frames becomes the inspected one, and the
-/// Paused line moves to its call.
-pub fn choose(next: &mut State, index: usize) -> Vec<Effect> {
+/// Enter or a click on the Frames' `row`: a Frame becomes the inspected one
+/// and the Paused line moves to its call, a folded run unfolds, and a thread
+/// flagged as Paused is jumped to — the keyboard's way to the next-thread
+/// Chip's reach, and to a thread other than the next.
+pub fn choose(next: &mut State, row: usize) -> Vec<Effect> {
+    let chosen = frame_rows(next).get(row).cloned();
+    if let Some(FrameRow::Thread {
+        id, paused: true, ..
+    }) = chosen
+    {
+        return jump(next, id);
+    }
     let Some(Phase::Paused(pause)) = next.debug.as_mut().map(|s| &mut s.phase) else {
         return Vec::new();
     };
-    if index >= pause.frames.len() {
-        return Vec::new();
+    match chosen {
+        Some(FrameRow::Frame(index)) => {
+            pause.chosen = index;
+            next.frames_selection = row;
+            inspect(next)
+        }
+        Some(FrameRow::Library { start, .. }) => {
+            pause.unfolded.insert(start);
+            Vec::new()
+        }
+        _ => Vec::new(),
     }
-    pause.chosen = index;
-    next.frames_selection = index;
-    inspect(next)
+}
+
+/// The next-thread Chip: the Paused thread after the inspected one, by the
+/// adapter's number, round to the first.
+pub fn next_thread(next: &mut State) -> Vec<Effect> {
+    let Some(session) = next.debug.as_ref() else {
+        return Vec::new();
+    };
+    let after = match &session.phase {
+        Phase::Paused(pause) => pause.thread,
+        _ => i64::MIN,
+    };
+    let mut held = session.others.keys();
+    let Some(&thread) = held.clone().find(|id| **id > after).or(held.next()) else {
+        return Vec::new();
+    };
+    let effects = jump(next, thread);
+    lit(next, NEXT_THREAD, &effects);
+    effects
+}
+
+/// `thread`, held Paused elsewhere, becomes the inspected one, and the one it
+/// replaces is held in its place — it is still Paused, only no longer looked
+/// at. From a running program too, since a thread held open does not stop
+/// being there because the inspected one ran on.
+fn jump(next: &mut State, thread: i64) -> Vec<Effect> {
+    let Some(session) = next.debug.as_mut() else {
+        return Vec::new();
+    };
+    let leaving = match &session.phase {
+        Phase::Paused(pause) => Some((pause.thread, (pause.why, pause.exception.clone()))),
+        Phase::Running(_) => None,
+        _ => return Vec::new(),
+    };
+    let Some((why, exception)) = session.others.remove(&thread) else {
+        return Vec::new();
+    };
+    session.others.extend(leaving);
+    // Another thread's locals are not this one's earlier values: marking what
+    // changed against them marks names that never moved.
+    session.previous = None;
+    inspect_thread(session, thread, why, exception)
+}
+
+/// `thread` becomes the one inspected, Paused as it stopped: its stack asked
+/// for, and the threads again, since the one that stopped may be new.
+fn inspect_thread(
+    session: &mut Session,
+    thread: i64,
+    why: Why,
+    exception: Option<String>,
+) -> Vec<Effect> {
+    session.others.remove(&thread);
+    session.phase = Phase::Paused(Pause {
+        thread,
+        why,
+        exception,
+        frames: Vec::new(),
+        chosen: 0,
+        scopes: Vec::new(),
+        children: BTreeMap::new(),
+        open: BTreeSet::new(),
+        fetched: BTreeMap::new(),
+        unfolded: BTreeSet::new(),
+    });
+    vec![
+        ask(session, "stackTrace", json!({ "threadId": thread })),
+        ask(session, "threads", json!({})),
+    ]
 }
 
 /// What is on screen from the last pause: the pause itself while one holds,
@@ -1643,9 +1802,88 @@ pub fn title(state: &State) -> &'static str {
     }
 }
 
-/// The Frames the Corner lists, empty while no pause has anything to show.
+/// The Frames of the thread being inspected, empty while no pause has
+/// anything to show.
 pub fn frames(state: &State) -> &[Frame] {
     showing(state).map_or(&[], |pause| &pause.frames)
+}
+
+/// One row of the Frames as the Corner draws it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrameRow {
+    /// A thread, heading its Frames. `paused` flags a thread Paused other
+    /// than the one being inspected: a request the reader is holding open.
+    Thread { id: i64, name: String, paused: bool },
+    /// The inspected thread's Frame at this index of [`frames`].
+    Frame(usize),
+    /// A run of Library frames folded into one row, by where it starts and
+    /// how many it holds.
+    Library { start: usize, count: usize },
+}
+
+/// The Frames grouped by thread: the inspected one first with its calls, so
+/// what is being looked at never moves down as threads start, then every
+/// other thread the adapter named. Read by `ui` to draw, by `mouse` to
+/// hit-test and by `update` to act on the row chosen, so the three cannot
+/// disagree about what a row is.
+///
+/// A run holding the chosen Frame never folds: a pause inside a library is
+/// the one place its calls are the point.
+pub fn frame_rows(state: &State) -> Vec<FrameRow> {
+    let (Some(session), Some(pause)) = (state.debug.as_ref(), showing(state)) else {
+        return Vec::new();
+    };
+    let thread = |id: i64| FrameRow::Thread {
+        id,
+        name: session
+            .threads
+            .iter()
+            .find(|(named, _)| *named == id)
+            .map_or_else(|| format!("thread {id}"), |(_, name)| name.clone()),
+        paused: session.others.contains_key(&id),
+    };
+    let mut rows = vec![thread(pause.thread)];
+    let mut index = 0;
+    while index < pause.frames.len() {
+        let run = pause.frames[index..]
+            .iter()
+            .take_while(|frame| frame.library)
+            .count();
+        let folds = run > 0
+            && !pause.unfolded.contains(&index)
+            && !(index..index + run).contains(&pause.chosen);
+        match folds {
+            true => rows.push(FrameRow::Library {
+                start: index,
+                count: run,
+            }),
+            false => rows.extend((index..index + run.max(1)).map(FrameRow::Frame)),
+        }
+        index += run.max(1);
+    }
+    let mut others: Vec<i64> = session.threads.iter().map(|(id, _)| *id).collect();
+    others.extend(
+        session
+            .others
+            .keys()
+            .filter(|id| !others.contains(id))
+            .collect::<Vec<_>>(),
+    );
+    rows.extend(
+        others
+            .into_iter()
+            .filter(|id| *id != pause.thread)
+            .map(thread),
+    );
+    rows
+}
+
+/// The row the Frame at `index` is drawn on.
+fn row_of(state: &State, index: usize) -> usize {
+    frame_rows(state)
+        .iter()
+        .position(|row| *row == FrameRow::Frame(index))
+        .unwrap_or_default()
 }
 
 /// The Variables as they are drawn: the exception that paused the program if
@@ -3299,7 +3537,9 @@ pub(crate) fn paused(mut state: State) -> State {
             "body": {"stackFrames": [{"id": 1, "name": "main", "line": 1, "source": {"path": "/w/one.rs"}}]}})
         .to_string(),
     );
-    state
+    // Settled as `update` leaves every message the edge hands it, so the
+    // first event a test sends is not the one that scrolls to the Frame.
+    crate::settle(state, Vec::new(), false).0
 }
 
 #[cfg(test)]
@@ -3938,7 +4178,9 @@ mod tests {
         let mut state = paused(State::default());
         let other =
             r#"{"type":"event","event":"stopped","body":{"threadId":2,"reason":"breakpoint"}}"#;
-        assert_eq!(received(&mut state, other), vec![]);
+        let asked = sent(&received(&mut state, other));
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0]["command"], "threads");
         assert_eq!(paused_line(&state).map(|(_, line, _)| line), Some(1));
         stop(&mut state);
         assert_eq!(received(&mut state, other), vec![]);
@@ -3946,6 +4188,166 @@ mod tests {
             state.debug.map(|session| session.phase),
             Some(Phase::Stopping)
         );
+    }
+
+    /// Thread 2 stopped at `/w/two.rs` line 7 while thread 1 is inspected.
+    fn two_paused() -> State {
+        let mut state = paused(State::default());
+        received(
+            &mut state,
+            r#"{"type":"event","event":"stopped","body":{"threadId":2,"reason":"exception","text":"boom"}}"#,
+        );
+        state
+    }
+
+    /// The adapter's answer to the stack `thread` was asked for, oldest first.
+    fn answer_stack(state: &mut State, frames: Value) {
+        let seq = outstanding(state, "stackTrace");
+        received(
+            state,
+            &json!({"type": "response", "request_seq": seq, "success": true,
+                "command": "stackTrace", "body": {"stackFrames": frames}})
+            .to_string(),
+        );
+    }
+
+    /// The shapes of a Library frame no scenario spells out — the Frame's own
+    /// `subtle` hint and a call with no source at all — and the one run that
+    /// never folds: the one the program is Paused in.
+    #[test]
+    fn library_runs_fold_except_the_one_holding_the_chosen_frame() {
+        let mut state = paused(State {
+            root: PathBuf::from("/w"),
+            ..State::default()
+        });
+        received(
+            &mut state,
+            r#"{"type":"event","event":"stopped","body":{"threadId":1,"reason":"step"}}"#,
+        );
+        answer_stack(
+            &mut state,
+            json!([
+                {"id": 1, "name": "panic", "line": 1, "source": {"path": "/rust/panic.rs"}},
+                {"id": 2, "name": "mine", "line": 2, "source": {"path": "/w/one.rs"}},
+                {"id": 3, "name": "shim", "line": 3, "source": {"path": "/w/shim.rs"}, "presentationHint": "subtle"},
+                {"id": 4, "name": "start", "line": 0},
+                {"id": 5, "name": "main", "line": 4, "source": {"path": "/w/main.rs"}},
+            ]),
+        );
+        let rows = frame_rows(&state);
+        assert_eq!(
+            rows[1..],
+            [
+                FrameRow::Frame(0),
+                FrameRow::Frame(1),
+                FrameRow::Library { start: 2, count: 2 },
+                FrameRow::Frame(4),
+            ]
+        );
+        // The selection lands on the chosen Frame, below its thread.
+        assert_eq!(state.frames_selection, 1);
+    }
+
+    /// A `continue` answered without saying otherwise let every thread go —
+    /// the protocol's default — so nothing is held any more; one that says
+    /// only the asked thread ran leaves the others flagged.
+    #[test]
+    fn a_continue_that_ran_every_thread_lets_the_others_go() {
+        for (all, held) in [(json!(null), 0), (json!(true), 0), (json!(false), 1)] {
+            let mut state = two_paused();
+            resume(&mut state);
+            let seq = outstanding(&state, "continue");
+            received(
+                &mut state,
+                &json!({"type": "response", "request_seq": seq, "success": true,
+                    "command": "continue", "body": {"allThreadsContinued": all}})
+                .to_string(),
+            );
+            let session = state.debug.as_ref().expect("a session");
+            assert_eq!(session.others.len(), held, "{all}");
+        }
+    }
+
+    /// Another thread running on is one fewer held, and leaves the view on
+    /// the inspected thread undimmed.
+    #[test]
+    fn another_thread_continuing_leaves_the_inspected_one_paused() {
+        let mut state = two_paused();
+        received(
+            &mut state,
+            r#"{"type":"event","event":"continued","body":{"threadId":2}}"#,
+        );
+        assert!(!stale(&state));
+        assert!(state.debug.as_ref().expect("a session").others.is_empty());
+    }
+
+    /// `continued` is optional, so a held thread can stop again with nobody
+    /// having said it ran. Inspected then, it is not also counted as held.
+    #[test]
+    fn a_held_thread_stopping_again_is_inspected_and_no_longer_counted() {
+        let mut state = two_paused();
+        resume(&mut state);
+        received(
+            &mut state,
+            r#"{"type":"event","event":"stopped","body":{"threadId":2,"reason":"step"}}"#,
+        );
+        let session = state.debug.as_ref().expect("a session");
+        assert!(matches!(&session.phase, Phase::Paused(pause) if pause.thread == 2));
+        assert!(session.others.is_empty());
+    }
+
+    /// Jumping moves the inspection and holds the thread it left, in turn and
+    /// round to the first; a stack answered for the thread left behind is not
+    /// filed under the one jumped to, and nothing is marked changed against
+    /// another thread's values.
+    #[test]
+    fn the_next_thread_is_inspected_and_the_one_left_is_held() {
+        let mut state = two_paused();
+        let asked = sent(&next_thread(&mut state));
+        assert_eq!(asked[0]["command"], "stackTrace");
+        assert_eq!(asked[0]["arguments"]["threadId"], 2);
+        let session = state.debug.as_ref().expect("a session");
+        assert_eq!(session.previous, None);
+        assert!(session.others.contains_key(&1));
+        assert_eq!(state.transport_lit, Some(NEXT_THREAD));
+        let Some(Phase::Paused(pause)) = state.debug.as_ref().map(|s| &s.phase) else {
+            panic!("not paused");
+        };
+        assert_eq!(
+            (pause.why, pause.exception.as_deref()),
+            (Why::Exception, Some("boom"))
+        );
+        // Thread 2's own stack, then a late one for thread 1 that must not land.
+        answer_stack(
+            &mut state,
+            json!([{"id": 9, "name": "work", "line": 7, "source": {"path": "/w/two.rs"}}]),
+        );
+        assert_eq!(frames(&state)[0].name, "work");
+        let late = next_thread(&mut state);
+        assert_eq!(sent(&late)[0]["arguments"]["threadId"], 1);
+        next_thread(&mut state);
+        let seq = outstanding(&state, "stackTrace");
+        received(
+            &mut state,
+            &json!({"type": "response", "request_seq": seq, "success": true, "command": "stackTrace",
+                "body": {"stackFrames": [{"id": 1, "name": "main", "line": 1}]}})
+            .to_string(),
+        );
+        assert!(frames(&state).is_empty());
+    }
+
+    /// Enter on a thread flagged as Paused goes to it, as the Chip does; on
+    /// the inspected thread's own header it does nothing.
+    #[test]
+    fn choosing_a_flagged_thread_jumps_to_it() {
+        let mut state = two_paused();
+        assert_eq!(choose(&mut state, 0), vec![]);
+        let flagged = frame_rows(&state)
+            .iter()
+            .position(|row| matches!(row, FrameRow::Thread { paused: true, .. }))
+            .expect("thread 2 is flagged");
+        let asked = sent(&choose(&mut state, flagged));
+        assert_eq!(asked[0]["arguments"]["threadId"], 2);
     }
 
     /// A `threads` that failed leaves F9 able to ask again.

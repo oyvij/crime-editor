@@ -2698,7 +2698,7 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
             history_rows,
             corner_rows(&next),
         );
-        let frame_rows = debug::frames(&next).len();
+        let frame_rows = debug::frame_rows(&next).len();
         next.frames_selection = next.frames_selection.min(frame_rows.saturating_sub(1));
         next.frames_scroll = layout::viewport(
             next.frames_scroll,
@@ -4589,7 +4589,7 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                     next.frames_scroll = wheeled_to(
                         direction,
                         state.frames_scroll,
-                        debug::frames(state).len(),
+                        debug::frame_rows(state).len(),
                         corner_rows(state),
                     );
                     vec![]
@@ -8058,10 +8058,11 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         // The Variables' Transport, each Chip straight through to the event
         // its key already had, for the reason the Reading's are: a click and
         // the key are one gesture, so they are one event and not two paths
-        // that can drift. `ask-ai` and `next-thread` have Chips and no arm
-        // yet — their actions are issues #70 and #65, and a name from nowhere
-        // does nothing rather than guessing.
+        // that can drift. `ask-ai` has a Chip and no arm yet — its action is
+        // issue #70, and a name from nowhere does nothing rather than
+        // guessing. `next-thread` has no key, so it is no event either.
         Event::PaneAction(debug::RESUME) => return Ok(update(state, Event::DebugResume)),
+        Event::PaneAction(debug::NEXT_THREAD) => debug::next_thread(&mut next),
         Event::PaneAction(debug::STEP_OVER) => {
             return Ok(update(state, Event::DebugStep(debug::Step::Over)));
         }
@@ -8241,7 +8242,7 @@ fn on_move_selection(state: &State, mut next: State, event: Event, wheeled: bool
         }
 
         Event::MoveSelection(direction) if state.focus == Pane::Frames => {
-            let last = debug::frames(state).len().saturating_sub(1);
+            let last = debug::frame_rows(state).len().saturating_sub(1);
             next.frames_selection = match direction {
                 Direction::Down => (state.frames_selection + 1).min(last),
                 Direction::Up => state.frames_selection.saturating_sub(1),

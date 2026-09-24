@@ -920,7 +920,7 @@ fn breakpoints_lines(state: &State, width: u16) -> Vec<Line<'static>> {
     lines
 }
 
-/// One row per Frame of the Paused thread, the inspected one marked.
+/// The Frames grouped by thread, the inspected call marked.
 fn frames_widget(state: &State, width: u16) -> Paragraph<'static> {
     let widget = Paragraph::new(frames_lines(state, width))
         .scroll((state.frames_scroll as u16, 0))
@@ -941,20 +941,49 @@ fn dimmed_while_running(state: &State, widget: Paragraph<'static>) -> Paragraph<
 }
 
 /// Split out of `frames_widget` for the reason `risk_lines` is: a `Paragraph`
-/// will not give its text back. The call's name first and its place after, the
+/// will not give its text back. A thread heads its calls, flagged when it is
+/// held Paused elsewhere; a call's name comes first and its place after, the
 /// name cut before the place is: which call it is reads off the name, and the
-/// file and line are the Paused line the row would move to.
+/// file and line are the Paused line the row would move to. A folded run of
+/// Library frames is one dimmed row that says how many.
 fn frames_lines(state: &State, width: u16) -> Vec<Line<'static>> {
+    use varde::debug::FrameRow;
     let inner = width.saturating_sub(2) as usize;
     let chosen = varde::debug::paused_line(state);
-    varde::debug::frames(state)
+    let frames = varde::debug::frames(state);
+    varde::debug::frame_rows(state)
         .iter()
         .enumerate()
-        .map(|(index, frame)| {
-            let mut style = match index == state.frames_selection {
+        .map(|(index, row)| {
+            let style = match index == state.frames_selection {
                 true => Style::default().add_modifier(Modifier::REVERSED),
                 false => Style::default(),
             };
+            let frame = match row {
+                FrameRow::Thread { name, paused, .. } => {
+                    let flag = match paused {
+                        true => " \u{2016}",
+                        false => "",
+                    };
+                    let room = inner.saturating_sub(flag.width() + 1);
+                    return Line::from(vec![
+                        Span::styled(
+                            format!(" {:<room$}", truncate(name, room)),
+                            style.add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(flag, style.fg(Color::Yellow)),
+                    ]);
+                }
+                FrameRow::Library { count, .. } => {
+                    let text = format!("   \u{22ef} {count} library frames");
+                    return Line::from(Span::styled(
+                        format!("{:<inner$}", truncate(&text, inner)),
+                        style.add_modifier(Modifier::DIM),
+                    ));
+                }
+                FrameRow::Frame(index) => &frames[*index],
+            };
+            let mut style = style;
             let place = match &frame.file {
                 Some(file) => format!(
                     " {}:{} ",
@@ -968,10 +997,10 @@ fn frames_lines(state: &State, width: u16) -> Vec<Line<'static>> {
             }) {
                 style = style.add_modifier(Modifier::BOLD);
             }
-            let room = inner.saturating_sub(place.width() + 1);
+            let room = inner.saturating_sub(place.width() + 3);
             let name = truncate(&frame.name, room);
             Line::from(vec![
-                Span::styled(format!(" {name:<room$}"), style),
+                Span::styled(format!("   {name:<room$}"), style),
                 Span::styled(place, style.fg(Color::DarkGray)),
             ])
         })

@@ -314,7 +314,7 @@ struct FakeAdapter {
     sent: Vec<Value>,
     /// The call stack each thread answers `stackTrace` with: name, file, line
     /// and presentation hint.
-    stacks: BTreeMap<i64, Vec<(String, PathBuf, usize)>>,
+    stacks: BTreeMap<i64, Vec<(String, PathBuf, usize, String)>>,
     /// The scopes the chosen Frame answers `scopes` with, by name, and the
     /// reference each is asked for its members by.
     scopes: Vec<(String, i64)>,
@@ -701,13 +701,22 @@ impl VardeWorld {
                     .into_iter()
                     .flatten()
                     .enumerate()
-                    .map(|(id, (name, file, line))| {
-                        json!({ "id": id, "name": name, "line": line, "source": { "path": file } })
+                    .map(|(id, (name, file, line, hint))| {
+                        let mut source = json!({ "path": file });
+                        if !hint.is_empty() {
+                            source["presentationHint"] = json!(hint);
+                        }
+                        json!({ "id": id, "name": name, "line": line, "source": source })
                     })
                     .collect();
                 json!({ "stackFrames": frames })
             }
             Some("disconnect") => json!({}),
+            // As an adapter that can run one thread alone answers: only what
+            // was asked for ran on.
+            Some("continue") => json!({
+                "allThreadsContinued": message["arguments"]["singleThread"] != json!(true)
+            }),
             Some("scopes") => {
                 let scopes: Vec<Value> = self
                     .dap
@@ -14339,7 +14348,7 @@ fn stopped_at(world: &mut VardeWorld, thread: i64, file: &str, line: usize, reas
         .dap
         .stacks
         .entry(thread)
-        .or_insert_with(|| vec![("main".to_string(), path.clone(), line)]);
+        .or_insert_with(|| vec![("main".to_string(), path.clone(), line, String::new())]);
     // Where the program stopped is the top of its stack, whatever the pause
     // before it left there: a second `stopped` event naming another line with
     // the stack still pointing at the first is a program that never moved.
@@ -14452,8 +14461,8 @@ fn debug_session_is_paused_in(
     outer_line: usize,
 ) {
     let stack = vec![
-        (inner, abs(world, &inner_file), inner_line),
-        (outer, abs(world, &outer_file), outer_line),
+        (inner, abs(world, &inner_file), inner_line, String::new()),
+        (outer, abs(world, &outer_file), outer_line, String::new()),
     ];
     world.dap.stacks.insert(1, stack);
     session_running(world);
@@ -14563,6 +14572,13 @@ fn adapter_sent_for_thread(world: &mut VardeWorld, command: String, thread: i64)
         last_request(world, &command)["arguments"]["threadId"],
         thread
     );
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for thread {int} alone")]
+fn adapter_sent_for_thread_alone(world: &mut VardeWorld, command: String, thread: i64) {
+    let arguments = &last_request(world, &command)["arguments"];
+    assert_eq!(arguments["threadId"], thread);
+    assert_eq!(arguments["singleThread"], true);
 }
 
 #[then(expr = "the Debug adapter was sent a {string} request with {string} {word}")]
@@ -14733,12 +14749,15 @@ fn corner_holds_frames(world: &mut VardeWorld) {
 #[when(expr = "I choose the Frame {string}")]
 #[given(expr = "I choose the Frame {string}")]
 fn choose_frame(world: &mut VardeWorld, name: String) {
-    let index = varde::debug::frames(&world.state)
+    let frames = varde::debug::frames(&world.state);
+    let index = varde::debug::frame_rows(&world.state)
         .iter()
-        .position(|frame| frame.name == name)
+        .position(
+            |row| matches!(row, varde::debug::FrameRow::Frame(at) if frames[*at].name == name),
+        )
         .unwrap_or_else(|| panic!("no Frame {name:?}"));
     let corner = world.panes().corner;
-    let row = corner.y + 1 + index as u16;
+    let row = corner.y + 1 + (index - world.state.frames_scroll) as u16;
     world.report(mouse::Kind::LeftDown, corner.x + 2, row);
     world.report(mouse::Kind::LeftUp, corner.x + 2, row);
 }
@@ -14834,6 +14853,138 @@ fn variables_title_says(world: &mut VardeWorld, said: String) {
 
 /// What the last pause left on screen is drawn dimmed — one answer for both
 /// panes, because it is one fact about the session rather than two.
+/// A header row names the file, line and, where the scenario gives one, the
+/// adapter's presentation hint. The thread's name is what the canned
+/// `threads` answer calls it.
+#[given(expr = "the Debug adapter's stack for thread {int} {string} is:")]
+fn adapter_stack_is(world: &mut VardeWorld, thread: i64, _name: String, step: &Step) {
+    let table = step.table().expect("table");
+    let hints = table.rows[0].iter().position(|column| column == "hint");
+    let stack = table.rows[1..]
+        .iter()
+        .map(|row| {
+            let hint = hints.map_or(String::new(), |at| row[at].clone());
+            (
+                row[0].clone(),
+                abs(world, &row[1]),
+                row[2].parse().expect("a line"),
+                hint,
+            )
+        })
+        .collect();
+    world.dap.stacks.insert(thread, stack);
+}
+
+/// Library frames outside the workspace, named as the scenario that unfolds
+/// them expects the run to read.
+#[given(
+    expr = "a Debug session is Paused with {int} Library frames folded between {string} and {string}"
+)]
+fn paused_with_library_frames(world: &mut VardeWorld, count: usize, inner: String, outer: String) {
+    let mut stack = vec![(inner, abs(world, "src/lib.rs"), 8, String::new())];
+    stack.extend(
+        ["call_once", "poll", "run"]
+            .iter()
+            .cycle()
+            .take(count)
+            .map(|name| {
+                let file = PathBuf::from(format!("/home/me/.cargo/registry/{name}.rs"));
+                (name.to_string(), file, 1, String::new())
+            }),
+    );
+    stack.push((outer, abs(world, "src/main.rs"), 4, String::new()));
+    world.dap.stacks.insert(1, stack);
+    session_running(world);
+    stopped_at(world, 1, "src/lib.rs", 8, "breakpoint");
+}
+
+#[given(expr = "the Frames have focus")]
+fn frames_have_focus(world: &mut VardeWorld) {
+    world.state.focus = Pane::Frames;
+}
+
+#[given(expr = "the Frames selection is the folded row")]
+fn frames_selection_is_folded(world: &mut VardeWorld) {
+    world.state.frames_selection = varde::debug::frame_rows(&world.state)
+        .iter()
+        .position(|row| matches!(row, varde::debug::FrameRow::Library { .. }))
+        .expect("a folded row");
+}
+
+/// Each Frame under the thread whose header it follows.
+#[then(expr = "the Frames are:")]
+fn frames_are(world: &mut VardeWorld, step: &Step) {
+    let mut thread = String::new();
+    let mut shown = Vec::new();
+    let frames = varde::debug::frames(&world.state);
+    for row in varde::debug::frame_rows(&world.state) {
+        match row {
+            varde::debug::FrameRow::Thread { name, .. } => thread = name,
+            varde::debug::FrameRow::Frame(index) => {
+                shown.push(vec![thread.clone(), frames[index].name.clone()])
+            }
+            varde::debug::FrameRow::Library { .. } => {}
+        }
+    }
+    let expected: Vec<Vec<String>> = step.table().expect("table").rows[1..].to_vec();
+    assert_eq!(shown, expected);
+}
+
+/// The inspected thread's rows under its header: a Frame by its name, a
+/// folded run by how many it holds.
+#[then(expr = "the Frames rows are:")]
+fn frames_rows_are(world: &mut VardeWorld, step: &Step) {
+    let frames = varde::debug::frames(&world.state);
+    let shown: Vec<Vec<String>> = varde::debug::frame_rows(&world.state)
+        .into_iter()
+        .filter_map(|row| match row {
+            varde::debug::FrameRow::Thread { .. } => None,
+            varde::debug::FrameRow::Frame(index) => {
+                Some(vec!["frame".to_string(), frames[index].name.clone()])
+            }
+            varde::debug::FrameRow::Library { count, .. } => {
+                Some(vec!["library".to_string(), count.to_string()])
+            }
+        })
+        .collect();
+    let expected: Vec<Vec<String>> = step.table().expect("table").rows[1..].to_vec();
+    assert_eq!(shown, expected);
+}
+
+/// `ui` draws every folded run dimmed, so the row being one is the fact.
+#[then(expr = "the folded row is drawn dimmed")]
+fn folded_row_is_dimmed(world: &mut VardeWorld) {
+    assert!(varde::debug::frame_rows(&world.state)
+        .iter()
+        .any(|row| matches!(row, varde::debug::FrameRow::Library { .. })));
+}
+
+#[then(expr = "the Frames flag thread {int} as paused")]
+fn frames_flag_thread(world: &mut VardeWorld, thread: i64) {
+    assert!(
+        varde::debug::frame_rows(&world.state)
+            .iter()
+            .any(|row| matches!(
+                row,
+                varde::debug::FrameRow::Thread { id, paused: true, .. } if *id == thread
+            )),
+        "{:?}",
+        varde::debug::frame_rows(&world.state)
+    );
+}
+
+#[then(expr = "thread {int} is still Paused")]
+fn thread_still_paused(world: &mut VardeWorld, thread: i64) {
+    frames_flag_thread(world, thread);
+}
+
+#[then(expr = "the {string} Chip counts {int}")]
+fn chip_counts(world: &mut VardeWorld, name: String, count: usize) {
+    let glyph = chip(world, &name).glyph;
+    let digits: String = glyph.chars().filter(char::is_ascii_digit).collect();
+    assert_eq!(digits, count.to_string(), "{glyph:?}");
+}
+
 #[then(expr = "the Variables are drawn dimmed")]
 #[then(expr = "the Frames are drawn dimmed")]
 fn debug_panes_are_dimmed(world: &mut VardeWorld) {

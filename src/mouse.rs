@@ -700,7 +700,7 @@ fn pressed(
             let index = list_row(panes.corner, input.row, state.frames_scroll);
             let on_a_row = input.row > panes.corner.y
                 && input.row < panes.corner.bottom().saturating_sub(1)
-                && index < crate::debug::frames(state).len();
+                && index < crate::debug::frame_rows(state).len();
             match on_a_row {
                 true => vec![Event::ClickFrameRow(index)],
                 false => vec![Event::ClickPane(Pane::Frames)],
