@@ -1683,6 +1683,9 @@ pub enum Pointed {
     Elsewhere,
     Text(Place),
     Hover,
+    /// The gutter's Breakpoint column on this line, where an Unverified
+    /// breakpoint says why.
+    Breakpoint(usize),
 }
 
 /// The one selection the workspace holds. Its two representations do not merge
@@ -2977,6 +2980,7 @@ pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
     if moved {
         effects.push(Effect::SaveState(state_json(&next)));
     }
+    debug::forget_changed(&state.breakpoints, &mut next);
     // Every event passes through here for the reason it passes through the
     // scroll clamp: an arm that has to remember to tell the language server
     // what the buffer now holds is an arm that will forget. What has been sent
@@ -6586,7 +6590,7 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                     effects.extend(lsp::value_hover(&mut next, at));
                     effects
                 }
-                Pointed::Hover | Pointed::Elsewhere => Vec::new(),
+                Pointed::Hover | Pointed::Breakpoint(_) | Pointed::Elsewhere => Vec::new(),
             };
             return Ok((next, effects));
         }

@@ -4284,8 +4284,11 @@ fn click_line_number(world: &mut VardeWorld, line: usize) {
 /// Set as the core holds one, against what the file holds on the line. A file
 /// the scenario never described is given lines enough to hold it, so going to
 /// the Breakpoint lands on its line rather than clamping to an empty file's.
+/// Recorded in the project's state too, as setting it would have: a Then about
+/// what is remembered has to have something to find unchanged.
 #[given(expr = "a Breakpoint on {string} line {int}")]
 fn breakpoint_on(world: &mut VardeWorld, file: String, line: usize) {
+    let relative = file.clone();
     let file = abs(world, &file);
     world.files.entry(file.clone()).or_insert_with(|| {
         (1..=line)
@@ -4300,6 +4303,18 @@ fn breakpoint_on(world: &mut VardeWorld, file: String, line: usize) {
         .unwrap_or_default()
         .trim()
         .to_string();
+    let mut saved: serde_json::Value = world
+        .startup
+        .state_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let remembered = serde_json::json!({"file": relative, "line": line, "text": text});
+    match saved["breakpoints"].as_array_mut() {
+        Some(breakpoints) => breakpoints.push(remembered),
+        None => saved["breakpoints"] = serde_json::json!([remembered]),
+    }
+    world.startup.state_json = Some(saved.to_string());
     world.state.breakpoints.push(varde::debug::Breakpoint {
         file,
         line,
@@ -4516,9 +4531,87 @@ fn gutter_draws_breakpoint(world: &mut VardeWorld, line: usize, kind: String) {
     let drawn = match varde::debug::marks(&world.state).get(&line) {
         Some(varde::debug::Mark::Plain) => "plain",
         Some(varde::debug::Mark::Stale) => "stale",
+        Some(varde::debug::Mark::Unverified) => "unverified",
         None => "none",
     };
     assert_eq!(drawn, kind);
+}
+
+#[then(expr = "the gutter draws a Breakpoint on line {int}")]
+fn gutter_draws_a_breakpoint(world: &mut VardeWorld, line: usize) {
+    let marks = varde::debug::marks(&world.state);
+    assert!(marks.contains_key(&line), "gutter: {marks:?}");
+}
+
+#[then(expr = "the gutter draws no Breakpoint on line {int}")]
+fn gutter_draws_no_breakpoint(world: &mut VardeWorld, line: usize) {
+    let marks = varde::debug::marks(&world.state);
+    assert!(!marks.contains_key(&line), "gutter: {marks:?}");
+}
+
+#[then(expr = "the Breakpoint list lists {string} line {int}")]
+fn breakpoint_list_lists(world: &mut VardeWorld, file: String, line: usize) {
+    let file = abs(world, &file);
+    let rows: Vec<(PathBuf, usize)> = varde::debug::list(&world.state)
+        .into_iter()
+        .map(|breakpoint| (breakpoint.file.clone(), breakpoint.line))
+        .collect();
+    assert!(rows.contains(&(file, line)), "rows: {rows:?}");
+}
+
+/// The last `setBreakpoints` answered the way a real adapter answers it: one
+/// entry per line asked for, in order, each bound where it was set except the
+/// one the scenario names.
+fn answer_set_breakpoints(world: &mut VardeWorld, line: usize, verdict: Value) {
+    let request = last_request(world, "setBreakpoints").clone();
+    let breakpoints: Vec<Value> = request["arguments"]["breakpoints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|asked| match asked["line"].as_u64() == Some(line as u64) {
+            true => verdict.clone(),
+            false => json!({ "verified": true, "line": asked["line"] }),
+        })
+        .collect();
+    adapter_event(
+        world,
+        json!({ "type": "response", "request_seq": request["seq"], "success": true,
+                "command": "setBreakpoints", "body": { "breakpoints": breakpoints } }),
+    );
+}
+
+#[when(
+    expr = "the Debug adapter answers \"setBreakpoints\" for line {int} with verified false and message {string}"
+)]
+fn adapter_leaves_unbound(world: &mut VardeWorld, line: usize, message: String) {
+    answer_set_breakpoints(
+        world,
+        line,
+        json!({ "verified": false, "message": message }),
+    );
+}
+
+#[given(
+    expr = "the Debug adapter answers \"setBreakpoints\" for line {int} with verified true at line {int}"
+)]
+#[when(
+    expr = "the Debug adapter answers \"setBreakpoints\" for line {int} with verified true at line {int}"
+)]
+fn adapter_binds_elsewhere(world: &mut VardeWorld, line: usize, bound: usize) {
+    answer_set_breakpoints(world, line, json!({ "verified": true, "line": bound }));
+}
+
+/// Through the hit-test, resting on the Breakpoint column the gutter draws it in.
+#[then(expr = "line {int}'s Breakpoint explains {string} on hover")]
+fn breakpoint_explains_on_hover(world: &mut VardeWorld, line: usize, reason: String) {
+    let panes = world.panes();
+    let (_, row) = pointer_at(&world.state, &panes, Pane::Editor, (line, 1));
+    let column = panes.editor.x + 1 + layout::BREAKPOINT_COLUMN;
+    world.report(mouse::Kind::Moved, column, row);
+    assert_eq!(
+        varde::debug::explained(&world.state),
+        Some((line, reason.as_str()))
+    );
 }
 
 // ---- F38: terminal splits ----

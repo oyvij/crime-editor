@@ -1236,12 +1236,11 @@ fn resting(state: &State, panes: &Layout, input: Input) -> Pointed {
     {
         return Pointed::Elsewhere;
     }
-    Pointed::Text(place_in(
-        state,
-        panes,
-        Pane::Editor,
-        (input.column, input.row),
-    ))
+    let at = place_in(state, panes, Pane::Editor, (input.column, input.row));
+    match breakpoint_column(state, panes, input) {
+        true => Pointed::Breakpoint(at.line),
+        false => Pointed::Text(at),
+    }
 }
 
 /// A Chip on the Hover's top border, or one of its value rows. `None` where

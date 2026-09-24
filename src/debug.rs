@@ -35,22 +35,86 @@ pub struct Breakpoint {
 pub enum Mark {
     Plain,
     Stale,
+    Unverified,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Verdict {
+    Bound(usize),
+    Unbound(String),
+}
+
+/// Where the gutter draws a Breakpoint, how, and the adapter's reason for an
+/// Unverified one. Stale wins over whatever the adapter said: it is a claim
+/// about the text, which no answer changes. The adapter's word counts only
+/// while there is a program for it to be about — a session stopping has none,
+/// so a moved Breakpoint is back on its own line the moment the program ends
+/// rather than when the adapter lets go.
+fn drawn<'a>(state: &'a State, breakpoint: &Breakpoint) -> (usize, Mark, Option<&'a str>) {
+    let verdict = state
+        .debug
+        .as_ref()
+        .filter(|session| session.phase != Phase::Stopping)
+        .and_then(|session| {
+            session
+                .verdicts
+                .get(&(breakpoint.file.clone(), breakpoint.line))
+        });
+    match (breakpoint.stale, verdict) {
+        (true, _) => (breakpoint.line, Mark::Stale, None),
+        (false, None) => (breakpoint.line, Mark::Plain, None),
+        (false, Some(Verdict::Bound(line))) => (*line, Mark::Plain, None),
+        (false, Some(Verdict::Unbound(why))) => (breakpoint.line, Mark::Unverified, Some(why)),
+    }
 }
 
 /// The Breakpoints of the buffer on screen, by line, as the gutter draws them.
-pub fn marks(state: &crate::State) -> std::collections::BTreeMap<usize, Mark> {
+pub fn marks(state: &State) -> BTreeMap<usize, Mark> {
+    on_screen(state)
+        .map(|(line, mark, _)| (line, mark))
+        .collect()
+}
+
+/// The adapter's reason for not binding the Breakpoint the pointer rests on,
+/// and the line it is drawn on. None where it gave no reason, which would be
+/// an empty box.
+pub fn explained(state: &State) -> Option<(usize, &str)> {
+    let crate::Pointed::Breakpoint(line) = state.pointed_at else {
+        return None;
+    };
+    on_screen(state)
+        .find(|(drawn_on, _, _)| *drawn_on == line)
+        .and_then(|(_, _, why)| why)
+        .filter(|why| !why.is_empty())
+        .map(|why| (line, why))
+}
+
+/// An answer is about the list it was sent: once a file's Breakpoints change —
+/// edited onto other lines, set, removed — what the adapter said of them is
+/// keyed to lines that are no longer theirs, and would be read as another
+/// Breakpoint's.
+pub fn forget_changed(before: &[Breakpoint], next: &mut State) {
+    let of = |breakpoints: &[Breakpoint], file: &Path| -> Vec<Breakpoint> {
+        breakpoints
+            .iter()
+            .filter(|breakpoint| breakpoint.file == file)
+            .cloned()
+            .collect()
+    };
+    let after = &next.breakpoints;
+    if let Some(session) = next.debug.as_mut() {
+        session
+            .verdicts
+            .retain(|(file, _), _| of(before, file) == of(after, file));
+    }
+}
+
+fn on_screen(state: &State) -> impl Iterator<Item = (usize, Mark, Option<&str>)> {
     state
         .breakpoints
         .iter()
         .filter(|breakpoint| Some(&breakpoint.file) == state.current_buffer.as_ref())
-        .map(|breakpoint| {
-            let mark = match breakpoint.stale {
-                true => Mark::Stale,
-                false => Mark::Plain,
-            };
-            (breakpoint.line, mark)
-        })
-        .collect()
+        .map(|breakpoint| drawn(state, breakpoint))
 }
 
 /// Every Breakpoint in the workspace as the Breakpoint list draws it: by path,
@@ -347,6 +411,10 @@ pub struct Session {
     /// unanswered, by `seq`: a response names its request only by number.
     seq: i64,
     asked: BTreeMap<i64, Ask>,
+    /// What the adapter said of each Breakpoint, under the file and the line
+    /// it was set on. Here rather than on the Breakpoint so it goes with the
+    /// session and never reaches the line the user set or what is remembered.
+    verdicts: BTreeMap<(PathBuf, usize), Verdict>,
     /// A pause asked for before any thread was known, so it waits on the
     /// `threads` answer that names one.
     pausing: bool,
@@ -644,6 +712,7 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
         args: launch.args.clone(),
         seq: 0,
         asked: BTreeMap::new(),
+        verdicts: BTreeMap::new(),
         pausing: false,
         previous: None,
         can_set: false,
@@ -980,6 +1049,29 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
             };
             if let Some(member) = held.iter_mut().find(|member| member.name == name) {
                 member.value = value;
+            }
+            Vec::new()
+        }
+        // The file's whole list, in the order it was asked, naming neither the
+        // file nor the lines it answers about: the request does.
+        "setBreakpoints" => {
+            let file = PathBuf::from(arguments["source"]["path"].as_str().unwrap_or_default());
+            let asked = arguments["breakpoints"].as_array().into_iter().flatten();
+            let answers = message["body"]["breakpoints"]
+                .as_array()
+                .into_iter()
+                .flatten();
+            for (asked, answer) in asked.zip(answers) {
+                let set = asked["line"].as_u64().unwrap_or_default() as usize;
+                let verdict = match answer["verified"] == Value::Bool(true) {
+                    true => {
+                        Verdict::Bound(answer["line"].as_u64().map_or(set, |line| line as usize))
+                    }
+                    false => {
+                        Verdict::Unbound(printable(answer["message"].as_str().unwrap_or_default()))
+                    }
+                };
+                session.verdicts.insert((file.clone(), set), verdict);
             }
             Vec::new()
         }
@@ -3550,6 +3642,80 @@ mod tests {
                 .to_string(),
         );
         assert_eq!(sent(&resume(&mut state))[0]["command"], "threads");
+    }
+
+    /// Stale is a claim about the text, which no answer changes, and a bound
+    /// answer that names no line binds the line it was sent.
+    #[test]
+    fn an_answer_is_drawn_unless_the_text_says_otherwise() {
+        let file = PathBuf::from("/w/one.rs");
+        let at = |line, stale| Breakpoint {
+            file: file.clone(),
+            line,
+            text: String::new(),
+            stale,
+        };
+        let mut state = paused(State {
+            breakpoints: vec![at(2, false), at(3, true), at(5, false)],
+            ..State::default()
+        });
+        state.current_buffer = Some(file.clone());
+        let seq = outstanding(&state, "setBreakpoints");
+        received(
+            &mut state,
+            &json!({"type": "response", "request_seq": seq, "success": true,
+            "command": "setBreakpoints", "body": {"breakpoints": [
+                {"verified": true},
+                {"verified": false, "message": "no code"},
+                {"verified": true, "line": 7},
+            ]}})
+            .to_string(),
+        );
+        assert_eq!(
+            marks(&state),
+            BTreeMap::from([(2, Mark::Plain), (3, Mark::Stale), (7, Mark::Plain)])
+        );
+    }
+
+    /// An Unverified breakpoint with no reason has no box to show, and once
+    /// the file's Breakpoints change the answer about them is forgotten rather
+    /// than read as whichever Breakpoint now sits on a line it named.
+    #[test]
+    fn an_answer_is_forgotten_once_its_file_s_breakpoints_change() {
+        let file = PathBuf::from("/w/one.rs");
+        let at = |line| Breakpoint {
+            file: file.clone(),
+            line,
+            text: String::new(),
+            stale: false,
+        };
+        let mut state = paused(State {
+            breakpoints: vec![at(2), at(5)],
+            ..State::default()
+        });
+        state.current_buffer = Some(file.clone());
+        state.buffers.insert(
+            file.clone(),
+            crate::editor::Buffer::open("a\nb\nc\nd\ne\nf", false, 4),
+        );
+        let seq = outstanding(&state, "setBreakpoints");
+        received(
+            &mut state,
+            &json!({"type": "response", "request_seq": seq, "success": true,
+            "command": "setBreakpoints", "body": {"breakpoints": [
+                {"verified": false},
+                {"verified": true, "line": 6},
+            ]}})
+            .to_string(),
+        );
+        state.pointed_at = crate::Pointed::Breakpoint(2);
+        assert_eq!(marks(&state).get(&2), Some(&Mark::Unverified));
+        assert_eq!(explained(&state), None);
+        let (state, _) = crate::update(&state, crate::Event::ToggleBreakpoint(3));
+        assert_eq!(
+            marks(&state),
+            BTreeMap::from([(2, Mark::Plain), (3, Mark::Plain), (5, Mark::Plain)])
+        );
     }
 
     /// The program ending is told to the adapter with `disconnect`, and the

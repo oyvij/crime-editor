@@ -292,6 +292,7 @@ pub fn draw(
     // paints over it — which is how its right-hand half came to sit behind the
     // AI pane's border. A modal still outranks it, below.
     hover(frame, state, &areas.panes);
+    breakpoint_reason(frame, state, &areas.panes);
     diagnostic_box(frame, state, &areas.panes);
     candidates(frame, state, &areas.panes);
     // Over the panes for the Hover's reason, and after it: the window is the
@@ -2217,6 +2218,9 @@ fn with_breakpoint(line: Line<'static>, mark: varde::debug::Mark) -> Line<'stati
         // so not a place the program will pause. Not the hollow circle, which
         // is an Unverified breakpoint's.
         varde::debug::Mark::Stale => Span::styled("◌", Style::default().fg(Color::DarkGray)),
+        // Hollow and still red: a line the user meant, which the adapter could
+        // not bind — resting the pointer on it says why.
+        varde::debug::Mark::Unverified => Span::styled("○", Style::default().fg(Color::Red)),
     };
     let style = line.style;
     let mut spans = line.spans.into_iter();
@@ -3376,6 +3380,25 @@ fn hover(frame: &mut Frame, state: &State, panes: &layout::Layout) {
         .collect();
     over_buffer_line(frame, state, panes, placement, lines);
     hover_chips(frame, state, placement.spot(state, panes));
+}
+
+fn breakpoint_reason(frame: &mut Frame, state: &State, panes: &layout::Layout) {
+    let Some((line, why)) = varde::debug::explained(state) else {
+        return;
+    };
+    let placement = varde::lsp::Placement {
+        from: line + 1,
+        column: 1,
+        width: why.width() + 2,
+        rows: 3,
+    };
+    over_buffer_line(
+        frame,
+        state,
+        panes,
+        placement,
+        vec![Line::from(why.to_string())],
+    );
 }
 
 /// The Evaluator: the Snippet above, the output below, and the Chips on the
@@ -6158,11 +6181,18 @@ mod tests {
             text(&plain).chars().skip(1).collect::<String>()
         );
         assert_eq!(
-            text(&with_breakpoint(plain, varde::debug::Mark::Stale))
+            text(&with_breakpoint(plain.clone(), varde::debug::Mark::Stale))
                 .chars()
                 .next(),
             Some('\u{25cc}'),
             "a Stale breakpoint is drawn apart from one the program will pause at"
+        );
+        assert_eq!(
+            text(&with_breakpoint(plain, varde::debug::Mark::Unverified))
+                .chars()
+                .next(),
+            Some('\u{25cb}'),
+            "an Unverified breakpoint is hollow, and drawn apart from a Stale one"
         );
     }
 
