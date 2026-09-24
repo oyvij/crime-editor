@@ -6615,8 +6615,9 @@ fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answ
         // An adapter let go after its session ended is the tail of whatever
         // ended it, so the footer keeps saying why: a launch the adapter
         // refused would otherwise be explained for exactly as long as it took
-        // the edge to report the process gone.
-        Event::DapGone { .. } if state.debug.is_none() => {
+        // the edge to report the process gone. The same for one let go by a
+        // session now Waiting, which lets go on purpose and goes on.
+        Event::DapGone { .. } if state.debug.is_none() || debug::waiting_on(state).is_some() => {
             next.refusal = state.refusal.clone();
             vec![]
         }

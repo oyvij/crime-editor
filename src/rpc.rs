@@ -20,8 +20,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 
 /// How long a server-reached Debug adapter has to start listening. Generous,
-/// since an adapter unpacking its own runtime on first start is slow, and an
-/// adapter that exits instead ends the wait at once.
+/// since an adapter unpacking its own runtime on first start is slow, and one
+/// that exits instead ends the wait at once.
 const CONNECT: std::time::Duration = std::time::Duration::from_secs(10);
 
 pub struct Server {
@@ -155,17 +155,18 @@ impl Adapter {
     /// `port` already in its arguments, then connected to on it. Its stdout is
     /// talk rather than protocol, so it goes where its stderr does.
     ///
-    /// Blocks until the adapter listens, it exits, or `CONNECT` passes. The
-    /// wait is a one-off at the start of a session, measured in the tens of
-    /// milliseconds an adapter takes to bind; a thread for it would have the
-    /// core told of a process before anything could talk to it.
+    /// The spawn is here, so a command that is not there is said at once; the
+    /// connection is made on a thread and arrives on the receiver, because an
+    /// adapter unpacking its own runtime on a first start can take seconds to
+    /// listen and the screen must not stop for it. Until it arrives nothing
+    /// can be sent, and nothing is: the core is told of the adapter only then.
     pub fn connect(
         command: &str,
         args: &[String],
         cwd: &Path,
         log: Option<File>,
         port: u16,
-    ) -> std::io::Result<Self> {
+    ) -> std::io::Result<Receiver<std::io::Result<Self>>> {
         let stdout = match &log {
             Some(file) => Stdio::from(file.try_clone()?),
             None => Stdio::null(),
@@ -177,22 +178,37 @@ impl Adapter {
             .stdout(stdout)
             .stderr(log.map_or_else(Stdio::null, Stdio::from))
             .spawn()?;
-        let started = std::time::Instant::now();
-        let stream = loop {
-            match TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)) {
-                Ok(stream) => break stream,
-                // Kill and reap on every way out: `Drop` is `Self`'s, and
-                // there is no `Self` yet.
-                Err(error) if started.elapsed() > CONNECT || child.try_wait()?.is_some() => {
+        let (sender, connected) = channel();
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            // `localhost` rather than one address: an adapter may listen on
+            // either loopback, and this tries every one the name resolves to.
+            let stream = loop {
+                match TcpStream::connect(("localhost", port)) {
+                    Ok(stream) => break Ok(stream),
+                    Err(error)
+                        if started.elapsed() > CONNECT || !matches!(child.try_wait(), Ok(None)) =>
+                    {
+                        break Err(error)
+                    }
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+                }
+            };
+            let adapter = stream.and_then(|stream| Ok((stream.try_clone()?, stream)));
+            // Nobody left to receive means the session was stopped while
+            // this waited, and the adapter is dropped with the message, which
+            // kills it. Killed and reaped here on a failure, since there is no
+            // `Self` whose `Drop` would.
+            let _ = sender.send(match adapter {
+                Ok((reader, writer)) => Ok(Self::over(child, reader, Box::new(writer))),
+                Err(error) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(error);
+                    Err(error)
                 }
-                Err(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
-            }
-        };
-        let reader = stream.try_clone()?;
-        Ok(Self::over(child, reader, Box::new(stream)))
+            });
+        });
+        Ok(connected)
     }
 
     fn over(

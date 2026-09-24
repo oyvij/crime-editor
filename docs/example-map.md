@@ -3191,7 +3191,9 @@ stopping a **launch** session sends it true. The program going away ends a launc
 attach session goes **Waiting** instead, unless its configuration says `reattach = false`. Waiting
 attaches again when the edge reports the port answers, and sends Breakpoints again. The port is the
 `port` in the configuration's `args`, on its `hostName` or `localhost`; an attach naming no port has
-nothing to watch, so it ends with its program as a launch does. Only stopping
+nothing to watch, so it ends with its program as a launch does. A re-attach the adapter refuses is
+reported as `launch-failed` and goes on Waiting: a program on its way up can take the connection
+before it will take a debugger. Only stopping
 ends a Waiting session. The Transport says `waiting`, and every stepping Chip is dimmed.
 **R41.7** A `startDebugging` reverse request adds the child's threads to the one session. There is
 never a picker, and stopping stops every child too.

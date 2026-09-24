@@ -274,8 +274,10 @@ Feature: Starting and ending a Debug session
 
     Scenario: The Transport shows a Waiting session as Waiting
       Given a Debug session was started from the Launch configuration "orders"
+      And Stepping mode is on
       When the Debug adapter sends the event "terminated"
       Then the Transport says "waiting"
+      And Stepping mode is off
       And the "step-over" Chip is dimmed
       And the "continue" Chip is dimmed
 
@@ -297,6 +299,14 @@ Feature: Starting and ending a Debug session
       And the Debug adapter sends the event "terminated"
       When I press "Ctrl+F2"
       Then no Debug session exists
+
+    Scenario: A re-attach the program refuses is reported and goes on Waiting
+      Given a Debug session was started from the Launch configuration "orders"
+      And the Debug adapter sends the event "terminated"
+      And the edge reports the port 5005 answers
+      When the Debug adapter answers "attach" with the error "handshake failed"
+      Then the editor refuses with "launch-failed"
+      And the Debug session is "waiting"
 
   Rule: Launch sessions end with their program, and stop ends everything the adapter opened
 

@@ -645,6 +645,10 @@ struct Edge {
     /// a Debug session only the edge can observe, told to the core as
     /// `Event::DapStarted` and `Event::DapGone`.
     adapter: Option<rpc::Adapter>,
+    /// A server-reached adapter spawned and not yet listening. Holding it is
+    /// holding the adapter: nothing is told the core until it connects, and
+    /// letting it go is a site that stops holding one.
+    connecting: Option<Receiver<std::io::Result<rpc::Adapter>>>,
     /// A Waiting session's port being tried, off the main loop because a
     /// remote host that drops the packets holds a connect for as long as its
     /// timeout, and when it was last tried.
@@ -840,6 +844,7 @@ fn run(
         relaunch: false,
         probe: None,
         probed: Instant::now(),
+        connecting: None,
     };
 
     let (watch_tx, watch_rx) = channel();
@@ -1297,6 +1302,29 @@ fn drain_servers(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
 /// Whatever the Debug adapter has said since the last pass, and whether it is
 /// still there — `drain_servers` for the one adapter a session holds.
 fn drain_adapter(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
+    if let Some(connected) = &edge.connecting {
+        let why = match connected.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Ok(Ok(adapter)) => {
+                edge.connecting = None;
+                edge.adapter = Some(adapter);
+                queue.push_back(Event::DapStarted);
+                return true;
+            }
+            Ok(Err(error)) => format!("the Debug adapter never listened: {error}"),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                "the Debug adapter's connection was lost".to_string()
+            }
+        };
+        // The notice says the adapter failed; the reason is the edge's alone,
+        // so it goes to the status line with it.
+        edge.status = Status {
+            text: why,
+            tone: ui::Tone::Warning,
+        };
+        adapter_is_gone(edge, queue, varde::debug::Gone::FailedToStart);
+        return true;
+    }
     let Some(adapter) = edge.adapter.as_mut() else {
         return false;
     };
@@ -1358,6 +1386,7 @@ fn probe_waiting(state: &State, edge: &mut Edge, queue: &mut VecDeque<Event>) ->
 /// function for the two sites, so neither can remember only half of it.
 fn adapter_is_gone(edge: &mut Edge, queue: &mut VecDeque<Event>, why: varde::debug::Gone) {
     edge.adapter = None;
+    edge.connecting = None;
     edge.output = None;
     queue.push_back(Event::DapGone { why });
 }
@@ -2786,7 +2815,11 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                 }
             };
             let spawned = match reach {
-                varde::debug::Reach::Stdio => rpc::Adapter::spawn(&command, &args, &edge.root, log),
+                varde::debug::Reach::Stdio => rpc::Adapter::spawn(&command, &args, &edge.root, log)
+                    .map(|adapter| {
+                        edge.adapter = Some(adapter);
+                        queue.push_back(Event::DapStarted);
+                    }),
                 // A port nothing holds, asked of the OS and let go for the
                 // adapter to take: the only way to learn one that is free.
                 varde::debug::Reach::Server => {
@@ -2794,27 +2827,21 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                         .and_then(|listener| listener.local_addr())
                         .and_then(|address| {
                             let port = address.port();
-                            let args: Vec<String> = args
-                                .iter()
-                                .map(|arg| arg.replace("${port}", &port.to_string()))
-                                .collect();
+                            let args = varde::debug::on_port(&args, port);
                             rpc::Adapter::connect(&command, &args, &edge.root, log, port)
                         })
+                        .map(|connected| edge.connecting = Some(connected))
                 }
             };
-            match spawned {
-                Ok(adapter) => {
-                    edge.adapter = Some(adapter);
-                    queue.push_back(Event::DapStarted);
-                }
-                // What the spawn said, which only the edge can see: a command
-                // that is not there is the one the reader fixes by installing.
-                Err(error) => queue.push_back(Event::DapGone {
+            // What the spawn said, which only the edge can see: a command
+            // that is not there is the one the reader fixes by installing.
+            if let Err(error) = spawned {
+                queue.push_back(Event::DapGone {
                     why: match error.kind() {
                         std::io::ErrorKind::NotFound => varde::debug::Gone::Missing,
                         _ => varde::debug::Gone::FailedToStart,
                     },
-                }),
+                });
             }
         }
         Effect::DapSend { json } => match edge.adapter.as_mut() {
@@ -2832,7 +2859,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
             }),
         },
         Effect::StopDap => {
-            if edge.adapter.is_some() {
+            if edge.adapter.is_some() || edge.connecting.is_some() {
                 adapter_is_gone(edge, queue, varde::debug::Gone::Exited);
             }
         }

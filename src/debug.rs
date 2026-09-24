@@ -546,9 +546,9 @@ pub struct Session {
     /// request below.
     adapter: String,
     command: String,
-    /// What spawns the adapter again when a Waiting session attaches anew.
-    adapter_args: Vec<String>,
-    reach: Reach,
+    /// The spawn that started the adapter, asked again when a Waiting session
+    /// attaches anew.
+    spawn: Effect,
     pub phase: Phase,
     /// `launch` or `attach`, and what that request carries — taken when the
     /// session starts, so a config edited mid-session changes the next one.
@@ -673,6 +673,16 @@ pub enum Phase {
     /// An attach session whose program went away, holding no adapter, until
     /// the edge reports its port answers. Only stopping ends it.
     Waiting,
+}
+
+/// What a server row's arguments name where the port goes.
+const PORT: &str = "${port}";
+
+/// A server row's arguments with the port the edge found free filled in.
+pub fn on_port(args: &[String], port: u16) -> Vec<String> {
+    args.iter()
+        .map(|arg| arg.replace(PORT, &port.to_string()))
+        .collect()
 }
 
 /// How the edge reaches a Debug adapter, which its row says as data (ADR
@@ -905,14 +915,13 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
         next.refusal = Some(Refusal::NoDebugAdapter(launch.adapter.clone()));
         return Vec::new();
     };
-    let reach = match adapter.args.iter().any(|arg| arg.contains("${port}")) {
-        true => Reach::Server,
-        false => Reach::Stdio,
-    };
     let effect = Effect::StartDap {
         command: adapter.command.clone(),
         args: adapter.args.clone(),
-        reach,
+        reach: match adapter.args.iter().any(|arg| arg.contains(PORT)) {
+            true => Reach::Server,
+            false => Reach::Stdio,
+        },
     };
     let watch = match (launch.request.as_str(), launch.reattach) {
         ("attach", true) => launch
@@ -932,8 +941,7 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
     next.debug = Some(Session {
         adapter: launch.adapter.clone(),
         command: adapter.command.clone(),
-        adapter_args: adapter.args.clone(),
-        reach,
+        spawn: effect.clone(),
         phase: Phase::Spawning,
         request: launch.request.clone(),
         args: launch.args.clone(),
@@ -973,11 +981,7 @@ pub fn reattach(next: &mut State) -> Vec<Effect> {
         return Vec::new();
     }
     let session = next.debug.take().expect("a Waiting session");
-    let effect = Effect::StartDap {
-        command: session.command.clone(),
-        args: session.adapter_args.clone(),
-        reach: session.reach,
-    };
+    let effect = session.spawn.clone();
     next.debug = Some(Session {
         phase: Phase::Spawning,
         asked: BTreeMap::new(),
@@ -1024,8 +1028,6 @@ pub fn gone(next: &mut State, why: Gone) -> Vec<Effect> {
     // rather than when anybody pressed anything, and the next event of any
     // kind takes a refusal down.
     let (refusal, notice) = match (why, &session.phase) {
-        // Let go on purpose, and still waiting for its program.
-        (_, Phase::Waiting) => return Vec::new(),
         (_, Phase::Stopping) => (None, None),
         (Gone::Missing, _) => (
             Some(Refusal::NoDebugAdapter(command.clone())),
@@ -1132,7 +1134,16 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
         return match command.as_str() {
             "initialize" | "launch" | "attach" => {
                 let why = adapter_error(message, &command);
-                let mut effects = end(next);
+                // A session that watches a port goes back to watching it:
+                // a program on its way up can answer before it will take a
+                // debugger, and only stopping ends a Waiting session.
+                let mut effects = match session.watch {
+                    Some(_) => {
+                        session.phase = Phase::Waiting;
+                        Vec::new()
+                    }
+                    None => end(next),
+                };
                 next.refusal = Some(Refusal::LaunchFailed(why.clone()));
                 // And in the status line, for the reason `gone` says it twice.
                 effects.extend([Effect::notify_about("launch-failed", why), Effect::StopDap]);
@@ -1394,13 +1405,9 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
 /// `disconnect` answered: the adapter goes, and the session with it unless it
 /// is Waiting for its program to come back.
 fn let_go(next: &mut State) -> Vec<Effect> {
-    let waiting = next
-        .debug
-        .as_ref()
-        .is_some_and(|session| session.phase == Phase::Waiting);
-    let mut effects = match waiting {
-        true => Vec::new(),
-        false => end(next),
+    let mut effects = match waiting_on(next) {
+        Some(_) => Vec::new(),
+        None => end(next),
     };
     effects.push(Effect::StopDap);
     effects
@@ -1520,7 +1527,10 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
                 Some(_) => Phase::Waiting,
                 None => Phase::Stopping,
             };
-            vec![ask(session, "disconnect", json!({}))]
+            let effects = vec![ask(session, "disconnect", json!({}))];
+            // Its letters step nothing while nothing is attached.
+            next.stepping = false;
+            effects
         }
         _ => Vec::new(),
     }
@@ -4676,6 +4686,11 @@ mod tests {
         assert_eq!(reached(&["--listen=127.0.0.1:${port}"]), Reach::Server);
         assert_eq!(reached(&["--port", "5005"]), Reach::Stdio);
         assert_eq!(reached(&[]), Reach::Stdio);
+        let args = ["--listen=127.0.0.1:${port}", "--port", "${port}", "--quiet"].map(String::from);
+        assert_eq!(
+            on_port(&args, 41234),
+            ["--listen=127.0.0.1:41234", "--port", "41234", "--quiet"]
+        );
     }
 
     /// An attach naming no port has nothing to watch, so it ends with its
