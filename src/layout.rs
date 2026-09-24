@@ -310,6 +310,55 @@ pub struct Shapes {
     pub strip: Option<u16>,
     /// Whether the Debug group is showing the Program output, and how wide.
     pub output: Output,
+    /// Whether the Evaluator is open. It floats over the editor and takes no
+    /// columns from anything, so it changes no other rectangle — but where it
+    /// is has to come from here, so the renderer and the hit-test read one
+    /// answer, for the reason every other pane does.
+    pub evaluator: bool,
+}
+
+/// Where the Evaluator opens: the middle of the screen, three fifths across
+/// and half of it down, so the code it floats over is still readable around
+/// it — and so it is on the screen whatever the screen is, without a clamp
+/// of its own.
+///
+/// Where the project last left it is issue #61; this is where it starts.
+fn centred(width: u16, height: u16) -> Area {
+    let box_width = (width as u32 * 3).div_ceil(5) as u16;
+    let box_height = height / 2;
+    Area {
+        x: (width - box_width) / 2,
+        y: (height - box_height) / 2,
+        width: box_width,
+        height: box_height,
+    }
+}
+
+/// Where the Snippet and the Evaluator output are inside that window: the
+/// Snippet takes half of what the borders leave, the output the rest, and one
+/// row between them carries the border that separates the two. One answer,
+/// which `ui` draws and the mouse hit-tests, for the reason [`GUTTER`] is one.
+///
+/// Dragging that border is issue #61's; this is where it starts.
+pub fn evaluator_split(window: Area) -> (Area, Area) {
+    let interior = Area {
+        x: window.x + 1,
+        y: window.y + 1,
+        width: window.width.saturating_sub(2),
+        height: window.height.saturating_sub(2),
+    };
+    let snippet = interior.height.saturating_sub(1) / 2;
+    (
+        Area {
+            height: snippet,
+            ..interior
+        },
+        Area {
+            y: interior.y + snippet + 1,
+            height: interior.height.saturating_sub(snippet + 1),
+            ..interior
+        },
+    )
 }
 
 /// The first content row a pane shows: where the wheel left it, pulled back so
@@ -374,6 +423,9 @@ pub struct Layout {
     /// which `Area::holds` answers `false` for, so no hit-test has to ask
     /// whether there is one before asking where it is.
     pub output: Area,
+    /// The Evaluator's floating window. Empty whenever none is open, for the
+    /// reason the Program output's is empty while it is hidden.
+    pub evaluator: Area,
 }
 
 impl Layout {
@@ -512,6 +564,10 @@ pub fn panes(
             width: editor_width,
             height: band_height,
         },
+        evaluator: match shapes.evaluator {
+            true => centred(width, height),
+            false => Area::default(),
+        },
     }
 }
 
@@ -606,6 +662,12 @@ pub fn split_at(strip: Area, n: usize, column: u16) -> usize {
 }
 
 pub fn pane_at(layout: &Layout, column: u16, row: u16) -> Option<Pane> {
+    // The Evaluator floats over the panes, so it is asked first: a click that
+    // landed on the window belongs to the window whatever is drawn under it.
+    // Empty while none is open, which `holds` answers `false` for.
+    if layout.evaluator.holds(column, row) {
+        return Some(Pane::Evaluator);
+    }
     // Before the shell, and never folded into the tree's: a click in the corner
     // means something entirely different from a click in either, and a pane
     // hit-tested against its neighbour's rectangle is every drag in it asking
@@ -669,6 +731,54 @@ mod split_tests {
         // Dragged past either floor, the other side keeps `GROUP_LEAST`.
         assert_eq!(group(Output::Shown(Some(120))).0.width, GROUP_LEAST);
         assert_eq!(group(Output::Shown(Some(0))).1.width, GROUP_LEAST);
+    }
+
+    /// Where the Evaluator opens and how its two halves divide it. Pinned
+    /// here for the reason every other rectangle is: the renderer draws these
+    /// numbers and the mouse hit-tests them, and a window nobody can see the
+    /// code around is the one thing it may not be.
+    #[test]
+    fn the_evaluator_is_centred_and_split_between_its_snippet_and_its_output() {
+        let window = |open| {
+            panes(
+                120,
+                40,
+                30,
+                None,
+                0,
+                0,
+                Shapes {
+                    evaluator: open,
+                    ..Shapes::default()
+                },
+            )
+            .evaluator
+        };
+        // Nothing at all while none is open, which `holds` answers `false`
+        // for — so no hit-test has to ask whether there is one.
+        assert!(!window(false).holds(60, 20));
+        let open = window(true);
+        assert_eq!(
+            open,
+            Area {
+                x: 24,
+                y: 10,
+                width: 72,
+                height: 20
+            }
+        );
+        // Centred: the same room either side and above and below.
+        assert_eq!(open.x, 120 - open.right());
+        assert_eq!(open.y, 40 - open.bottom());
+
+        let (snippet, output) = super::evaluator_split(open);
+        // Both inside the borders, and the row between them belongs to
+        // neither: it is the rule the renderer draws there.
+        assert_eq!((snippet.x, snippet.y, snippet.height), (25, 11, 8));
+        assert_eq!((output.x, output.y, output.height), (25, 20, 9));
+        assert_eq!(snippet.bottom() + 1, output.y);
+        assert_eq!(output.bottom(), open.bottom() - 1);
+        assert_eq!((snippet.width, output.width), (70, 70));
     }
 
     /// A pane with no rectangle asks for no pty, and one with a rectangle
@@ -1144,6 +1254,7 @@ mod tests {
                 corner: Corner::Risk,
                 strip: None,
                 output: Output::Away,
+                evaluator: false,
             },
         );
         assert_eq!((layout.corner.x, layout.corner.width), (0, 30));
@@ -1173,6 +1284,7 @@ mod tests {
                     corner: Corner::Risk,
                     strip: None,
                     output: Output::Away,
+                    evaluator: false,
                 },
             );
             assert_eq!(layout.terminal.width, 1, "{ai:?}");
@@ -1303,6 +1415,7 @@ mod tests {
                     corner: Corner::Risk,
                     strip: None,
                     output: Output::Away,
+                    evaluator: false,
                 }),
             ] {
                 let layout = panes(width, height, 30, None, 6, 0, shapes);

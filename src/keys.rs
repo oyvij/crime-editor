@@ -251,7 +251,7 @@ pub const CHORDS: [(&str, &str, &[View]); 2] = [
 /// The chords a Debug session answers, offered only while one exists for the
 /// reason [`DEBUG_KEYS`] are listed only while one does: with no session they
 /// do nothing, and a hint offering them would teach keys that are not there.
-pub const DEBUG_CHORDS: [(&str, &str, &[View]); 7] = [
+pub const DEBUG_CHORDS: [(&str, &str, &[View]); 8] = [
     ("␣n", "step over", &[View::Edit]),
     ("␣i", "step into", &[View::Edit]),
     ("␣o", "step out", &[View::Edit]),
@@ -259,6 +259,10 @@ pub const DEBUG_CHORDS: [(&str, &str, &[View]); 7] = [
     ("␣q", "stop debugging", &[View::Edit]),
     ("␣s", "switch the Strip's group", &[View::Edit]),
     ("␣h", "hide / show the Program output", &[View::Edit]),
+    // Both spellings on one row, the way restart carries two: Ctrl+Enter runs
+    // what the chord opens, and `chord_rows` reads the hint's letter off the
+    // token spelled with the Space glyph.
+    ("␣e C-Enter", "evaluate", &[View::Edit]),
 ];
 
 /// The keys a Debug session reserves, listed while one exists and absent while
@@ -472,6 +476,7 @@ pub fn chord(state: &State, key: char) -> Option<Event> {
             crate::current_buffer(state).map_or(0, |buffer| buffer.line),
         )),
         'q' => Some(Event::DebugStop),
+        'e' if state.debug.is_some() => Some(Event::OpenEvaluator),
         'r' => Some(Event::DebugRestart),
         // The Group tab from the keyboard: whichever group the Strip is not
         // showing, since there are two and the gesture is "the other one".
@@ -879,6 +884,7 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
             Pane::Output => state.output_running,
             Pane::Tree
             | Pane::Editor
+            | Pane::Evaluator
             | Pane::Risk
             | Pane::Buffers
             | Pane::History
@@ -1520,7 +1526,10 @@ fn collecting(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Option<Vec
 fn claims_colon(state: &State) -> bool {
     match state.focus {
         Pane::Tree => true,
-        Pane::Editor => !crate::editor_inserting(state),
+        // The Snippet is a buffer being typed into on the same terms, so the
+        // two answer alike — `editor_inserting` reads whichever of them the
+        // keyboard is in.
+        Pane::Editor | Pane::Evaluator => !crate::editor_inserting(state),
         // Varde's own panes, so the colon is Varde's.
         Pane::Risk
         | Pane::Buffers
@@ -1540,8 +1549,10 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
         return Some(vec![]);
     }
     Some(match (state.focus, shift) {
-        (Pane::Editor, false) => vec![Event::EditorArrow(direction)],
-        (Pane::Editor, true) => vec![Event::EditorExtend(direction)],
+        // The Snippet is edited with the editor's own gestures, so its arrows
+        // are the editor's arrows.
+        (Pane::Editor | Pane::Evaluator, false) => vec![Event::EditorArrow(direction)],
+        (Pane::Editor | Pane::Evaluator, true) => vec![Event::EditorExtend(direction)],
         (Pane::Tree, false) => list_arrow(direction),
         (Pane::Tree, true) => vec![],
         // The Risk list is a list, so the arrows do to it exactly what they do
@@ -1580,7 +1591,17 @@ fn list_arrow(direction: Direction) -> Vec<Event> {
 
 fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
     match state.focus {
-        Pane::Editor => editor_pane_key(event),
+        // Ctrl+Enter runs the Snippet wherever the terminal reports it: an
+        // alias for the normal-mode Enter and the Run Chip, never the only way
+        // there, so a terminal that swallows it costs nothing. In the
+        // Evaluator alone — everywhere else Enter means what it always meant,
+        // and a modifier no arm inspects is no gesture of its own.
+        Pane::Evaluator
+            if event.code == KeyCode::Enter && event.modifiers.contains(KeyModifiers::CTRL) =>
+        {
+            vec![Event::RunSnippet]
+        }
+        Pane::Editor | Pane::Evaluator => editor_pane_key(event),
         Pane::Tree => tree_pane_key(event),
         // The corner's panes answer Enter — go to the code behind the figure,
         // go to that buffer — and hand their letters to `update`, which is

@@ -2475,6 +2475,7 @@ fn grid_lines(edge: &Edge, pane: Pane, split: usize, upto: usize) -> Option<Vec<
         Pane::Output => edge.output.as_ref()?.screen(),
         Pane::Tree
         | Pane::Editor
+        | Pane::Evaluator
         | Pane::Risk
         | Pane::Buffers
         | Pane::History
@@ -2590,6 +2591,7 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
             }
             Pane::Tree
             | Pane::Editor
+            | Pane::Evaluator
             | Pane::Risk
             | Pane::Buffers
             | Pane::History

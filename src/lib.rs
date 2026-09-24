@@ -121,6 +121,11 @@ pub enum Pane {
     /// group. A hosted pane like the shells and the AI: its child owns the
     /// keyboard, and Varde is the terminal answering its queries.
     Output,
+    /// The Evaluator's Snippet, in the floating window over the editor. Its
+    /// own variant rather than a mode of the editor's: the editor goes on
+    /// showing its file behind it, so a click lands in one or the other and
+    /// the keys reach whichever holds the caret.
+    Evaluator,
 }
 
 /// One control in a Transport (`docs/adr/0022-every-action-has-a-chip.md`):
@@ -687,6 +692,16 @@ pub enum Event {
     HoverChip(&'static str),
     /// A row of the Hover's value section, opened or closed.
     OpenHoverRow(usize),
+    /// `␣e`: the Evaluator opens on the expression the cursor is in or the
+    /// Selection covers. The expression is the core's to read, so the chord
+    /// carries nothing — where the Hover's Chip and a Variables row's each
+    /// name one of their own.
+    OpenEvaluator,
+    /// Run the Snippet: normal-mode Enter, the Run Chip and Ctrl+Enter, which
+    /// are one gesture and so one event.
+    RunSnippet,
+    /// A row of the Evaluator output's value, opened or closed.
+    OpenEvaluatedRow(usize),
     /// An action a *pane* offers, not a row: the Risk pane's recompute and its
     /// loop. Its own event because `RowAction` falls through to the tree's
     /// actions on a row, and a pane action stands on no row.
@@ -1856,6 +1871,14 @@ pub struct State {
     pub output_paste: keys::Paste,
     /// Every Breakpoint in the workspace, with or without a Debug session.
     pub breakpoints: Vec<debug::Breakpoint>,
+    /// The floating window that runs a Snippet in the Paused program, while
+    /// one is open.
+    pub evaluator: Option<debug::Evaluator>,
+    /// The Snippets that have left that window, oldest first, remembered per
+    /// project. Beside the Watches rather than inside the session for the
+    /// reason a Watch is: code written to ask a program something outlives
+    /// the run it was first asked in.
+    pub snippets: Vec<String>,
     /// The expressions kept at the top of the Variables, in the order they
     /// were added. Beside the Breakpoints rather than inside the session for
     /// the same reason: a Watch is a question about the program, and it
@@ -2287,6 +2310,18 @@ impl State {
 
     /// The selection as text — one answer whether it was dragged off a pty's
     /// screen or extended in a buffer with the keyboard.
+    /// The Buffer the keyboard is typing into: the Evaluator's Snippet while
+    /// the floating window has focus, and the buffer on screen otherwise. The
+    /// editor goes on showing its own file behind the window, so "the buffer
+    /// in front" and "the buffer being typed into" are two questions, and
+    /// this is the second — the one a mode, a Selection and a copy answer to.
+    pub fn edited(&self) -> Option<&Buffer> {
+        match self.focus {
+            Pane::Evaluator => self.evaluator.as_ref().map(|it| &it.snippet),
+            _ => current_buffer(self),
+        }
+    }
+
     pub fn selected_text(&self) -> Option<String> {
         match self.selection.as_ref()? {
             // A Preview drag already resolved its text in `update`, against
@@ -2297,14 +2332,10 @@ impl State {
             // Whole lines, ends included, so what reaches the clipboard is
             // lines rather than a run of characters — vim's linewise register,
             // and what makes a pasted `V` selection land on lines of its own.
-            Selection::Lines { from, to } => {
-                let path = self.current_buffer.as_ref()?;
-                Some(self.buffers.get(path)?.lines_in(*from, *to))
-            }
+            Selection::Lines { from, to } => Some(self.edited()?.lines_in(*from, *to)),
             selection => {
                 let (from, to) = selection.buffer_span()?;
-                let path = self.current_buffer.as_ref()?;
-                Some(self.buffers.get(path)?.text_in(from, to))
+                Some(self.edited()?.text_in(from, to))
             }
         }
     }
@@ -2334,6 +2365,8 @@ impl Default for State {
             double_tap_ms: 300,
             tab_width: editor::DEFAULT_TAB_WIDTH,
             reports_modifiers: false,
+            evaluator: None,
+            snippets: Vec::new(),
             contents: BTreeMap::new(),
             expanded: BTreeSet::new(),
             ignored: BTreeSet::new(),
@@ -2930,6 +2963,44 @@ fn route(state: &State, event: Event) -> (State, Vec<Effect>) {
     unreachable!("no group answers {:?}", declined.1)
 }
 
+/// The Evaluator's Snippet, which is a [`Buffer`]: the editor's own gestures
+/// with the Snippet as their destination — one arm per gesture here and none
+/// in the edge, exactly as the comment box below inherits them.
+///
+/// Claimed before every other reader of them, because the window has the keys
+/// while the keyboard is in it and the editor answers the same events: a key
+/// meant for the Snippet would otherwise edit the file the window is floating
+/// over, which is the one file the reader can see it is not typing in.
+fn on_snippet(mut next: State, event: Event, wheeled: bool) -> Answered {
+    if next.focus != Pane::Evaluator || next.evaluator.is_none() {
+        return Err((next, event));
+    }
+    // Normal-mode Enter runs the Snippet; inserting, it is a newline like any
+    // other, because a block is written on more than one line.
+    if matches!(event, Event::EditorKey('\n')) && !editor_inserting(&next) {
+        let effects = debug::run(&mut next);
+        return Ok(settle(next, effects, wheeled));
+    }
+    let snippet = &mut next.evaluator.as_mut().expect("checked just above").snippet;
+    match event {
+        Event::EditorKey(key) => _ = snippet.key(key),
+        Event::EditorBackspace => snippet.backspace(),
+        Event::EditorDeleteWord => snippet.delete_word_back(),
+        Event::EditorUndo => snippet.undo(),
+        Event::EditorArrow(direction) => snippet.arrow(direction),
+        Event::EditorWord(direction) => snippet.word_motion(match direction {
+            Direction::Right => editor::Word::Start,
+            _ => editor::Word::Back,
+        }),
+        Event::EditorEscape => snippet.escape(),
+        // One edit, not a run of keys, for the reason the comment box's paste
+        // is one: a newline in pasted code is text and not a gesture.
+        Event::EditorPaste(text) => snippet.paste(&text),
+        other => return Err((next, other)),
+    }
+    Ok(settle(next, vec![], wheeled))
+}
+
 /// The comment box's body, which is a [`Buffer`]. The box inherits the editor's
 /// gestures rather than reimplementing them on a string, so these are the
 /// editor's own events with the body as their destination — one arm per gesture
@@ -3024,6 +3095,10 @@ fn section_workspace(state: &State, next: State, event: Event, wheeled: bool) ->
 /// 6 of the groups, in the order their arms had.
 fn route_trigger(state: &State, next: State, event: Event, wheeled: bool) -> Answered {
     let declined = (next, event);
+    let declined = match on_snippet(declined.0, declined.1, wheeled) {
+        Ok(answer) => return Ok(answer),
+        Err(declined) => declined,
+    };
     let declined = match on_comment_body(declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
@@ -4101,6 +4176,7 @@ fn on_submit_review(state: &State, mut next: State, event: Event, wheeled: bool)
             }
             Pane::Tree
             | Pane::Editor
+            | Pane::Evaluator
             | Pane::Risk
             | Pane::Buffers
             | Pane::History
@@ -4312,6 +4388,7 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                         None => vec![],
                     },
                     Pane::Tree
+                    | Pane::Evaluator
                     | Pane::Risk
                     | Pane::Buffers
                     | Pane::History
@@ -4404,6 +4481,11 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                     );
                     vec![]
                 }
+                // Scrolling the Snippet and its output is issue #61's, with
+                // the rest of the window's own arrangement. Nothing here
+                // rather than the editor's scroll, which is a different pane's
+                // offset and would move the code behind the window.
+                Pane::Evaluator => vec![],
                 // A program that asked for mouse events scrolls itself; ours is
                 // the scrollback behind a shell that did not.
                 Pane::Terminal | Pane::Ai | Pane::Output => match mouse::report(
@@ -8361,6 +8443,7 @@ fn on_bytes(state: &State, next: State, event: Event, wheeled: bool) -> Answered
             }],
             Pane::Tree
             | Pane::Editor
+            | Pane::Evaluator
             | Pane::Risk
             | Pane::Buffers
             | Pane::History
@@ -8389,6 +8472,7 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 | Pane::Ai
                 | Pane::Tree
                 | Pane::Editor
+                | Pane::Evaluator
                 | Pane::Risk
                 | Pane::Buffers
                 | Pane::History
@@ -8437,16 +8521,38 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
             }
             vec![]
         }
-        // Dimmed, so they do nothing — the Evaluator is issue #60 and asking
-        // the AI about one value is #70. Arms rather than a fall-through,
-        // because `Event::RowAction` has no catch-all: every name it carries
-        // is one some pane offers.
-        Event::RowAction(debug::EVALUATE | debug::ROW_ASK_AI) => vec![],
-        // The Hover's own Chips. `evaluate` is dimmed for the reason the
-        // row's is — the Evaluator is issue #60 — so it has no arm, and a
-        // name from nowhere does nothing rather than guessing.
+        // Dimmed, so it does nothing — asking the AI about one value is #70.
+        // An arm rather than a fall-through, because `Event::RowAction` has no
+        // catch-all: every name it carries is one some pane offers.
+        Event::RowAction(debug::ROW_ASK_AI) => vec![],
+        // The row's evaluate Chip and the Hover's each open the Evaluator on
+        // their own expression, which is why they are two names rather than
+        // one: the row's is the path to a member and the Hover's is what the
+        // pointer was resting on.
+        Event::RowAction(debug::EVALUATE) => {
+            if let Some(row) = debug::row(state) {
+                debug::open_evaluator(&mut next, row.expression);
+            }
+            vec![]
+        }
         Event::HoverChip(debug::WATCH) => debug::watch_hovered(&mut next),
-        Event::HoverChip(debug::EVALUATE) => vec![],
+        Event::HoverChip(debug::EVALUATE) => {
+            if let Some(hovered) = state.hover.as_ref().and_then(|hover| hover.value.as_ref()) {
+                debug::open_evaluator(&mut next, hovered.expression.clone());
+            }
+            vec![]
+        }
+        // `\u{2423}e`: the expression is the core's to read off the cursor or
+        // the Selection, which is why the chord carries none.
+        Event::OpenEvaluator => {
+            debug::open_evaluator(&mut next, debug::cursor_expression(state));
+            vec![]
+        }
+        // Normal-mode Enter, the Run Chip and Ctrl+Enter are one gesture, so
+        // they are one event and one arm.
+        Event::RunSnippet | Event::RowAction(debug::RUN) => debug::run(&mut next),
+        Event::RowAction(debug::CANCEL) => debug::cancel(&mut next),
+        Event::OpenEvaluatedRow(index) => debug::open_evaluated(&mut next, index),
         Event::OpenHoverRow(index) => debug::open_hovered(&mut next, index),
         Event::RowAction(debug::COPY_VALUE) => match debug::row(state) {
             Some(row) => to_clipboard(state, row.value),
@@ -8758,7 +8864,7 @@ fn relaunching(next: State) -> (State, Vec<Effect>) {
 }
 
 /// What Varde remembers about a project between sessions.
-fn state_json(state: &State) -> String {
+pub(crate) fn state_json(state: &State) -> String {
     let expanded: Vec<String> = state
         .expanded
         .iter()
@@ -8804,6 +8910,7 @@ fn state_json(state: &State) -> String {
         "buffers": buffers,
         "current_buffer": state.current_buffer.as_deref().and_then(relative),
         "breakpoints": breakpoints,
+        "snippets": state.snippets,
     })
     .to_string()
 }
@@ -9098,6 +9205,7 @@ fn mouse_encoding(state: &State, pane: Pane) -> mouse::Encoding {
         Pane::Output => state.output_mouse,
         Pane::Tree
         | Pane::Editor
+        | Pane::Evaluator
         | Pane::Risk
         | Pane::Buffers
         | Pane::History
@@ -9161,6 +9269,7 @@ pub fn shapes(state: &State) -> layout::Shapes {
             true => layout::Output::Shown(state.output_width.map(|width| width as u16)),
             false => layout::Output::Away,
         },
+        evaluator: state.evaluator.is_some(),
     }
 }
 
@@ -10017,9 +10126,7 @@ fn normal_mode(state: &State) -> bool {
 /// something else, the way it does in Story view before anything is loaded.
 pub(crate) fn editor_inserting(state: &State) -> bool {
     state
-        .current_buffer
-        .as_ref()
-        .and_then(|path| state.buffers.get(path))
+        .edited()
         .is_some_and(|buffer| buffer.mode == editor::Mode::Insert)
 }
 

@@ -579,6 +579,19 @@ impl VardeWorld {
                 .map(|buffer| buffer.shown().split('\n').map(str::to_string).collect())
                 .unwrap_or_default(),
             Pane::Ai => self.ai_screen.clone(),
+            Pane::Evaluator => self
+                .state
+                .evaluator
+                .as_ref()
+                .map(|evaluator| {
+                    evaluator
+                        .snippet
+                        .shown()
+                        .split('\n')
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
             Pane::Tree
             | Pane::Risk
             | Pane::Buffers
@@ -2174,6 +2187,9 @@ fn pointer_at(
             (panes.corner, 0, 0)
         }
         Pane::Terminal | Pane::Variables => (panes.terminal, 0, 0),
+        // The window itself, not the Snippet's own rectangle: the `+ 1` below
+        // is the border every other pane's rectangle carries.
+        Pane::Evaluator => (panes.evaluator, 0, 0),
     };
     (
         area.x + 1 + gutter + (column - 1) as u16,
@@ -2660,6 +2676,10 @@ fn press(world: &mut VardeWorld, key: String) {
     // hands the rest back to whatever they always were.
     if key == "Space"
         || world.state.stepping
+        // The Snippet is a buffer being typed into, so what a key means there
+        // is the router's answer too: Enter runs it in normal mode and opens a
+        // line while inserting, which no one event stands for.
+        || world.state.focus == Pane::Evaluator
         || named_key(&key).is_some_and(|event| matches!(event.code, terminput::KeyCode::F(_)))
     {
         return route_key(world, &key, 0);
@@ -2715,6 +2735,7 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Left" => plain(terminput::KeyCode::Left),
         "Right" => plain(terminput::KeyCode::Right),
         "Ctrl+c" => plain(terminput::KeyCode::Char('c')).modifiers(terminput::KeyModifiers::CTRL),
+        "Ctrl+Enter" => plain(terminput::KeyCode::Enter).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+v" => plain(terminput::KeyCode::Char('v')).modifiers(terminput::KeyModifiers::CTRL),
         // Command, which the host terminal reports as Super where it reports
         // it at all: the alias the copy and paste keys inspect and nothing
@@ -4618,6 +4639,14 @@ fn give_tree_pane_focus(world: &mut VardeWorld) {
 
 #[when(expr = "I type {string}")]
 fn type_text(world: &mut VardeWorld, text: String) {
+    // Bytes are what a hosted pane's child receives. The Snippet is Varde's
+    // own buffer, so the same typing reaches it as the editor's keys do.
+    if world.state.focus == Pane::Evaluator {
+        for key in text.chars() {
+            world.send(Event::EditorKey(key));
+        }
+        return;
+    }
     world.send(Event::Bytes(text.into_bytes()));
 }
 
@@ -5347,6 +5376,7 @@ fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
         Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
             world.panes().corner
         }
+        Pane::Evaluator => world.panes().evaluator,
     };
     // Straight out from where the button went down, which is the gesture a
     // person makes: aiming at the middle of the pane instead would move the
@@ -15019,9 +15049,21 @@ fn variables_take_focus(world: &mut VardeWorld) {
 /// Everything the program prints reaches the core the same way: the edge says
 /// it spoke, and the core decides whether the reader could see it.
 #[when(expr = "the program prints {string}")]
-fn program_prints(world: &mut VardeWorld, _text: String) {
+fn program_prints(world: &mut VardeWorld, text: String) {
     program_running(world);
     world.send(Event::OutputSpoke);
+    // The adapter's own copy of the same output, which is what a run in the
+    // Evaluator collects: the pty prints it and the adapter repeats it.
+    if world.state.debug.is_some() {
+        adapter_event(
+            world,
+            json!({
+                "type": "event",
+                "event": "output",
+                "body": { "category": "stdout", "output": format!("{text}\n") },
+            }),
+        );
+    }
 }
 
 #[given(expr = "the program prints {string}")]
@@ -16056,4 +16098,353 @@ fn adapter_sent_no_request_for(world: &mut VardeWorld, command: String, expressi
         .filter(|message| message["arguments"]["expression"] == json!(expression))
         .collect();
     assert!(asked.is_empty(), "sent: {asked:?}");
+}
+
+// The Evaluator: the floating window that runs a Snippet inside the Paused
+// program. Its Snippet is a Buffer, so the editing steps above reach it once
+// it has focus; these are the steps about the window, the run and its output.
+
+fn evaluator(world: &VardeWorld) -> &varde::debug::Evaluator {
+    world
+        .state
+        .evaluator
+        .as_ref()
+        .expect("the Evaluator is open")
+}
+
+fn snippet(world: &VardeWorld) -> String {
+    evaluator(world).snippet.shown().to_string()
+}
+
+#[given(expr = "the Evaluator is open holding {string}")]
+fn evaluator_is_open_holding(world: &mut VardeWorld, expression: String) {
+    varde::debug::open_evaluator(&mut world.state, expression);
+}
+
+#[given("the Evaluator is open holding:")]
+fn evaluator_is_open_holding_block(world: &mut VardeWorld, step: &Step) {
+    let text = step
+        .docstring()
+        .expect("docstring")
+        .trim_matches('\n')
+        .to_string();
+    varde::debug::open_evaluator(&mut world.state, text);
+}
+
+#[given("the Evaluator has focus")]
+fn the_evaluator_has_focus(world: &mut VardeWorld) {
+    world.state.focus = Pane::Evaluator;
+}
+
+#[then(expr = "the Evaluator is open holding {string}")]
+fn evaluator_holds(world: &mut VardeWorld, expected: String) {
+    assert_eq!(snippet(world), expected);
+}
+
+#[then("the Evaluator is open")]
+fn evaluator_is_open(world: &mut VardeWorld) {
+    assert!(world.state.evaluator.is_some(), "no Evaluator is open");
+}
+
+#[then("the Evaluator is not open")]
+fn evaluator_is_not_open(world: &mut VardeWorld) {
+    assert!(
+        world.state.evaluator.is_none(),
+        "the Evaluator is still open"
+    );
+}
+
+#[then(expr = "the Snippet is {string}")]
+fn the_snippet_is(world: &mut VardeWorld, expected: String) {
+    assert_eq!(snippet(world), expected);
+}
+
+#[then("the Snippet is:")]
+fn the_snippet_is_block(world: &mut VardeWorld, step: &Step) {
+    let expected = step.docstring().expect("docstring").trim_matches('\n');
+    assert_eq!(snippet(world), expected);
+}
+
+/// The Selection inside the Snippet, which is what a run sends instead of the
+/// whole block. Against the Snippet's own text, never the buffer behind the
+/// window.
+#[given(expr = "the selection in the Snippet covers {string}")]
+fn selection_in_the_snippet(world: &mut VardeWorld, text: String) {
+    let held = snippet(world);
+    let (index, line) = held
+        .split('\n')
+        .enumerate()
+        .find(|(_, line)| line.contains(&text))
+        .unwrap_or_else(|| panic!("no line of the Snippet holds {text:?}"));
+    let at = line.find(&text).expect("the column");
+    let column = line[..at].chars().count() + 1;
+    world.state.selection = Some(Selection::Buffer {
+        anchor: Place {
+            line: index + 1,
+            column,
+        },
+        cursor: Place {
+            line: index + 1,
+            column: column + text.chars().count() - 1,
+        },
+    });
+}
+
+/// The same, against a named line of the buffer on screen: what `␣e` reads
+/// when there is a Selection rather than a cursor.
+#[given(expr = "the selection covers {string} on line {int}")]
+fn selection_covers_on_line(world: &mut VardeWorld, text: String, line: usize) {
+    let held = current_buffer(world).shown().to_string();
+    let row = held
+        .split('\n')
+        .nth(line - 1)
+        .expect("the line")
+        .to_string();
+    let at = row
+        .find(&text)
+        .unwrap_or_else(|| panic!("line {line} has no {text:?}"));
+    let column = row[..at].chars().count() + 1;
+    world.state.selection = Some(Selection::Buffer {
+        anchor: Place { line, column },
+        cursor: Place {
+            line,
+            column: column + text.chars().count() - 1,
+        },
+    });
+}
+
+#[when(expr = "I click line {int} column {int} in the editor")]
+fn click_line_column_in_editor(world: &mut VardeWorld, line: usize, column: usize) {
+    world.click(Pane::Editor, (line, column), terminput::KeyModifiers::NONE);
+}
+
+/// Through the columns the Chip is drawn at, so a Chip the renderer would not
+/// show fails here — the Hover's Chip click, one window over.
+#[when(expr = "I click the Evaluator's {string} Chip")]
+fn click_evaluator_chip(world: &mut VardeWorld, name: String) {
+    let window = world.panes().evaluator;
+    let chips = varde::debug::evaluator_chips(&world.state);
+    let at = chips
+        .iter()
+        .position(|chip| chip.name == name)
+        .unwrap_or_else(|| panic!("no {name:?} Chip on the Evaluator"));
+    let labels = varde::debug::evaluator_labels(&world.state, window.width);
+    let column = (window.x..window.right())
+        .find(|&column| layout::strip_at(window, &labels, column) == Some(at))
+        .expect("the Chip on screen");
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, window.y);
+    world.report(mouse::Kind::LeftUp, column, window.y);
+}
+
+#[then(expr = "the Evaluator's {string} Chip is dimmed")]
+fn evaluator_chip_is_dimmed(world: &mut VardeWorld, name: String) {
+    let chip = varde::debug::evaluator_chips(&world.state)
+        .into_iter()
+        .find(|chip| chip.name == name)
+        .unwrap_or_else(|| panic!("no {name:?} Chip on the Evaluator"));
+    assert_eq!(chip.tone, varde::Tone::Dimmed);
+}
+
+/// The requests a Snippet's run goes out as, told from a Watch's and a
+/// Hover's by the context they carry.
+fn repl_requests<'a>(world: &'a VardeWorld, context: &str) -> Vec<&'a Value> {
+    dap_requests(world, "evaluate")
+        .into_iter()
+        .filter(|message| message["arguments"]["context"] == json!(context))
+        .collect()
+}
+
+#[then(expr = "the Debug adapter was sent an {string} request in the {string} context")]
+fn adapter_sent_evaluate_in_context(world: &mut VardeWorld, command: String, context: String) {
+    assert_eq!(command, "evaluate");
+    assert!(
+        !repl_requests(world, &context).is_empty(),
+        "sent: {:?}",
+        world.dap.sent
+    );
+}
+
+#[then(expr = "the Debug adapter was sent an {string} request in the {string} context holding:")]
+fn adapter_sent_evaluate_holding(
+    world: &mut VardeWorld,
+    command: String,
+    context: String,
+    step: &Step,
+) {
+    assert_eq!(command, "evaluate");
+    let expected = step.docstring().expect("docstring").trim_matches('\n');
+    let sent: Vec<String> = repl_requests(world, &context)
+        .iter()
+        .map(|message| {
+            message["arguments"]["expression"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    assert!(sent.iter().any(|held| held == expected), "sent: {sent:?}");
+}
+
+#[then(expr = "that request names the Frame {string}")]
+fn that_request_names_the_frame(world: &mut VardeWorld, name: String) {
+    let asked = last_request(world, "evaluate")["arguments"]["frameId"].clone();
+    let frames = varde::debug::frames(&world.state);
+    let frame = frames
+        .iter()
+        .find(|frame| json!(frame.id) == asked)
+        .unwrap_or_else(|| panic!("no Frame numbered {asked}"));
+    assert_eq!(frame.name, name);
+}
+
+/// The reply to the run still in flight, which is the last `evaluate` sent in
+/// the `repl` context.
+fn answer_the_run(world: &mut VardeWorld, success: bool, body: Value, message: &str) {
+    let seq = repl_requests(world, "repl")
+        .last()
+        .expect("a Snippet was run")["seq"]
+        .clone();
+    adapter_event(
+        world,
+        json!({
+            "type": "response",
+            "request_seq": seq,
+            "success": success,
+            "command": "evaluate",
+            "message": message,
+            "body": body,
+        }),
+    );
+}
+
+#[given(expr = "the Debug adapter answers the {string} with the value {string}")]
+#[when(expr = "the Debug adapter answers the {string} with the value {string}")]
+fn adapter_answers_the_run_with_value(world: &mut VardeWorld, command: String, value: String) {
+    assert_eq!(command, "evaluate");
+    answer_the_run(world, true, json!({ "result": value }), "");
+}
+
+#[given(expr = "the Debug adapter answers the {string} with reference {int}")]
+#[when(expr = "the Debug adapter answers the {string} with reference {int}")]
+fn adapter_answers_the_run_with_reference(world: &mut VardeWorld, command: String, reference: i64) {
+    assert_eq!(command, "evaluate");
+    answer_the_run(
+        world,
+        true,
+        json!({ "result": "", "variablesReference": reference }),
+        "",
+    );
+}
+
+#[when(expr = "the Debug adapter answers the {string} with the error {string}")]
+fn adapter_answers_the_run_with_error(world: &mut VardeWorld, command: String, why: String) {
+    assert_eq!(command, "evaluate");
+    answer_the_run(world, false, json!({}), &why);
+}
+
+#[given("the Debug adapter reported it supports cancelling")]
+fn adapter_supports_cancelling(world: &mut VardeWorld) {
+    adapter_event(
+        world,
+        json!({
+            "type": "event",
+            "event": "capabilities",
+            "body": { "capabilities": { "supportsCancelRequest": true } },
+        }),
+    );
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for that evaluate")]
+fn adapter_sent_cancel_for_that_evaluate(world: &mut VardeWorld, command: String) {
+    assert_eq!(command, "cancel");
+    let evaluate = repl_requests(world, "repl")
+        .last()
+        .expect("a Snippet was run")["seq"]
+        .clone();
+    let cancelled: Vec<&Value> = dap_requests(world, "cancel")
+        .into_iter()
+        .filter(|message| message["arguments"]["requestId"] == evaluate)
+        .collect();
+    assert!(!cancelled.is_empty(), "sent: {:?}", world.dap.sent);
+}
+
+/// The Evaluator output as it is drawn, one row a kind and its text: what the
+/// program printed, then the value or the adapter's reason.
+fn evaluator_output(world: &VardeWorld) -> Vec<(String, String)> {
+    varde::debug::evaluator_output(&world.state)
+        .into_iter()
+        .map(|line| match line {
+            varde::debug::Said::Printed(text) => ("printed".to_string(), text),
+            varde::debug::Said::Failed(why) => ("error".to_string(), why),
+            varde::debug::Said::Running => ("running".to_string(), String::new()),
+            varde::debug::Said::Value(row) => ("value".to_string(), row.value),
+        })
+        .collect()
+}
+
+#[then("the Evaluator output is:")]
+fn the_evaluator_output_is(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<(String, String)> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| (row[0].trim().to_string(), row[1].trim().to_string()))
+        .collect();
+    assert_eq!(evaluator_output(world), expected);
+}
+
+#[then(expr = "the Evaluator output holds the print {string}")]
+fn the_evaluator_output_holds_the_print(world: &mut VardeWorld, text: String) {
+    let held = evaluator_output(world);
+    assert!(
+        held.contains(&("printed".to_string(), text.clone())),
+        "{held:?}"
+    );
+}
+
+#[then("the Evaluator output is running")]
+fn the_evaluator_output_is_running(world: &mut VardeWorld) {
+    let held = evaluator_output(world);
+    assert!(held.iter().any(|(kind, _)| kind == "running"), "{held:?}");
+}
+
+/// Through the row the value is drawn on, which is the row the mouse would
+/// click: the prints come first, so the value is not row zero.
+#[when("I open the Evaluator output's value")]
+fn open_the_evaluator_value(world: &mut VardeWorld) {
+    let at = evaluator_output(world)
+        .iter()
+        .position(|(kind, _)| kind == "value")
+        .expect("a value in the Evaluator output");
+    world.send(Event::OpenEvaluatedRow(at));
+}
+
+#[then(expr = "the project {string} records the Snippet {string}")]
+fn state_json_records_the_snippet(world: &mut VardeWorld, _file: String, expected: String) {
+    let saved: Value =
+        serde_json::from_str(world.startup.state_json.as_deref().expect("state saved"))
+            .expect("json");
+    let held: Vec<String> = saved["snippets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|snippet| Some(snippet.as_str()?.to_string()))
+        .collect();
+    assert!(held.contains(&expected), "{held:?}");
+}
+
+/// The run gesture without naming which of the three makes it: normal-mode
+/// Enter, the Run Chip and Ctrl+Enter are one event, so a scenario about what
+/// a run carries says only that one was made.
+#[when("I run the Snippet")]
+fn run_the_snippet(world: &mut VardeWorld) {
+    world.send(Event::RunSnippet);
+}
+
+#[then(expr = "the Debug adapter was sent an {string} request in the Frame {string}")]
+fn adapter_sent_evaluate_in_frame(world: &mut VardeWorld, command: String, name: String) {
+    assert_eq!(command, "evaluate");
+    adapter_sent_evaluate_in_context(world, command.clone(), "repl".to_string());
+    that_request_names_the_frame(world, name);
 }

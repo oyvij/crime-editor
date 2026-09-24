@@ -294,6 +294,9 @@ pub fn draw(
     hover(frame, state, &areas.panes);
     diagnostic_box(frame, state, &areas.panes);
     candidates(frame, state, &areas.panes);
+    // Over the panes for the Hover's reason, and after it: the window is the
+    // thing the reader is working in, so nothing floats above it but a modal.
+    evaluator(frame, state, &areas.panes);
 
     // Search floats over the panes rather than replacing them: you can still
     // see where you were.
@@ -3373,6 +3376,102 @@ fn hover(frame: &mut Frame, state: &State, panes: &layout::Layout) {
         .collect();
     over_buffer_line(frame, state, panes, placement, lines);
     hover_chips(frame, state, placement.spot(state, panes));
+}
+
+/// The Evaluator: the Snippet above, the output below, and the Chips on the
+/// top border. Every rectangle here is `layout`'s — the mouse hit-tests the
+/// same ones — and every row of the output is `debug`'s, so this only draws.
+fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout) {
+    let Some(open) = state.evaluator.as_ref() else {
+        return;
+    };
+    let window = panes.evaluator;
+    let (snippet_area, output_area) = layout::evaluator_split(window);
+    frame.render_widget(Clear, rect(window));
+    frame.render_widget(
+        Block::default().borders(Borders::ALL).title("EVALUATE"),
+        rect(window),
+    );
+    let lines: Vec<Line> = open
+        .snippet
+        .shown()
+        .split('\n')
+        .map(|row| Line::raw(row.to_string()))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), rect(snippet_area));
+    // The rule between the two, on the row `layout` left for it.
+    frame.render_widget(
+        Block::default().borders(Borders::TOP),
+        rect(varde::layout::Area {
+            height: 1,
+            y: output_area.y.saturating_sub(1),
+            ..output_area
+        }),
+    );
+    let output: Vec<Line> = varde::debug::evaluator_output(state)
+        .iter()
+        .map(|line| match line {
+            varde::debug::Said::Printed(text) => Line::from(Span::styled(
+                text.clone(),
+                Style::default().fg(Color::DarkGray),
+            )),
+            varde::debug::Said::Running => Line::from(Span::styled(
+                "running\u{2026}",
+                Style::default().fg(Color::Yellow),
+            )),
+            // The adapter's words as it said them: a compile error the reader
+            // cannot read is a Snippet they cannot fix.
+            varde::debug::Said::Failed(why) => Line::from(Span::styled(
+                why.clone(),
+                Style::default().fg(Color::LightRed),
+            )),
+            varde::debug::Said::Value(row) => Line::from(vec![
+                Span::styled(
+                    format!(
+                        "{}{}{} ",
+                        " ".repeat(row.depth * 2),
+                        match (row.opens, row.open) {
+                            (varde::debug::Opens::Nothing, _) => "",
+                            (_, true) => "\u{25be} ",
+                            (_, false) => "\u{25b8} ",
+                        },
+                        row.name
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw(row.value.clone()),
+            ]),
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(output), rect(output_area));
+    evaluator_chips(frame, state, window);
+    if state.focus == varde::Pane::Evaluator {
+        if let Some(buffer) = state.edited() {
+            frame.set_cursor_position((
+                snippet_area.x + buffer.column.saturating_sub(1) as u16,
+                snippet_area.y + buffer.line.saturating_sub(1) as u16,
+            ));
+        }
+    }
+}
+
+/// The Evaluator's Chips along its top border, at the columns
+/// `mouse::pressed_in_evaluator` hit-tests them at — flush right, as every
+/// other strip of Chips on a border is.
+fn evaluator_chips(frame: &mut Frame, state: &State, window: varde::layout::Area) {
+    let chips = varde::debug::evaluator_chips(state);
+    let labels = varde::debug::evaluator_labels(state, window.width);
+    let Some(mut x) = window.right().checked_sub(layout::strip_width(&labels)) else {
+        return;
+    };
+    for (chip, label) in chips.iter().zip(labels) {
+        let width = label.width() as u16;
+        frame.render_widget(
+            Line::from(chip_spans(state, chip, label).to_vec()),
+            Rect::new(x, window.y, width, 1),
+        );
+        x += width;
+    }
 }
 
 /// The Hover's Chips along its top border, at the columns

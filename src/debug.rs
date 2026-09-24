@@ -364,6 +364,11 @@ pub struct Session {
     /// a try: a set-value Chip that looked enabled and failed teaches the
     /// reader nothing, so the capability dims it instead.
     can_set: bool,
+    /// Whether it said a request can be taken back, which is the only way a
+    /// Snippet that has not returned can be stopped. Its word for the reason
+    /// `can_set` is its word: a cancel Chip that looked enabled and did
+    /// nothing is worse than one that says it cannot.
+    can_cancel: bool,
     /// What the Corner and the Strip held when the session began, given back
     /// when it ends.
     corner: layout::Corner,
@@ -642,6 +647,7 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
         pausing: false,
         previous: None,
         can_set: false,
+        can_cancel: false,
         corner: next.corner,
         strip: next.strip,
     });
@@ -696,8 +702,9 @@ pub fn gone(next: &mut State, why: Gone) -> Vec<Effect> {
         ),
     };
     next.refusal = refusal;
-    end(next);
-    notice.into_iter().collect()
+    let mut effects = end(next);
+    effects.extend(notice);
+    effects
 }
 
 /// One message the adapter sent, exactly as the edge read it.
@@ -778,25 +785,25 @@ pub fn received(next: &mut State, json: &str) -> Vec<Effect> {
 
 fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
     let session = next.debug.as_mut().expect("a session");
-    let Some(Ask { command, arguments }) = message["request_seq"]
-        .as_i64()
-        .and_then(|seq| session.asked.remove(&seq))
-    else {
+    let answering = message["request_seq"].as_i64().unwrap_or_default();
+    let Some(Ask { command, arguments }) = session.asked.remove(&answering) else {
         return Vec::new();
     };
     if message["success"] != Value::Bool(true) {
         return match command.as_str() {
             "initialize" | "launch" | "attach" => {
                 let why = adapter_error(message, &command);
-                end(next);
+                let mut effects = end(next);
                 next.refusal = Some(Refusal::LaunchFailed(why.clone()));
                 // And in the status line, for the reason `gone` says it twice.
-                vec![Effect::notify_about("launch-failed", why), Effect::StopDap]
+                effects.extend([Effect::notify_about("launch-failed", why), Effect::StopDap]);
+                effects
             }
             // The answer that lets the adapter go, whatever it says.
             "disconnect" => {
-                end(next);
-                vec![Effect::StopDap]
+                let mut effects = end(next);
+                effects.push(Effect::StopDap);
+                effects
             }
             // A pause that could not learn a thread is not still waiting on
             // one, or F9 would never pause again.
@@ -809,6 +816,14 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
             // as false rather than as unanswerable.
             "evaluate" => {
                 let why = adapter_error(message, &command);
+                // The Evaluator first, and told apart by the context the
+                // request went out in for the reason a Hover is: the reader
+                // asked out loud, so the adapter's words are shown as they
+                // came and never softened into a blank output.
+                if let Some(ran) = ran_asked(next, &arguments, answering) {
+                    ran.answer = Ran::Failed(why);
+                    return Vec::new();
+                }
                 match hover_asked(next, &arguments) {
                     Some(hovered) => hovered.held = Held::Failed(why),
                     None => {
@@ -832,6 +847,7 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
     match command.as_str() {
         "initialize" => {
             session.can_set = message["body"]["supportsSetVariable"] == Value::Bool(true);
+            session.can_cancel = message["body"]["supportsCancelRequest"] == Value::Bool(true);
             session.phase = Phase::Starting;
             let (request, args) = (session.request.clone(), session.args.clone());
             vec![ask(session, &request, Value::Object(args))]
@@ -918,6 +934,14 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
             let indexed = message["body"]["indexedVariables"]
                 .as_u64()
                 .unwrap_or_default() as usize;
+            if let Some(ran) = ran_asked(next, &arguments, answering) {
+                ran.answer = Ran::Value {
+                    value,
+                    reference,
+                    indexed,
+                };
+                return Vec::new();
+            }
             match hover_asked(next, &arguments) {
                 Some(hovered) => {
                     hovered.held = Held::Value {
@@ -967,8 +991,9 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
             }
         }
         "disconnect" => {
-            end(next);
-            vec![Effect::StopDap]
+            let mut effects = end(next);
+            effects.push(Effect::StopDap);
+            effects
         }
         _ => Vec::new(),
     }
@@ -1036,6 +1061,20 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
             let session = next.debug.as_mut().expect("a session");
             if let Some(can_set) = body["capabilities"]["supportsSetVariable"].as_bool() {
                 session.can_set = can_set;
+            }
+            if let Some(can_cancel) = body["capabilities"]["supportsCancelRequest"].as_bool() {
+                session.can_cancel = can_cancel;
+            }
+            Vec::new()
+        }
+        // What the program printed, as the adapter repeats it. It goes to the
+        // Evaluator while a Snippet is in flight, because output during a run
+        // is that run's: the Program output is the pty's own and keeps its
+        // copy either way, so this takes nothing away from it.
+        Some("output") => {
+            let text = body["output"].as_str().unwrap_or_default();
+            if let Some(ran) = in_flight(next) {
+                ran.printed.push(printable(text.trim_end_matches('\n')));
             }
             Vec::new()
         }
@@ -1177,8 +1216,9 @@ pub fn stop(next: &mut State) -> Vec<Effect> {
     };
     let effects = match session.phase {
         Phase::Stopping | Phase::Spawning => {
-            end(next);
-            vec![Effect::StopDap]
+            let mut effects = end(next);
+            effects.push(Effect::StopDap);
+            effects
         }
         _ => {
             let terminate = session.request == "launch";
@@ -1476,7 +1516,16 @@ pub fn row_chips(state: &State, index: usize) -> Vec<crate::Chip> {
             ),
             Of::Member => chip(WATCH, "watch", "\u{25c9}", "w", Hue::Go, nothing_to_watch),
         },
-        chip(EVALUATE, "evaluate", "\u{2261}", "", Hue::Plain, true),
+        // A row with no expression is a heading or a place in a list, which
+        // is nothing the Evaluator could be opened on.
+        chip(
+            EVALUATE,
+            "evaluate",
+            "\u{2261}",
+            "",
+            Hue::Plain,
+            nothing_to_watch,
+        ),
         chip(ROW_ASK_AI, "ask-ai", "\u{2736}", "", Hue::Plain, true),
     ]
 }
@@ -1762,15 +1811,7 @@ const WATCH_CONTEXT: &str = "watch";
 /// is a literal, and the only expression around it is the call it is an
 /// argument to — which is the one thing a Hover may not ask about.
 fn expression_at(state: &State, at: Place) -> Option<(String, usize)> {
-    let path = state.current_buffer.as_ref()?;
-    let line: Vec<char> = state
-        .buffers
-        .get(path)?
-        .shown()
-        .split('\n')
-        .nth(at.line.checked_sub(1)?)?
-        .chars()
-        .collect();
+    let line = line_chars(state, at.line)?;
     let on = at.column.checked_sub(1)?;
     if !line.get(on).is_some_and(|character| named(*character)) {
         return None;
@@ -1820,6 +1861,101 @@ fn expression_at(state: &State, at: Place) -> Option<(String, usize)> {
         }
     }
     Some((line[from..to].iter().collect(), from + 1))
+}
+
+/// One line of the buffer on screen, 1-based, as characters — what both
+/// readings of an expression walk.
+fn line_chars(state: &State, line: usize) -> Option<Vec<char>> {
+    let path = state.current_buffer.as_ref()?;
+    Some(
+        state
+            .buffers
+            .get(path)?
+            .shown()
+            .split('\n')
+            .nth(line.checked_sub(1)?)?
+            .chars()
+            .collect(),
+    )
+}
+
+/// What `\u{2423}e` opens the Evaluator on: the Selection if there is one, and
+/// otherwise the whole expression the cursor stands in — `orders.len()` with
+/// the cursor on `orders`, where a Hover would name `orders` alone.
+///
+/// The difference is deliberate and is the same one that lets this run a call
+/// at all: a Hover describes whatever the pointer happens to cross, so it
+/// stops at the part it is resting on and refuses to call anything; this ran
+/// because somebody pressed a key for it, so the call at the end of the chain
+/// is the point rather than the danger.
+pub fn cursor_expression(state: &State) -> String {
+    if let Some(text) = state.selected_text().filter(|text| !text.is_empty()) {
+        return text;
+    }
+    let Some(buffer) = crate::current_buffer(state) else {
+        return String::new();
+    };
+    let at = Place {
+        line: buffer.line,
+        column: buffer.column,
+    };
+    let Some((expression, column)) = expression_at(state, at) else {
+        return String::new();
+    };
+    let Some(line) = line_chars(state, at.line) else {
+        return expression;
+    };
+    let from = column - 1;
+    let to = chain_end(&line, from + expression.chars().count());
+    line[from..to].iter().collect()
+}
+
+/// On through the chain the expression continues into: `.len()` after
+/// `orders`, and the groups each name in it carries, balanced so a call
+/// taking a call is one expression.
+fn chain_end(line: &[char], mut to: usize) -> usize {
+    loop {
+        // The groups the name just passed carries — a call's arguments, an
+        // index — balanced, so a call taking a call is one expression.
+        while let Some(open @ ('(' | '[')) = line.get(to).copied() {
+            let close = match open {
+                '(' => ')',
+                _ => ']',
+            };
+            let mut depth = 0usize;
+            let mut at = to;
+            loop {
+                match line.get(at) {
+                    Some(character) if *character == open => depth += 1,
+                    Some(character) if *character == close => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    Some(_) => {}
+                    // Unbalanced, so there is no group to take: the expression
+                    // ends where the name did.
+                    None => return to,
+                }
+                at += 1;
+            }
+            to = at + 1;
+        }
+        if line.get(to) != Some(&'.') {
+            return to;
+        }
+        let mut after = to + 1;
+        while after < line.len() && named(line[after]) {
+            after += 1;
+        }
+        // A dot with no name after it ends nothing — a decimal point, or a
+        // chain the reader has not finished typing.
+        if after == to + 1 {
+            return to;
+        }
+        to = after;
+    }
 }
 
 fn named(character: char) -> bool {
@@ -1942,9 +2078,7 @@ pub fn hover_chips(state: &State) -> Vec<crate::Chip> {
         tone,
     };
     vec![
-        // Dimmed until the Evaluator exists — issue #60 — and drawn rather
-        // than hidden, for the reason the Variables row's own is.
-        chip(EVALUATE, "evaluate", "\u{2261}", Hue::Plain, Tone::Dimmed),
+        chip(EVALUATE, "evaluate", "\u{2261}", Hue::Plain, Tone::Plain),
         chip(WATCH, "watch", "\u{25c9}", Hue::Go, Tone::Plain),
     ]
 }
@@ -1978,6 +2112,319 @@ pub fn open_hovered(next: &mut State, index: usize) -> Vec<Effect> {
         Some(row) => opened(next, row),
         None => Vec::new(),
     }
+}
+
+/// The floating window that runs a Snippet inside the Paused program, in the
+/// chosen Frame. The Snippet is a [`crate::editor::Buffer`] so it inherits
+/// the editor's own gestures rather than a second text editor written on a
+/// string — the reason the comment box is one too.
+///
+/// Core state rather than the session's, though it closes with one: what a
+/// reader is in the middle of writing is theirs, and the Snippet they ran is
+/// remembered past the program it ran in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Evaluator {
+    pub snippet: crate::editor::Buffer,
+    /// The run on screen, and `None` until the Snippet has been run once.
+    /// Replaced whole at every run: the output is about the run just made,
+    /// and a line left over from the one before it reads as this one's.
+    pub ran: Option<Run>,
+}
+
+/// One run of the Snippet: what the program printed while it ran and what it
+/// came back with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Run {
+    /// What went to the adapter — the Selection where there was one, and not
+    /// the whole Snippet. Taken at the run rather than read back off the
+    /// Selection, which the reader has moved on by the time an answer lands:
+    /// the value is labelled with the code that produced it or with nothing.
+    ran: String,
+    /// In the order it arrived, and before the value below: a side effect
+    /// happens while the expression that has it is still running.
+    printed: Vec<String>,
+    answer: Ran,
+}
+
+/// Where a run has got to. An enum for the reason [`Phase`] is one: running
+/// and failed at once has no answer for the Run Chip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Ran {
+    /// The `seq` the `evaluate` went out with, which is what a cancel names —
+    /// the protocol takes a request back by its number and by nothing else,
+    /// and it is also how a reply is told from a reply to the run before it.
+    Running(i64),
+    Value {
+        value: String,
+        reference: i64,
+        indexed: usize,
+    },
+    Failed(String),
+}
+
+/// One row of the Evaluator output as it is drawn, hit-tested and asserted
+/// on: the prints, then the value's tree or the adapter's reason. One list
+/// for the reason the Variables are one list. Named as [`crate::lsp::Said`]
+/// is, and for its reason — a row of a box is what the box says — which also
+/// keeps it apart from the renderer's own `Line`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Said {
+    Printed(String),
+    /// The value, and everything opened under it — the adapter's tree, drawn
+    /// and opened exactly as the Variables are.
+    Value(Row),
+    /// The adapter's reason, kept apart from a value for the reason a Watch's
+    /// is: a reason drawn as a value reads as the program's own answer.
+    Failed(String),
+    /// Gone out and nothing back yet.
+    Running,
+}
+
+/// The protocol's context a Snippet goes out in. `repl` is the one that tells
+/// the adapter the answer is for a person to read and that side effects are
+/// wanted — a Snippet is run because somebody pressed a key for it, which is
+/// the whole difference from the `hover` context beside it.
+const REPL: &str = "repl";
+
+pub const RUN: &str = "evaluator-run";
+pub const CANCEL: &str = "evaluator-cancel";
+
+/// `␣e`, the Hover's Evaluate Chip and a Variables row's: the Evaluator opens
+/// on the expression the gesture named, prefilled and asking the adapter
+/// nothing. What runs is what the reader presses Enter on, which is the whole
+/// reason a Hover may refuse to evaluate a call and this may not.
+pub fn open_evaluator(next: &mut State, expression: String) {
+    if next.debug.is_none() {
+        return;
+    }
+    next.evaluator = Some(Evaluator {
+        snippet: crate::editor::Buffer::open(&expression, false, next.tab_width),
+        ran: None,
+    });
+    next.focus = Pane::Evaluator;
+    // The Selection the expression was *read from* goes with it. It is a span
+    // of the buffer behind the window, and the run below reads a Selection
+    // against the Snippet: left standing, `\u{2423}e` on line 3 columns 17-28 would
+    // be read against a one-line Snippet and send the adapter an empty
+    // expression, silently. A Selection in the Snippet is one made in the
+    // Snippet.
+    next.selection = None;
+}
+
+/// Normal-mode Enter, the Run Chip and Ctrl+Enter: the Selection if there is
+/// one and the whole Snippet otherwise, in the `repl` context and against the
+/// Frame being inspected. Nothing at all while the program is not stopped in
+/// a Frame to run it in — an adapter asked to evaluate then answers with an
+/// error, which is why a Watch is not asked then either.
+pub fn run(next: &mut State) -> Vec<Effect> {
+    if next.evaluator.is_none() {
+        return Vec::new();
+    }
+    let text = running_text(next);
+    let whole = snippet_text(next);
+    let Some(session) = next.debug.as_mut() else {
+        return Vec::new();
+    };
+    let Phase::Paused(pause) = &session.phase else {
+        return Vec::new();
+    };
+    let Some(frame) = pause.frames.get(pause.chosen) else {
+        return Vec::new();
+    };
+    let id = frame.id;
+    let effect = ask(
+        session,
+        "evaluate",
+        json!({ "expression": &text, "frameId": id, "context": REPL }),
+    );
+    let seq = session.seq;
+    if let Some(evaluator) = next.evaluator.as_mut() {
+        evaluator.ran = Some(Run {
+            ran: text,
+            printed: Vec::new(),
+            answer: Ran::Running(seq),
+        });
+    }
+    let mut effects = vec![effect];
+    effects.extend(remember(next, whole));
+    effects
+}
+
+/// The cancel Chip: the run still in flight taken back by its number. Refused
+/// by the capability rather than by trying it, which is what the dimmed Chip
+/// already says — the reason a set value is refused that way.
+pub fn cancel(next: &mut State) -> Vec<Effect> {
+    let Some(Ran::Running(seq)) = next
+        .evaluator
+        .as_ref()
+        .and_then(|evaluator| evaluator.ran.as_ref())
+        .map(|ran| ran.answer.clone())
+    else {
+        return Vec::new();
+    };
+    let Some(session) = next.debug.as_mut().filter(|session| session.can_cancel) else {
+        return Vec::new();
+    };
+    vec![ask(session, "cancel", json!({ "requestId": seq }))]
+}
+
+/// What this run sends: the Selection where the keyboard is in the Snippet
+/// and there is one, so a line of a longer block can be tried on its own.
+fn running_text(state: &State) -> String {
+    let Some(evaluator) = state.evaluator.as_ref() else {
+        return String::new();
+    };
+    match state
+        .selection
+        .as_ref()
+        .and_then(crate::Selection::buffer_span)
+    {
+        Some((from, to)) if state.focus == Pane::Evaluator => evaluator.snippet.text_in(from, to),
+        _ => evaluator.snippet.shown().to_string(),
+    }
+}
+
+/// The whole Snippet, which is what is remembered whatever was run: the
+/// reader wrote the block, and recalling the one line they tried of it would
+/// hand back something they never typed.
+fn snippet_text(state: &State) -> String {
+    state
+        .evaluator
+        .as_ref()
+        .map(|evaluator| evaluator.snippet.shown().to_string())
+        .unwrap_or_default()
+}
+
+/// A Snippet kept for the project, newest last and never twice. Written where
+/// the Snippet leaves the window — at a run and at the close that ends the
+/// session — rather than on every keystroke, which would remember every
+/// half-typed line on the way to the one that worked.
+fn remember(next: &mut State, snippet: String) -> Vec<Effect> {
+    if snippet.is_empty() {
+        return Vec::new();
+    }
+    next.snippets.retain(|held| held != &snippet);
+    next.snippets.push(snippet);
+    vec![Effect::SaveState(crate::state_json(next))]
+}
+
+/// The Chips on the Evaluator's top border: run, and the cancel that takes a
+/// run back. Run is dimmed while the program is not stopped, because there is
+/// no Frame to run a Snippet in; cancel while there is nothing in flight or
+/// the adapter cannot take one back.
+pub fn evaluator_chips(state: &State) -> Vec<crate::Chip> {
+    use crate::{Chip, Hue, Tone};
+    let Some(evaluator) = state.evaluator.as_ref() else {
+        return Vec::new();
+    };
+    let running = matches!(
+        evaluator.ran.as_ref().map(|ran| &ran.answer),
+        Some(Ran::Running(_))
+    );
+    let stopped = matches!(
+        state.debug.as_ref().map(|session| &session.phase),
+        Some(Phase::Paused(_))
+    );
+    let can_cancel = state
+        .debug
+        .as_ref()
+        .is_some_and(|session| session.can_cancel);
+    vec![
+        Chip {
+            action: RUN,
+            name: "run",
+            glyph: "\u{25b6}".to_string(),
+            keys: "\u{21b5}",
+            hue: Hue::Go,
+            tone: match stopped {
+                true => Tone::Plain,
+                false => Tone::Dimmed,
+            },
+        },
+        Chip {
+            action: CANCEL,
+            name: "cancel",
+            glyph: "\u{2715}".to_string(),
+            keys: "",
+            hue: Hue::Halt,
+            tone: match running && can_cancel {
+                true => Tone::Plain,
+                false => Tone::Dimmed,
+            },
+        },
+    ]
+}
+
+/// The Evaluator's Chips as they are drawn and hit-tested, for the reason the
+/// Hover's are one list.
+pub fn evaluator_labels(state: &State, width: u16) -> Vec<String> {
+    crate::layout::chip_labels(&evaluator_chips(state), width, 0)
+}
+
+/// The Evaluator output: the prints in the order they arrived, then the value
+/// as a tree opened exactly as the Variables are, or the adapter's reason.
+pub fn evaluator_output(state: &State) -> Vec<Said> {
+    let Some(ran) = state
+        .evaluator
+        .as_ref()
+        .and_then(|evaluator| evaluator.ran.as_ref())
+    else {
+        return Vec::new();
+    };
+    let mut lines: Vec<Said> = ran.printed.iter().cloned().map(Said::Printed).collect();
+    match &ran.answer {
+        Ran::Running(_) => lines.push(Said::Running),
+        Ran::Failed(why) => lines.push(Said::Failed(why.clone())),
+        Ran::Value {
+            value,
+            reference,
+            indexed,
+        } => {
+            let Some(pause) = showing(state) else {
+                return lines;
+            };
+            let member = Member {
+                name: ran.ran.clone(),
+                value: value.clone(),
+                reference: *reference,
+                hint: Hint::Plain,
+                indexed: *indexed,
+            };
+            let mut rows = Vec::new();
+            draw(pause, &member, 0, "", &mut Vec::new(), &mut rows);
+            lines.extend(rows.into_iter().map(Said::Value));
+        }
+    }
+    lines
+}
+
+/// A click on a row of the Evaluator's value, which opens it exactly as the
+/// same row of the Variables opens.
+pub fn open_evaluated(next: &mut State, index: usize) -> Vec<Effect> {
+    match evaluator_output(next).into_iter().nth(index) {
+        // A print has nothing under it to ask for, and neither has a reason.
+        Some(Said::Value(row)) => opened(next, row),
+        _ => Vec::new(),
+    }
+}
+
+/// The run still in flight, which is what the program's prints belong to.
+fn in_flight(next: &mut State) -> Option<&mut Run> {
+    next.evaluator
+        .as_mut()?
+        .ran
+        .as_mut()
+        .filter(|ran| matches!(ran.answer, Ran::Running(_)))
+}
+
+/// The run an `evaluate` reply belongs to: the `repl` context is what names
+/// it, and the `seq` has to still be the one in flight — a reply to the run
+/// before this one belongs to output that has already been replaced.
+fn ran_asked<'a>(next: &'a mut State, arguments: &Value, seq: i64) -> Option<&'a mut Run> {
+    if arguments["context"] != json!(REPL) {
+        return None;
+    }
+    in_flight(next).filter(|ran| ran.answer == Ran::Running(seq))
 }
 
 /// Where the program is paused, as the chosen Frame names it, and why.
@@ -2200,7 +2647,7 @@ pub fn resting_corner(state: &State) -> layout::Corner {
 /// keyboard leaves a pane that is going. Stepping mode goes with it — the
 /// letters it claims do nothing without a session, and one that swallowed
 /// them for nothing would be a mode nobody could see they were in.
-fn end(next: &mut State) {
+fn end(next: &mut State) -> Vec<Effect> {
     next.corner = resting_corner(next);
     // The Strip the same way, which is the whole of what a session borrowed:
     // both slots go back to what they held before it began.
@@ -2215,10 +2662,18 @@ fn end(next: &mut State) {
     // goes too rather than standing over the next session's tab.
     next.output_unseen = false;
     // Both of the session's own panes go with it, so the keyboard is never
-    // left in one that is no longer on screen.
-    if matches!(next.focus, Pane::Frames | Pane::Variables) {
+    // left in one that is no longer on screen. The Evaluator is a third: it
+    // runs code inside a program, and a window offering to run one with
+    // nothing to run it in is a window that can only refuse.
+    if matches!(next.focus, Pane::Frames | Pane::Variables | Pane::Evaluator) {
         next.focus = Pane::Editor;
     }
+    // The Snippet outlives the window it was written in, whether or not it
+    // was ever run: a session ending under a half-written block must not be
+    // what loses it.
+    let snippet = snippet_text(next);
+    next.evaluator = None;
+    remember(next, snippet)
 }
 
 /// The Hover an `evaluate` was sent for, if this one was: the `hover` context
@@ -2364,6 +2819,42 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    /// What `\u{2423}e` names where a Hover would name less: the chain the
+    /// cursor stands in, the groups each name in it carries, and the two
+    /// shapes that end it early. The scenarios drive one line of Rust; these
+    /// are the shapes a real line has that no scenario would be readable
+    /// enumerating.
+    #[test]
+    fn a_cursor_names_the_whole_chain_it_stands_in() {
+        let named = |line: &str, column: usize| {
+            let mut state = State::default();
+            let path = PathBuf::from("/w/one.rs");
+            state
+                .buffers
+                .insert(path.clone(), crate::editor::Buffer::open(line, false, 4));
+            let buffer = state.buffers.get_mut(&path).expect("just inserted");
+            buffer.line = 1;
+            buffer.column = column;
+            state.current_buffer = Some(path);
+            cursor_expression(&state)
+        };
+        // On the receiver, and the call at the end of the chain comes too.
+        assert_eq!(named("    let n = orders.len();", 17), "orders.len()");
+        // Every link of a longer one, from anywhere along it.
+        assert_eq!(named("a.b().c[0].d", 1), "a.b().c[0].d");
+        assert_eq!(named("a.b().c[0].d", 7), "a.b().c[0].d");
+        // A call taking a call is one expression, brackets balanced.
+        assert_eq!(named("x.f(g(1)).y", 1), "x.f(g(1)).y");
+        // A dot with no name after it ends the chain: a decimal point, and a
+        // chain the reader has not finished typing.
+        assert_eq!(named("total.", 1), "total");
+        assert_eq!(named("n + 1.5", 1), "n");
+        // A group nobody closed is a group there is nothing to take.
+        assert_eq!(named("a.b(1", 1), "a.b");
+        // A place in no name at all names nothing.
+        assert_eq!(named("    let n = 7;", 13), "");
+    }
+
     /// What the pointer names, branch by branch. The scenarios drive four
     /// places in one file; these are the shapes a real line has that no
     /// scenario would be readable enumerating.
@@ -2425,6 +2916,35 @@ mod tests {
         // And neither is whitespace, punctuation, or a column past the line.
         assert_eq!(named("    let order = load(7);", 15), None);
         assert_eq!(named("    let order = load(7);", 90), None);
+    }
+
+    /// The Selection `\u{2423}e` read the expression off is a span of the buffer
+    /// *behind* the window, and a run reads a Selection against the Snippet.
+    /// Left standing it named columns 17-28 of a one-line Snippet, so the
+    /// adapter was sent an empty expression and nothing on screen said so.
+    /// Driven here rather than in a scenario because the defect is the absence
+    /// of a Selection, and no `Then` can see one that is gone.
+    #[test]
+    fn opening_on_a_selection_does_not_leave_it_to_be_read_against_the_snippet() {
+        let mut state = paused(State::default());
+        let path = PathBuf::from("/w/one.rs");
+        state.buffers.insert(
+            path.clone(),
+            crate::editor::Buffer::open("    let count = orders.len();\n", false, 4),
+        );
+        state.current_buffer = Some(path);
+        state.selection = Some(crate::Selection::Buffer {
+            anchor: Place {
+                line: 1,
+                column: 17,
+            },
+            cursor: Place {
+                line: 1,
+                column: 28,
+            },
+        });
+        open_evaluator(&mut state, "orders.len()".to_string());
+        assert_eq!(running_text(&state), "orders.len()");
     }
 
     /// An adapter that refuses an `evaluate` the Hover sent: its reason

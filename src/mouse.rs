@@ -280,6 +280,15 @@ pub fn on_mouse(state: &State, panes: &Layout, pointer: &mut Pointer, input: Inp
             return Outcome::of(vec![Event::PaneAction(action)]);
         }
     }
+    // The Evaluator floats over the panes, so a press on it belongs to the
+    // window before a divider *between* those panes can claim the column: the
+    // AI pane's edge runs straight through the middle of a centred window, and
+    // it was swallowing every press on the Chip drawn there. Only where no
+    // drag is already held — a drag belongs to the pane its button went down
+    // in, whatever it crosses.
+    if pointer.pane.is_none() && panes.evaluator.holds(input.column, input.row) {
+        return in_pane(state, panes, pointer, Pane::Evaluator, input);
+    }
     if let Some(outcome) = divider_drag(panes, pointer, input) {
         return outcome;
     }
@@ -549,6 +558,13 @@ fn hovered(state: &State, panes: &Layout, input: Input) -> Vec<Event> {
 }
 
 fn pressed(state: &State, panes: &Layout, pane: Pane, input: Input) -> Vec<Event> {
+    // The Evaluator floats over the panes, so a press that landed on it is
+    // the window's before anything drawn under it is asked — the reason
+    // `layout::pane_at` asks it first. Without this the strips hit-tested
+    // below answer for a rectangle the window is covering.
+    if pane == Pane::Evaluator {
+        return pressed_in_evaluator(state, panes, input);
+    }
     if let Some(events) = pressed_in_hover(state, panes, input) {
         return events;
     }
@@ -750,6 +766,30 @@ fn pressed_in_breakpoints(state: &State, panes: &Layout, input: Input) -> Vec<Ev
     }
 }
 
+/// The Evaluator's window: its Chips on the top border, a row of its output
+/// below the split, and the window itself otherwise. The Chips first, for the
+/// reason the Breakpoint list's are first — the border row is chrome, and
+/// reading it as content acts on a row nobody pointed at.
+fn pressed_in_evaluator(state: &State, panes: &Layout, input: Input) -> Vec<Event> {
+    let window = panes.evaluator;
+    if input.row == window.y {
+        let labels = crate::debug::evaluator_labels(state, window.width);
+        let chips = crate::debug::evaluator_chips(state);
+        return match layout::strip_at(window, &labels, input.column).and_then(|at| chips.get(at)) {
+            Some(chip) => vec![Event::RowAction(chip.action)],
+            None => vec![Event::ClickPane(Pane::Evaluator)],
+        };
+    }
+    let (_, output) = layout::evaluator_split(window);
+    if output.holds(input.column, input.row) {
+        let index = (input.row - output.y) as usize;
+        if index < crate::debug::evaluator_output(state).len() {
+            return vec![Event::OpenEvaluatedRow(index)];
+        }
+    }
+    vec![Event::ClickPane(Pane::Evaluator)]
+}
+
 fn dragged(
     state: &State,
     panes: &Layout,
@@ -803,6 +843,11 @@ fn dragged(
         | Pane::Breakpoints
         | Pane::Frames
         | Pane::Variables => Outcome::default(),
+        // Moving the window, resizing it and picking text in the Snippet are
+        // all drags, and which one a press begins is issue #61's to decide.
+        // Until then a drag here does nothing rather than doing the editor's
+        // thing to a pane that is not the editor.
+        Pane::Evaluator => Outcome::default(),
         Pane::Editor => {
             // A drag that began in the mirror stays a travel however far the
             // pointer wanders, and a selection that wanders into the mirror
@@ -1103,6 +1148,7 @@ fn place_in(state: &State, panes: &Layout, pane: Pane, (column, row): (u16, u16)
         | Pane::Ai
         | Pane::Terminal
         | Pane::Output
+        | Pane::Evaluator
         | Pane::Risk
         | Pane::Buffers
         | Pane::History
@@ -1171,6 +1217,11 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
         // is taking, which the Debug group has instead of the shells.
         Pane::Variables => interior(panes.terminal),
         Pane::Output => interior(panes.output),
+        // The Snippet, which is the text in that window: the output below it
+        // is rows of the adapter's tree, not characters somebody picks.
+        // Empty while no window is open, which `Area::holds` answers `false`
+        // for, so no hit-test has to ask whether there is one.
+        Pane::Evaluator => crate::layout::evaluator_split(panes.evaluator).0,
     }
 }
 
