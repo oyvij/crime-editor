@@ -421,11 +421,13 @@ pub enum Modal {
     Launches {
         row: usize,
     },
-    /// A Run mark's offer of Run and Debug, on the line it stands on. What
-    /// the mark starts is read afresh when one is chosen, for the reason
-    /// [`Modal::StepDetail`] carries nothing: the buffer may change under it.
+    /// A Run mark's offer of Run and Debug, on the line it stands on, holding
+    /// what the mark captured: finding it is a parse, which a frame drawing
+    /// the offer must not pay, and the offer answers every key so the buffer
+    /// cannot change under it.
     RunMark {
         line: usize,
+        mark: run::Mark,
     },
     /// The Breakpoint box: which Breakpoint, which row the keys type into,
     /// and what has been written so far — held here rather than on the

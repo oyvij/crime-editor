@@ -42,8 +42,11 @@ fn grammar(extension: &str) -> Option<Language> {
 /// Why a row could never mark anything, which start refuses rather than
 /// leaving a row that reads as configured and does nothing: an extension no
 /// grammar parses, a query that does not compile against one, or a query with
-/// no `@run` to say which line a match marks.
+/// no `@run` to say which line a match marks — or no extension at all.
 pub fn unusable(row: &Run) -> Option<String> {
+    if row.extensions.is_empty() {
+        return Some("claims no extensions".to_string());
+    }
     for extension in &row.extensions {
         let Some(language) = grammar(extension) else {
             return Some(format!("no grammar parses .{extension}"));
@@ -60,7 +63,8 @@ pub fn unusable(row: &Run) -> Option<String> {
 }
 
 /// The Run marks of the buffer on screen, by line. Parsed on every call, so
-/// the edge asks once per edit and the core only when a mark is acted on.
+/// the edge asks once per edit and the core once per offer, which then
+/// carries its mark.
 pub fn marks(state: &State) -> BTreeMap<usize, Mark> {
     let Some((path, buffer)) = state
         .current_buffer
@@ -133,21 +137,21 @@ fn found(runs: &BTreeMap<String, Run>, path: &Path, text: &str) -> BTreeMap<usiz
 /// Clicking a Run mark, or `␣x` on its line: the offer of Run and Debug. A
 /// line with none is refused out loud, since the key was pressed at it.
 pub fn offer(next: &mut State, line: usize) {
-    match marks(next).contains_key(&line) {
-        true => next.modal = Modal::RunMark { line },
-        false => next.refusal = Some(Refusal::NoRunMark),
+    match marks(next).remove(&line) {
+        Some(mark) => next.modal = Modal::RunMark { line, mark },
+        None => next.refusal = Some(Refusal::NoRunMark),
     }
 }
 
 /// The offer's Chips, and nothing while no offer is up. Debug is dimmed for
 /// a row that names no way to debug it.
 pub fn chips(state: &State) -> Vec<Chip> {
-    let Modal::RunMark { line } = state.modal else {
+    let Modal::RunMark { mark, .. } = &state.modal else {
         return Vec::new();
     };
-    let debuggable = marks(state)
-        .get(&line)
-        .and_then(|mark| state.runs.get(&mark.row))
+    let debuggable = state
+        .runs
+        .get(&mark.row)
         .is_some_and(|row| row.debug.is_some());
     vec![
         Chip {
@@ -173,15 +177,15 @@ pub fn chips(state: &State) -> Vec<Chip> {
 }
 
 /// What the offer's box says: the row whose mark it is, and the name it
-/// captured. Nothing while no offer is up.
+/// captured — the file's own text, so stripped before a terminal draws it.
+/// Nothing while no offer is up.
 pub fn offered(state: &State) -> Option<String> {
-    let Modal::RunMark { line } = state.modal else {
+    let Modal::RunMark { mark, .. } = &state.modal else {
         return None;
     };
-    let mark = marks(state).remove(&line)?;
     Some(match mark.captures.get("name") {
-        Some(name) => format!("{} · {name}", mark.row),
-        None => mark.row,
+        Some(name) => format!("{} · {}", mark.row, crate::debug::printable(name)),
+        None => mark.row.clone(),
     })
 }
 
@@ -213,10 +217,10 @@ pub fn chip_at(
 /// prompt is waiting, which `update` finds or splits off (R38.5). Debug is a
 /// session launched from the row's `debug`, filled for exactly this match.
 pub fn choose(next: &mut State, action: &str) -> Vec<Effect> {
-    let Modal::RunMark { line } = std::mem::take(&mut next.modal) else {
+    let Modal::RunMark { mark, .. } = std::mem::take(&mut next.modal) else {
         return Vec::new();
     };
-    let (Some(file), Some(mark)) = (next.current_buffer.clone(), marks(next).remove(&line)) else {
+    let Some(file) = next.current_buffer.clone() else {
         return Vec::new();
     };
     let Some(row) = next.runs.get(&mark.row).cloned() else {
@@ -235,8 +239,7 @@ pub fn choose(next: &mut State, action: &str) -> Vec<Effect> {
                 &file,
                 &mark,
                 |text| {
-                    let printable: String = text.chars().filter(|c| !c.is_control()).collect();
-                    shlex::try_quote(&printable)
+                    shlex::try_quote(&crate::debug::printable(text))
                         .map_or_else(|_| String::new(), |quoted| quoted.into_owned())
                 },
             ))]
@@ -316,6 +319,24 @@ mod tests {
         );
     }
 
+    /// `--exact` compares a test's whole path, so a test in a module is run
+    /// by `tests::adds` and never by `adds`, which would run nothing.
+    #[test]
+    fn a_rust_test_in_a_module_runs_by_its_path() {
+        let state = opened(
+            "/w/src/lib.rs",
+            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn adds() {}\n}\n",
+        );
+        let offered = crate::update(&state, crate::Event::OfferRun(4)).0;
+        let (_, effects) = crate::update(&offered, crate::Event::ChooseRun(RUN));
+        assert_eq!(
+            effects,
+            vec![Effect::RunInTerminal(
+                "cargo test tests::adds -- --exact".to_string()
+            )]
+        );
+    }
+
     #[test]
     fn java_marks_main_and_tests_with_their_class() {
         let text = "class Orders {\n  public static void main(String[] args) {}\n  @Test\n  void adds() {}\n  void helper() {}\n}\n";
@@ -370,7 +391,7 @@ mod tests {
         let offer = crate::keys::chord(&state, 'x').expect("a chord");
         assert_eq!(offer, crate::Event::OfferRun(1));
         let up = crate::update(&state, offer).0;
-        assert_eq!(up.modal, Modal::RunMark { line: 1 });
+        assert!(matches!(up.modal, Modal::RunMark { line: 1, .. }));
         assert_eq!(offered(&up), Some("rust_main · main".to_string()));
         let refused = crate::update(&state, crate::Event::OfferRun(2)).0;
         assert_eq!(refused.modal, Modal::None);

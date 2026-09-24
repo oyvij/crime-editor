@@ -65,6 +65,14 @@ query = '((attribute_item (attribute (identifier) @attribute)) . (function_item 
 run = "cargo test ${name} -- --exact"
 debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo test --no-run --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"], args = ["${name}", "--exact"] } }
 
+# The same test inside a module, which `--exact` names by its path. Rows are
+# tried by name, so this one takes the line before `rust_test` can.
+[run.rust_module_test]
+extensions = ["rs"]
+query = '((mod_item name: (identifier) @module body: (declaration_list (attribute_item (attribute (identifier) @attribute)) . (function_item name: (identifier) @name @run))) (#eq? @attribute "test"))'
+run = "cargo test ${module}::${name} -- --exact"
+debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo test --no-run --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"], args = ["${module}::${name}", "--exact"] } }
+
 # The source-file launcher, which compiles the file it is handed: no build to
 # ask for a class path.
 [run.java_main]
@@ -866,6 +874,12 @@ const TEMPLATE_SETTINGS: &str = r#"# Varde reads this file on every start. A pro
 # query = '((attribute_item (attribute (identifier) @attribute)) . (function_item name: (identifier) @name @run) (#eq? @attribute "test"))'
 # run = "cargo test ${name} -- --exact"
 # debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo test --no-run --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"], args = ["${name}", "--exact"] } }
+
+[run.rust_module_test]
+# extensions = ["rs"]
+# query = '((mod_item name: (identifier) @module body: (declaration_list (attribute_item (attribute (identifier) @attribute)) . (function_item name: (identifier) @name @run))) (#eq? @attribute "test"))'
+# run = "cargo test ${module}::${name} -- --exact"
+# debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo test --no-run --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"], args = ["${module}::${name}", "--exact"] } }
 
 [run.java_main]
 # extensions = ["java"]
@@ -2943,16 +2957,16 @@ mod tests {
         );
     }
 
-    /// Each seed is decided by one fact: its layer is `None`. The edge
-    /// hands `Some("")` for a file it found and could not read — not UTF-8, or
-    /// write-only — because an empty layer merges nothing and still says "a
-    /// file is here". Seeding over it would be a silent delete of settings
-    /// Varde could not parse, which is the one way this feature can destroy
-    /// something.
     /// A Run row that could never mark a line is refused where it was
     /// written, rather than read as configured and silently marking nothing.
     #[test]
     fn a_run_row_whose_query_cannot_mark_anything_is_refused_at_its_line() {
+        let claims_nothing = merged_config(Some("[run.bare]\nquery = \"(x) @run\"\n"), None)
+            .expect_err("a row claiming no files");
+        assert_eq!(
+            claims_nothing.fault,
+            ConfigFault::WrongType("[run.bare] claims no extensions".to_string())
+        );
         let refused = merged_config(
             Some("[view]\n\n[run.zig]\nextensions = [\"zig\"]\nquery = \"(test_declaration) @run\"\n"),
             None,
@@ -2968,6 +2982,12 @@ mod tests {
         );
     }
 
+    /// Each seed is decided by one fact: its layer is `None`. The edge
+    /// hands `Some("")` for a file it found and could not read — not UTF-8, or
+    /// write-only — because an empty layer merges nothing and still says "a
+    /// file is here". Seeding over it would be a silent delete of settings
+    /// Varde could not parse, which is the one way this feature can destroy
+    /// something.
     #[test]
     fn a_config_that_is_there_but_says_nothing_is_not_seeded_over() {
         let (_state, _config, effects) = start(&Startup {

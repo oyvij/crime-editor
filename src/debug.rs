@@ -3840,7 +3840,7 @@ fn adapter_error(message: &Value, command: &str) -> String {
 
 /// The adapter's words with nothing left in them that could drive the
 /// terminal they are about to be drawn on.
-fn printable(text: &str) -> String {
+pub(crate) fn printable(text: &str) -> String {
     text.chars()
         .filter(|character| !character.is_control())
         .collect()
