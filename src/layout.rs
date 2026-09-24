@@ -310,20 +310,27 @@ pub struct Shapes {
     pub strip: Option<u16>,
     /// Whether the Debug group is showing the Program output, and how wide.
     pub output: Output,
-    /// Whether the Evaluator is open. It floats over the editor and takes no
-    /// columns from anything, so it changes no other rectangle — but where it
-    /// is has to come from here, so the renderer and the hit-test read one
-    /// answer, for the reason every other pane does.
-    pub evaluator: bool,
+    /// Where the Evaluator's window is, and `None` while none is open. It
+    /// floats over the editor and takes no columns from anything, so it
+    /// changes no other rectangle — but where it is has to come from here, so
+    /// the renderer and the hit-test read one answer, for the reason every
+    /// other pane does. A rectangle rather than a flag because the window is
+    /// moved and resized: `update` holds the rectangle and clamps it, the way
+    /// it holds every other view's offset.
+    pub evaluator: Option<Area>,
 }
 
-/// Where the Evaluator opens: the middle of the screen, three fifths across
-/// and half of it down, so the code it floats over is still readable around
-/// it — and so it is on the screen whatever the screen is, without a clamp
-/// of its own.
-///
-/// Where the project last left it is issue #61; this is where it starts.
-fn centred(width: u16, height: u16) -> Area {
+/// The least a window may be squeezed to: its two borders, a row of Snippet,
+/// the rule between them and a row of output — and columns enough for the
+/// Chips on its top border. A window smaller than this is one with nothing
+/// readable in it, which is not a window somebody meant to drag.
+pub const WINDOW_LEAST_WIDTH: u16 = 24;
+pub const WINDOW_LEAST_HEIGHT: u16 = 5;
+
+/// Where the Evaluator opens when the project has never left it anywhere: the
+/// middle of the screen, three fifths across and half of it down, so the code
+/// it floats over is still readable around it.
+pub fn centred_window(width: u16, height: u16) -> Area {
     let box_width = (width as u32 * 3).div_ceil(5) as u16;
     let box_height = height / 2;
     Area {
@@ -334,20 +341,60 @@ fn centred(width: u16, height: u16) -> Area {
     }
 }
 
-/// Where the Snippet and the Evaluator output are inside that window: the
-/// Snippet takes half of what the borders leave, the output the rest, and one
-/// row between them carries the border that separates the two. One answer,
-/// which `ui` draws and the mouse hit-tests, for the reason [`GUTTER`] is one.
+/// Where a floating window ends up once the screen and the Paused line have
+/// had their say: never smaller than the floor above, never bigger than the
+/// screen, wholly on it, and clear of the row `clear` names.
 ///
-/// Dragging that border is issue #61's; this is where it starts.
-pub fn evaluator_split(window: Area) -> (Area, Area) {
+/// One function for both because they are one question — where may this
+/// window be? — and a second author for a rectangle is a window drawn where
+/// nothing hit-tests it. Called from `update` for every event, the way the
+/// scroll offsets are clamped there: a drag, a resize and a program stopping
+/// somewhere new all move the answer, and an arm that forgot to ask is a
+/// window half off the screen.
+///
+/// The row and not its columns: the Paused line's wash runs the width of the
+/// editor, so a window clear of it vertically is clear of it. Below it by
+/// preference and above it where the screen leaves no room below, and left
+/// where it is when neither fits — a window taller than the screen covers
+/// every row there is, and shuffling it would only hide something else.
+pub fn placed_window(window: Area, width: u16, height: u16, clear: Option<u16>) -> Area {
+    let box_width = window.width.max(WINDOW_LEAST_WIDTH).min(width.max(1));
+    let box_height = window.height.max(WINDOW_LEAST_HEIGHT).min(height.max(1));
+    let mut placed = Area {
+        x: window.x.min(width.saturating_sub(box_width)),
+        y: window.y.min(height.saturating_sub(box_height)),
+        width: box_width,
+        height: box_height,
+    };
+    if let Some(row) = clear.filter(|row| (placed.y..placed.bottom()).contains(row)) {
+        if row + 1 + box_height <= height {
+            placed.y = row + 1;
+        } else if box_height <= row {
+            placed.y = row - box_height;
+        }
+    }
+    placed
+}
+
+/// Where the Snippet and the Evaluator output are inside that window: the
+/// Snippet takes `asked` rows — half of what the borders leave until the rule
+/// between them is dragged — the output the rest, and one row between them
+/// carries that rule. One answer, which `ui` draws and the mouse hit-tests,
+/// for the reason [`GUTTER`] is one.
+///
+/// Clamped here rather than where the drag is read: both sides keep a row,
+/// because a half dragged to nothing is a half nobody can drag back.
+pub fn evaluator_split(window: Area, asked: Option<u16>) -> (Area, Area) {
     let interior = Area {
         x: window.x + 1,
         y: window.y + 1,
         width: window.width.saturating_sub(2),
         height: window.height.saturating_sub(2),
     };
-    let snippet = interior.height.saturating_sub(1) / 2;
+    let half = interior.height.saturating_sub(1) / 2;
+    let snippet = asked
+        .unwrap_or(half)
+        .clamp(1, interior.height.saturating_sub(2).max(1));
     (
         Area {
             height: snippet,
@@ -564,10 +611,7 @@ pub fn panes(
             width: editor_width,
             height: band_height,
         },
-        evaluator: match shapes.evaluator {
-            true => centred(width, height),
-            false => Area::default(),
-        },
+        evaluator: shapes.evaluator.unwrap_or_default(),
     }
 }
 
@@ -756,8 +800,8 @@ mod split_tests {
         };
         // Nothing at all while none is open, which `holds` answers `false`
         // for — so no hit-test has to ask whether there is one.
-        assert!(!window(false).holds(60, 20));
-        let open = window(true);
+        assert!(!window(None).holds(60, 20));
+        let open = window(Some(centred_window(120, 40)));
         assert_eq!(
             open,
             Area {
@@ -771,7 +815,7 @@ mod split_tests {
         assert_eq!(open.x, 120 - open.right());
         assert_eq!(open.y, 40 - open.bottom());
 
-        let (snippet, output) = super::evaluator_split(open);
+        let (snippet, output) = super::evaluator_split(open, None);
         // Both inside the borders, and the row between them belongs to
         // neither: it is the rule the renderer draws there.
         assert_eq!((snippet.x, snippet.y, snippet.height), (25, 11, 8));
@@ -779,6 +823,52 @@ mod split_tests {
         assert_eq!(snippet.bottom() + 1, output.y);
         assert_eq!(output.bottom(), open.bottom() - 1);
         assert_eq!((snippet.width, output.width), (70, 70));
+
+        // The rule dragged up: the Snippet takes what it was asked for and
+        // the output takes the rest, so a row given up by one is a row the
+        // other gains.
+        let (snippet, output) = super::evaluator_split(open, Some(4));
+        assert_eq!((snippet.height, output.height), (4, 13));
+        assert_eq!(snippet.bottom() + 1, output.y);
+        // Neither side may be dragged away: a half with no rows is a half
+        // nobody can drag back.
+        assert_eq!(super::evaluator_split(open, Some(0)).0.height, 1);
+        assert_eq!(super::evaluator_split(open, Some(99)).1.height, 1);
+    }
+
+    /// The window's rectangle is state, so every event is answered from one
+    /// clamp: it stays on the screen it is drawn on, it is never squeezed to
+    /// nothing, and it never covers the row the program is stopped on.
+    #[test]
+    fn a_window_is_placed_on_the_screen_and_clear_of_the_paused_line() {
+        let window = Area {
+            x: 20,
+            y: 5,
+            width: 60,
+            height: 12,
+        };
+        assert_eq!(placed_window(window, 120, 40, None), window);
+        // A screen it no longer fits on takes it back by the corner it hangs
+        // off, and a screen smaller than the floor takes the floor with it.
+        let squeezed = placed_window(window, 60, 12, None);
+        assert_eq!((squeezed.x, squeezed.right()), (0, 60));
+        assert_eq!((squeezed.y, squeezed.bottom()), (0, 12));
+        assert_eq!(
+            placed_window(window, 10, 3, None),
+            Area {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 3
+            }
+        );
+        // The Paused line: below it where the screen leaves room, above it
+        // where it does not, and where it was when neither fits.
+        assert_eq!(placed_window(window, 120, 40, Some(8)).y, 9);
+        assert_eq!(placed_window(window, 120, 20, Some(14)).y, 2);
+        assert_eq!(placed_window(window, 120, 12, Some(6)).y, 0);
+        // A row it does not cover moves it not at all.
+        assert_eq!(placed_window(window, 120, 40, Some(30)), window);
     }
 
     /// A pane with no rectangle asks for no pty, and one with a rectangle
@@ -1254,7 +1344,7 @@ mod tests {
                 corner: Corner::Risk,
                 strip: None,
                 output: Output::Away,
-                evaluator: false,
+                evaluator: None,
             },
         );
         assert_eq!((layout.corner.x, layout.corner.width), (0, 30));
@@ -1284,7 +1374,7 @@ mod tests {
                     corner: Corner::Risk,
                     strip: None,
                     output: Output::Away,
-                    evaluator: false,
+                    evaluator: None,
                 },
             );
             assert_eq!(layout.terminal.width, 1, "{ai:?}");
@@ -1415,7 +1505,7 @@ mod tests {
                     corner: Corner::Risk,
                     strip: None,
                     output: Output::Away,
-                    evaluator: false,
+                    evaluator: None,
                 }),
             ] {
                 let layout = panes(width, height, 30, None, 6, 0, shapes);

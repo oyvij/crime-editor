@@ -1573,6 +1573,12 @@ fn initial_state(
         strip_height: saved_number(input.state_json.as_deref(), "strip_height"),
         output_width: saved_number(input.state_json.as_deref(), "output_width"),
         breakpoints: saved_breakpoints(&input.root, input.state_json.as_deref()),
+        // The Snippets this project has run, oldest first, and where it last
+        // left the Evaluator's window. Both outlive the session they were
+        // made in, which is what makes them the project's rather than the
+        // Debug adapter's.
+        snippets: saved_list(input.state_json.as_deref(), "snippets"),
+        evaluator_at: saved_window(input.state_json.as_deref()),
         // Beside the editor unless the project was last worked in the tall
         // shape — including state recorded before `:tall` existed, which names
         // no shape at all.
@@ -1922,6 +1928,41 @@ fn saved_breakpoints(root: &Path, state_json: Option<&str>) -> Vec<crate::debug:
         .collect()
 }
 
+/// A recorded list of strings — the Snippets — in the order it was written.
+fn saved_list(state_json: Option<&str>, key: &str) -> Vec<String> {
+    let Some(parsed) = state_json.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+    else {
+        return Vec::new();
+    };
+    parsed
+        .get(key)
+        .and_then(|value| value.as_array())
+        .map(|held| {
+            held.iter()
+                .filter_map(|text| Some(text.as_str()?.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Where the project last left the Evaluator's window, and `None` where it
+/// never opened one. Read whole or not at all: three of four numbers is a
+/// rectangle nobody drew, and the centred one is the better answer than a
+/// guess at the fourth. The screen it is placed on is `update`'s to say — a
+/// rectangle recorded on a bigger screen is clamped onto this one there,
+/// which is why nothing here asks how wide the terminal is.
+fn saved_window(state_json: Option<&str>) -> Option<crate::layout::Area> {
+    let parsed: serde_json::Value = serde_json::from_str(state_json?).ok()?;
+    let at = parsed.get("evaluator")?;
+    let number = |key: &str| u16::try_from(at.get(key)?.as_u64()?).ok();
+    Some(crate::layout::Area {
+        x: number("column")?,
+        y: number("row")?,
+        width: number("width")?,
+        height: number("height")?,
+    })
+}
+
 fn saved_text(state_json: Option<&str>, key: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(state_json?).ok()?;
     parsed.get(key)?.as_str().map(str::to_string)
@@ -1987,6 +2028,37 @@ mod tests {
         })
         .expect("started");
         assert_eq!(state.corner, crate::layout::Corner::Breakpoints);
+    }
+
+    /// What a project keeps of the Evaluator, written by `state_json` and read
+    /// back by a start. Both halves in one test because a key spelled one way
+    /// in the writer and another in the reader is a window that silently
+    /// reopens centred every time, and nothing else in the suite compares the
+    /// two spellings: a scenario that records a rectangle writes the JSON
+    /// itself.
+    #[test]
+    fn the_evaluators_place_and_snippets_survive_a_restart() {
+        let saved = crate::State {
+            evaluator_at: Some(crate::layout::Area {
+                x: 30,
+                y: 4,
+                width: 50,
+                height: 10,
+            }),
+            snippets: vec!["orders.len()".to_string(), "count + 1".to_string()],
+            ..crate::State::default()
+        };
+        let (state, _, _) = start(&Startup {
+            state_json: Some(crate::state_json(&saved)),
+            ..Startup::default()
+        })
+        .expect("started");
+        assert_eq!(state.evaluator_at, saved.evaluator_at);
+        assert_eq!(state.snippets, saved.snippets);
+        // A project that never opened one opens centred, which is `None` and
+        // not a rectangle of zeroes.
+        let (fresh, _, _) = start(&Startup::default()).expect("started");
+        assert_eq!(fresh.evaluator_at, None);
     }
 
     /// The refusal a project layer earns, so that the tests below assert the

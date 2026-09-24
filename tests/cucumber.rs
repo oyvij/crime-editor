@@ -16131,6 +16131,235 @@ fn evaluator_is_open_holding_block(world: &mut VardeWorld, step: &Step) {
     varde::debug::open_evaluator(&mut world.state, text);
 }
 
+/// Where the window is. A scenario that starts from a place sets it straight
+/// on the state, the way a rectangle recorded by the project arrives: the
+/// dragging is what the scenarios below are *about*, so using a drag to set
+/// one up would be a step that fails for the thing it is not testing.
+fn window(world: &VardeWorld) -> layout::Area {
+    world
+        .state
+        .evaluator_at
+        .expect("the Evaluator has a place on the screen")
+}
+
+/// The screen row an editor line is drawn on, which is what a window covering
+/// a line has to be placed over.
+fn editor_row(world: &VardeWorld, line: u16) -> u16 {
+    world.panes().editor.y + line
+}
+
+/// A drag of the window's chrome, as the edge reports one: press, one report
+/// where the pointer has got to, release. The pointer is made fresh, because
+/// a drag belongs to the pane its button went down in.
+fn drag_window(world: &mut VardeWorld, from: (u16, u16), to: (u16, u16)) {
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, from.0, from.1);
+    world.report(mouse::Kind::LeftDrag, to.0, to.1);
+    world.report(mouse::Kind::LeftUp, to.0, to.1);
+}
+
+/// The title bar, two columns in: the Chips are flush right, and a press on
+/// one of those is a Chip rather than a grab.
+fn title_bar(world: &VardeWorld) -> (u16, u16) {
+    let at = window(world);
+    (at.x + 2, at.y)
+}
+
+#[given("the Evaluator is open")]
+fn open_an_empty_evaluator(world: &mut VardeWorld) {
+    varde::debug::open_evaluator(&mut world.state, String::new());
+}
+
+#[given(expr = "the Evaluator is open at column {int} row {int}")]
+fn evaluator_open_at(world: &mut VardeWorld, column: u16, row: u16) {
+    open_an_empty_evaluator(world);
+    world.state.evaluator_at = Some(layout::Area {
+        x: column,
+        y: row,
+        ..window(world)
+    });
+}
+
+#[given(expr = "the Evaluator is open {int} columns by {int} rows")]
+fn evaluator_open_sized(world: &mut VardeWorld, columns: u16, rows: u16) {
+    open_an_empty_evaluator(world);
+    world.state.evaluator_at = Some(layout::Area {
+        width: columns,
+        height: rows,
+        ..window(world)
+    });
+}
+
+#[given(expr = "the Evaluator is open with a Snippet {int} rows tall")]
+fn evaluator_open_with_snippet_rows(world: &mut VardeWorld, rows: u16) {
+    open_an_empty_evaluator(world);
+    world
+        .state
+        .evaluator
+        .as_mut()
+        .expect("the Evaluator is open")
+        .snippet_rows = Some(rows);
+}
+
+/// Over the row that line is drawn on, so the stopped event that follows has
+/// something to shift the window off.
+#[given(expr = "the Evaluator is open over editor line {int}")]
+fn evaluator_open_over_line(world: &mut VardeWorld, line: u16) {
+    open_an_empty_evaluator(world);
+    let row = editor_row(world, line);
+    world.state.evaluator_at = Some(layout::Area {
+        y: row,
+        ..window(world)
+    });
+    assert!(
+        window(world).holds(window(world).x, row),
+        "not over line {line}"
+    );
+}
+
+/// Recorded by the project and read back through starting, so what is asserted
+/// is the restore and not a field the step wrote. The session the Background
+/// set up stays: only what a start recovers is taken from it.
+fn restored(world: &mut VardeWorld, saved: serde_json::Value) -> State {
+    world.startup.state_json = Some(saved.to_string());
+    world.startup.repo = world.state.repo.clone();
+    let (state, _, _) = startup::start(&world.startup).expect("Varde starts");
+    state
+}
+
+#[given(
+    expr = "the project {string} records the Evaluator at column {int} row {int} sized {int} by {int}"
+)]
+fn state_records_evaluator(
+    world: &mut VardeWorld,
+    path: String,
+    column: u16,
+    row: u16,
+    width: u16,
+    height: u16,
+) {
+    assert_eq!(path, ".varde/state.json");
+    let saved = serde_json::json!({
+        "evaluator": {
+            "column": column,
+            "row": row,
+            "width": width,
+            "height": height,
+        }
+    });
+    world.state.evaluator_at = restored(world, saved).evaluator_at;
+}
+
+#[given(expr = "the project {string} records the Snippets:")]
+fn state_records_snippets(world: &mut VardeWorld, path: String, step: &Step) {
+    assert_eq!(path, ".varde/state.json");
+    let snippets: Vec<String> = step
+        .table()
+        .expect("a table of Snippets")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let saved = serde_json::json!({ "snippets": snippets });
+    world.state.snippets = restored(world, saved).snippets;
+}
+
+#[when("I open the Evaluator")]
+fn i_open_the_evaluator(world: &mut VardeWorld) {
+    world.send(Event::OpenEvaluator);
+}
+
+#[when(expr = "I drag the Evaluator's title bar {int} columns right")]
+fn drag_title_bar_right(world: &mut VardeWorld, columns: u16) {
+    let (column, row) = title_bar(world);
+    drag_window(world, (column, row), (column + columns, row));
+}
+
+/// Onto the very row the Paused line is drawn on, which is the one place the
+/// window may not come to rest.
+#[when("I drag the Evaluator's title bar onto the Paused line")]
+fn drag_title_bar_onto_paused_line(world: &mut VardeWorld) {
+    let (column, row) = title_bar(world);
+    let paused = varde::debug::paused_row(&world.state).expect("a Paused line on screen");
+    drag_window(world, (column, row), (column, paused));
+}
+
+#[when(expr = "I drag the Evaluator's bottom-right corner {int} columns right and {int} rows down")]
+fn drag_bottom_right(world: &mut VardeWorld, columns: u16, rows: u16) {
+    let at = window(world);
+    let corner = (at.right() - 1, at.bottom() - 1);
+    drag_window(world, corner, (corner.0 + columns, corner.1 + rows));
+}
+
+#[when(expr = "I drag the Evaluator's right border {int} columns left")]
+fn drag_right_border(world: &mut VardeWorld, columns: u16) {
+    let at = window(world);
+    let border = (at.right() - 1, at.y + 2);
+    drag_window(world, border, (border.0 - columns, border.1));
+}
+
+#[when(expr = "I drag the border under the Snippet up {int} rows")]
+fn drag_snippet_border(world: &mut VardeWorld, rows: u16) {
+    let at = window(world);
+    let (snippet, _) = layout::evaluator_split(at, snippet_rows(world));
+    let rule = (at.x + 2, snippet.bottom());
+    drag_window(world, rule, (rule.0, rule.1 - rows));
+}
+
+fn snippet_rows(world: &VardeWorld) -> Option<u16> {
+    world
+        .state
+        .evaluator
+        .as_ref()
+        .and_then(|evaluator| evaluator.snippet_rows)
+}
+
+#[then("the Evaluator is centred on the screen")]
+fn evaluator_is_centred(world: &mut VardeWorld) {
+    let (width, height) = (world.state.screen_width, world.state.screen_height);
+    let at = window(world);
+    // The same room either side and above and below, rather than the number
+    // the layout produced: what centred *means* is what the reader sees.
+    assert_eq!(at.x, width - at.right(), "{at:?}");
+    assert_eq!(at.y, height - at.bottom(), "{at:?}");
+}
+
+#[then(expr = "the Evaluator is at column {int} row {int}")]
+fn evaluator_is_at(world: &mut VardeWorld, column: u16, row: u16) {
+    let at = window(world);
+    assert_eq!((at.x, at.y), (column, row), "{at:?}");
+}
+
+#[then(expr = "the Evaluator is {int} columns by {int} rows")]
+fn evaluator_is_sized(world: &mut VardeWorld, columns: u16, rows: u16) {
+    let at = window(world);
+    assert_eq!((at.width, at.height), (columns, rows), "{at:?}");
+}
+
+#[then(expr = "the Snippet is {int} rows tall")]
+fn snippet_is_rows_tall(world: &mut VardeWorld, rows: u16) {
+    let (snippet, _) = layout::evaluator_split(window(world), snippet_rows(world));
+    assert_eq!(snippet.height, rows);
+}
+
+#[then("the Evaluator lies wholly on the screen")]
+fn evaluator_lies_on_the_screen(world: &mut VardeWorld) {
+    let at = window(world);
+    let (width, height) = (world.state.screen_width, world.state.screen_height);
+    assert!(at.right() <= width && at.bottom() <= height, "{at:?}");
+    assert!(at.width > 0 && at.height > 0, "{at:?}");
+}
+
+#[then("the Evaluator does not cover the Paused line")]
+fn evaluator_does_not_cover_the_paused_line(world: &mut VardeWorld) {
+    let row = varde::debug::paused_row(&world.state).expect("a Paused line on screen");
+    let at = window(world);
+    assert!(
+        !(at.y..at.bottom()).contains(&row),
+        "{at:?} covers row {row}"
+    );
+}
+
 #[given("the Evaluator has focus")]
 fn the_evaluator_has_focus(world: &mut VardeWorld) {
     world.state.focus = Pane::Evaluator;

@@ -265,6 +265,21 @@ pub const DEBUG_CHORDS: [(&str, &str, &[View]); 8] = [
     ("␣e C-Enter", "evaluate", &[View::Edit]),
 ];
 
+/// The chords the Evaluator's window answers, offered only while one is open
+/// for the reason the debug chords are offered only while a session exists: a
+/// hint offering a window that is not there teaches a key that does nothing.
+///
+/// Both open a mode, which is what makes moving and resizing a window
+/// reachable with no modifier at all — the rule every binding in Varde is
+/// held to, and the one a window dragged by Alt-arrow would quietly fail for
+/// whoever has not configured their terminal. What the letters do inside the
+/// mode is `h j k l` and the arrows, for the reason Stepping mode's letters
+/// are the chords' own: the gesture is the editor's.
+pub const EVALUATOR_CHORDS: [(&str, &str, &[View]); 2] = [
+    ("␣m", "move the Evaluator (hjkl)", &[View::Edit]),
+    ("␣z", "resize the Evaluator (hjkl)", &[View::Edit]),
+];
+
 /// The keys a Debug session reserves, listed while one exists and absent while
 /// none does — which is when the hosted panes have them back.
 pub const DEBUG_KEYS: [(&str, &str, &[View]); 5] = [
@@ -289,7 +304,11 @@ fn chords(
         Some(_) => &DEBUG_CHORDS,
         None => &[],
     };
-    debug.iter().chain(CHORDS.iter())
+    let evaluator: &'static [(&str, &str, &[View])] = match arranging_offered(state) {
+        true => &EVALUATOR_CHORDS,
+        false => &[],
+    };
+    debug.iter().chain(evaluator.iter()).chain(CHORDS.iter())
 }
 
 /// The cheatsheet as drawn: the debug keys while a session exists — first,
@@ -435,11 +454,22 @@ pub fn on_key_event(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: 
             None => Some(Event::LeaveStepping),
         },
     };
+    // The Evaluator's arrange mode, on Stepping mode's own terms and for its
+    // reason: the letters act without their Space while somebody is placing
+    // the window, and any other key leaves the mode and then does what it
+    // always does.
+    let leaving_arrange = match state.arranging {
+        None => None,
+        Some(how) => match arranging_key(event, how) {
+            Some(arranged) => return vec![arranged],
+            None => Some(Event::LeaveArranging),
+        },
+    };
     let mut events = match claimed_everywhere(state, event) {
         Some(events) => events,
         None => modal_key(state, drafts, event),
     };
-    if let Some(leave) = leaving {
+    for leave in leaving_arrange.into_iter().chain(leaving) {
         events.insert(0, leave);
     }
     events
@@ -477,6 +507,15 @@ pub fn chord(state: &State, key: char) -> Option<Event> {
         )),
         'q' => Some(Event::DebugStop),
         'e' if state.debug.is_some() => Some(Event::OpenEvaluator),
+        // The two that open a mode rather than acting: the window is moved
+        // and resized a cell at a time, and a chord per cell is a chord too
+        // many — Stepping mode's reason, one window over.
+        'm' if arranging_offered(state) => {
+            Some(Event::ArrangeEvaluator(crate::debug::Arrange::Moving))
+        }
+        'z' if arranging_offered(state) => {
+            Some(Event::ArrangeEvaluator(crate::debug::Arrange::Sizing))
+        }
         'r' => Some(Event::DebugRestart),
         // The Group tab from the keyboard: whichever group the Strip is not
         // showing, since there are two and the gesture is "the other one".
@@ -489,6 +528,47 @@ pub fn chord(state: &State, key: char) -> Option<Event> {
         })),
         letter => stepping_letter(letter),
     }
+}
+
+/// Whether the two chords that arrange the Evaluator's window are on offer:
+/// its window is up and the keyboard is in it. One answer for the hint, the
+/// cheatsheet and the router, for the reason the debug chords have one — a
+/// key the hint names and nothing answers is a key that lies. Not merely open:
+/// with the keyboard back in the editor the reader is editing the file, and
+/// `m` there is the motion it always was.
+fn arranging_offered(state: &State) -> bool {
+    state.evaluator.is_some() && state.focus == Pane::Evaluator
+}
+
+/// What a key does while the Evaluator's window is being arranged, or nothing
+/// for one the mode does not claim — which is what leaves it, exactly as
+/// Stepping mode is left, so nobody is ever trapped in a mode.
+///
+/// `h j k l` and the arrows beside them: moving a window and moving a caret
+/// are the same gesture, and every motion in Varde is reachable without a
+/// modifier. Resizing reads them the same way round — `l` widens and `j`
+/// heightens — because the edge being moved is the bottom right one.
+///
+/// The `every_key` sweep cannot drive this mode, and the omission is the
+/// decision [`stepping_key`] documents: every key answers here, because one
+/// the mode does not claim answers by leaving it. What the cheatsheet
+/// promises is the two chords that open it, [`EVALUATOR_CHORDS`], which the
+/// sweep does hold, and the letters are named in the row beside them.
+fn arranging_key(event: KeyEvent, how: crate::debug::Arrange) -> Option<Event> {
+    if !event.modifiers.is_empty() {
+        return None;
+    }
+    let direction = arrow(event.code).or_else(|| match typed(event) {
+        Some('h') => Some(Direction::Left),
+        Some('j') => Some(Direction::Down),
+        Some('k') => Some(Direction::Up),
+        Some('l') => Some(Direction::Right),
+        _ => None,
+    })?;
+    Some(match how {
+        crate::debug::Arrange::Moving => Event::MoveEvaluator(direction),
+        crate::debug::Arrange::Sizing => Event::ResizeEvaluator(direction),
+    })
 }
 
 /// The four letters Stepping mode is for, which are also four of the chords.
@@ -4498,6 +4578,51 @@ mod tests {
         assert!(matches!(in_shell[1..], [Event::Bytes(_)]));
     }
 
+    /// The Evaluator's arrange mode, on Stepping mode's terms: the four
+    /// letters and the arrows move or resize the window, and any other key
+    /// leaves the mode and then does what it always does — so the Snippet is
+    /// never a buffer somebody is stuck outside of.
+    #[test]
+    fn the_arrange_mode_claims_its_motions_and_hands_every_other_key_back() {
+        let mut open = crate::debug::paused(editing());
+        crate::debug::open_evaluator(&mut open, "count".to_string());
+        let arranging = |how| State {
+            arranging: Some(how),
+            ..open.clone()
+        };
+        let moving = arranging(crate::debug::Arrange::Moving);
+        let press = |state: &State, key| on_key_event(state, &mut Drafts::default(), key, 0);
+        for (key, direction) in [
+            (plain('h'), Direction::Left),
+            (plain('j'), Direction::Down),
+            (plain('k'), Direction::Up),
+            (plain('l'), Direction::Right),
+            (KeyEvent::new(KeyCode::Right), Direction::Right),
+        ] {
+            assert_eq!(
+                press(&moving, key),
+                vec![Event::MoveEvaluator(direction)],
+                "{key:?}"
+            );
+        }
+        assert_eq!(
+            press(&arranging(crate::debug::Arrange::Sizing), plain('j')),
+            vec![Event::ResizeEvaluator(Direction::Down)]
+        );
+        // Any other key: the mode goes, and the key is the key it always was
+        // in the Snippet.
+        let plainly = |key| on_key_event(&open, &mut Drafts::default(), key, 0);
+        for key in [plain('i'), plain('x'), KeyEvent::new(KeyCode::Esc)] {
+            let events = press(&moving, key);
+            assert_eq!(events.first(), Some(&Event::LeaveArranging), "{key:?}");
+            assert_eq!(
+                events[1..],
+                plainly(key),
+                "{key:?} is not what it always is"
+            );
+        }
+    }
+
     /// The other half of the picker's contract: the sweep above excuses every
     /// key that only narrows the list, so this is what holds those keys to
     /// doing what the box says they do. Backspace is here because the excuse
@@ -4623,10 +4748,16 @@ mod tests {
     /// Driven with a Debug session and without one, because the list is not
     /// fixed: the debug chords are on it only while a session exists, so a
     /// state with none would never see them and a state with one would never
-    /// see them go.
+    /// see them go. And with the Evaluator open, for the same reason once
+    /// more: its two are on it only while its window is.
     #[test]
     fn a_waiting_space_answers_exactly_the_keys_the_chord_hint_names() {
-        for state in [editing(), crate::debug::paused(editing())] {
+        let arranging = {
+            let mut state = crate::debug::paused(editing());
+            crate::debug::open_evaluator(&mut state, String::new());
+            state
+        };
+        for state in [editing(), crate::debug::paused(editing()), arranging] {
             let (waiting, _) = drive(&state, &mut Drafts::default(), &[plain(' ')]);
             assert_eq!(waiting.modal, crate::Modal::Chord, "the hint opens at once");
             let (cancelled, _) = drive(

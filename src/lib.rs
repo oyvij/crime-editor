@@ -702,6 +702,24 @@ pub enum Event {
     RunSnippet,
     /// A row of the Evaluator output's value, opened or closed.
     OpenEvaluatedRow(usize),
+    /// Where the Evaluator's window goes, as a drag of its title bar, its
+    /// border or one of its corners leaves it. Unclamped, the way a dragged
+    /// divider's width is: where a window *may* be is `update`'s to answer,
+    /// and the mouse only says where the pointer took it.
+    PlaceEvaluator(layout::Area),
+    /// How many rows the Snippet takes of the window, as the rule under it
+    /// was dragged to. Unclamped for the same reason.
+    SizeSnippet(u16),
+    /// The keyboard's move and resize, one cell at a time: `␣m` and `␣z` open
+    /// the mode and these are what its letters do. Two events rather than one
+    /// carrying the mode, so what an arm does is written where it is read.
+    MoveEvaluator(Direction),
+    ResizeEvaluator(Direction),
+    /// `␣m` and `␣z`, which put the keyboard in that mode.
+    ArrangeEvaluator(debug::Arrange),
+    /// Any other key, which leaves it — queued in front of the key's own
+    /// event, the way leaving Stepping mode is.
+    LeaveArranging,
     /// An action a *pane* offers, not a row: the Risk pane's recompute and its
     /// loop. Its own event because `RowAction` falls through to the tree's
     /// actions on a row, and a pane action stands on no row.
@@ -1874,6 +1892,18 @@ pub struct State {
     /// The floating window that runs a Snippet in the Paused program, while
     /// one is open.
     pub evaluator: Option<debug::Evaluator>,
+    /// Where that window sits, whether or not one is open: the rectangle
+    /// outlives the window, because a project reopens the Evaluator where it
+    /// last left it. `None` until one has been opened here or the project
+    /// records one, which is what centres the first. Clamped in [`settle`]
+    /// like every other view's offset, so no arm that moves it has to
+    /// remember the screen or the Paused line.
+    pub evaluator_at: Option<layout::Area>,
+    /// The modifier-free mode that moves and resizes that window from the
+    /// keyboard, and `None` while nobody asked for one. An enum rather than
+    /// two flags for the reason [`Modal`] is one: moving and resizing at once
+    /// has no answer for `l`.
+    pub arranging: Option<debug::Arrange>,
     /// The Snippets that have left that window, oldest first, remembered per
     /// project. Beside the Watches rather than inside the session for the
     /// reason a Watch is: code written to ask a program something outlives
@@ -2366,6 +2396,8 @@ impl Default for State {
             tab_width: editor::DEFAULT_TAB_WIDTH,
             reports_modifiers: false,
             evaluator: None,
+            evaluator_at: None,
+            arranging: None,
             snippets: Vec::new(),
             contents: BTreeMap::new(),
             expanded: BTreeSet::new(),
@@ -2541,6 +2573,27 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
     // reader is looking straight at it.
     if showing_output(&next) {
         next.output_unseen = false;
+    }
+    // A mode bounded by the thing it arranges: the window closing with the
+    // session is what takes the keyboard out of it, so nobody is left holding
+    // four letters that move nothing.
+    if next.evaluator.is_none() {
+        next.arranging = None;
+    }
+    // The Evaluator's window, from the one clamp: wholly on the screen and
+    // clear of the Paused line, whatever moved it — a drag, a resize, or a
+    // program that stopped on a line the window was floating over. Here
+    // rather than in those arms for the reason the scrolls below are here:
+    // an arm that has to remember the screen is an arm that will forget.
+    // Outside the wheel's exception, which is about views following a cursor:
+    // no wheel moves this window, so nothing here undoes one.
+    if let Some(at) = next.evaluator_at {
+        next.evaluator_at = Some(layout::placed_window(
+            at,
+            next.screen_width,
+            next.screen_height,
+            debug::paused_row(&next),
+        ));
     }
     // A pane the edge no longer holds is a pane the keyboard must not be in —
     // the rule `AiExited` exists for, here because `output_running` is derived
@@ -2963,6 +3016,27 @@ fn route(state: &State, event: Event) -> (State, Vec<Effect>) {
     unreachable!("no group answers {:?}", declined.1)
 }
 
+/// Whether a Space is the chord prefix rather than a character: normal mode,
+/// nothing else collecting the keys, and code a Breakpoint could be set in —
+/// never over a half-typed operator, which it would otherwise swallow.
+///
+/// Read off [`State::edited`], which is the buffer the keyboard is *in*: the
+/// Snippet is a buffer on the same terms as the file behind it, and a chord
+/// decided against the editor's mode while somebody types in the Evaluator is
+/// a Space that means two things. One answer for the arm that opens the hint
+/// and for [`on_snippet`], which claims the editor's keys before it and hands
+/// this one back rather than spelling the question a second way.
+fn opens_a_chord(state: &State) -> bool {
+    state.modal == Modal::None
+        && state.view == View::Edit
+        && state.diff.is_none()
+        && state.walking.is_none()
+        && !previewing(state)
+        && state.edited().is_some_and(|buffer| {
+            buffer.mode == editor::Mode::Normal && buffer.pending().is_empty()
+        })
+}
+
 /// The Evaluator's Snippet, which is a [`Buffer`]: the editor's own gestures
 /// with the Snippet as their destination — one arm per gesture here and none
 /// in the edge, exactly as the comment box below inherits them.
@@ -2980,6 +3054,22 @@ fn on_snippet(mut next: State, event: Event, wheeled: bool) -> Answered {
     if matches!(event, Event::EditorKey('\n')) && !editor_inserting(&next) {
         let effects = debug::run(&mut next);
         return Ok(settle(next, effects, wheeled));
+    }
+    // The Space that opens the Chord hint is not the Snippet's: the window is
+    // arranged from inside it, and the hint is how anybody finds those two
+    // chords. Handed back rather than answered here, so there is one spelling
+    // of what a waiting Space is.
+    if matches!(event, Event::EditorKey(' ')) && opens_a_chord(&next) {
+        return Err((next, event));
+    }
+    // Up and Down on an empty Snippet are the project's Snippets rather than
+    // the caret's motion, and go on being once a recall has started. Ahead of
+    // the arms below because the arrow is the editor's own event: the Snippet
+    // is a buffer, and a buffer answers an arrow by moving.
+    if let Event::EditorArrow(direction @ (Direction::Up | Direction::Down)) = event {
+        if debug::recall(&mut next, direction) {
+            return Ok(settle(next, vec![], wheeled));
+        }
     }
     let snippet = &mut next.evaluator.as_mut().expect("checked just above").snippet;
     match event {
@@ -3795,7 +3885,11 @@ fn on_key_5(state: &State, mut next: State, event: Event, _wheeled: bool) -> Ans
             // chord that ends one, is the chord that does not leave it on:
             // between the request and the adapter letting go, the mode would
             // be four letters swallowed for a session on its way out.
-            next.stepping = state.debug.is_some() && key != 'q';
+            // Not for a chord that opens a mode of its own: `␣m` and
+            // `␣z` put the keyboard in the Evaluator's arrange mode, and two
+            // modes claiming the same letters is the trap both are shaped to
+            // avoid.
+            next.stepping = state.debug.is_some() && !matches!(key, 'q' | 'm' | 'z');
             Ok(update(&next, chord))
         }
         Event::Key(key) if state.modal == Modal::Palette => {
@@ -4481,10 +4575,12 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                     );
                     vec![]
                 }
-                // Scrolling the Snippet and its output is issue #61's, with
-                // the rest of the window's own arrangement. Nothing here
-                // rather than the editor's scroll, which is a different pane's
-                // offset and would move the code behind the window.
+                // The window is resized rather than scrolled: no scenario
+                // asks the Snippet or its output to hold more than the room
+                // they are given, and an offset nothing clamps is an offset
+                // that strands the last rows. Nothing here rather than the
+                // editor's scroll, which is a different pane's offset and
+                // would move the code behind the window.
                 Pane::Evaluator => vec![],
                 // A program that asked for mouse events scrolls itself; ours is
                 // the scrollback behind a shell that did not.
@@ -5448,19 +5544,7 @@ fn on_editor_key(state: &State, mut next: State, event: Event, wheeled: bool) ->
             return Ok(update(state, Event::ToggleFold { all: false }));
         }
 
-        // Space is a chord prefix in normal mode, on the code a Breakpoint can
-        // be set in — never over a half-typed operator, which it would
-        // otherwise swallow.
-        Event::EditorKey(' ')
-            if state.modal == Modal::None
-                && state.view == View::Edit
-                && state.diff.is_none()
-                && state.walking.is_none()
-                && !previewing(state)
-                && current_buffer(state).is_some_and(|buffer| {
-                    buffer.mode == editor::Mode::Normal && buffer.pending().is_empty()
-                }) =>
-        {
+        Event::EditorKey(' ') if opens_a_chord(state) => {
             next.modal = Modal::Chord;
             vec![]
         }
@@ -8551,6 +8635,36 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
         // Normal-mode Enter, the Run Chip and Ctrl+Enter are one gesture, so
         // they are one event and one arm.
         Event::RunSnippet | Event::RowAction(debug::RUN) => debug::run(&mut next),
+        // The window's rectangle, from wherever a gesture took it: the mouse
+        // names it whole and the keyboard a cell at a time. Unclamped on the
+        // way in — `settle` places it on the screen and off the Paused line,
+        // which is the one answer to where a window may be — and saved, the
+        // way every other dragged edge in Varde is.
+        Event::PlaceEvaluator(at) => debug::place(&mut next, at),
+        Event::MoveEvaluator(direction) => {
+            debug::arrange(&mut next, direction, debug::Arrange::Moving)
+        }
+        Event::ResizeEvaluator(direction) => {
+            debug::arrange(&mut next, direction, debug::Arrange::Sizing)
+        }
+        Event::SizeSnippet(rows) => {
+            if let Some(evaluator) = next.evaluator.as_mut() {
+                evaluator.snippet_rows = Some(rows);
+            }
+            vec![]
+        }
+        // The mode the letters below act in, and the key that leaves it —
+        // Stepping mode's shape, for its reason: nobody may be trapped in a
+        // mode, so any key the mode does not claim leaves it and then does
+        // what it always did.
+        Event::ArrangeEvaluator(how) => {
+            next.arranging = state.evaluator.is_some().then_some(how);
+            vec![]
+        }
+        Event::LeaveArranging => {
+            next.arranging = None;
+            vec![]
+        }
         Event::RowAction(debug::CANCEL) => debug::cancel(&mut next),
         Event::OpenEvaluatedRow(index) => debug::open_evaluated(&mut next, index),
         Event::OpenHoverRow(index) => debug::open_hovered(&mut next, index),
@@ -8911,6 +9025,12 @@ pub(crate) fn state_json(state: &State) -> String {
         "current_buffer": state.current_buffer.as_deref().and_then(relative),
         "breakpoints": breakpoints,
         "snippets": state.snippets,
+        "evaluator": state.evaluator_at.map(|at| serde_json::json!({
+            "column": at.x,
+            "row": at.y,
+            "width": at.width,
+            "height": at.height,
+        })),
     })
     .to_string()
 }
@@ -9269,7 +9389,11 @@ pub fn shapes(state: &State) -> layout::Shapes {
             true => layout::Output::Shown(state.output_width.map(|width| width as u16)),
             false => layout::Output::Away,
         },
-        evaluator: state.evaluator.is_some(),
+        evaluator: state
+            .evaluator
+            .is_some()
+            .then_some(state.evaluator_at)
+            .flatten(),
     }
 }
 
@@ -9311,7 +9435,7 @@ pub fn group_labels(state: &State) -> Vec<String> {
 /// many rows a list shows, and how many rows the Risk list shows. `ui` derives
 /// its own rectangles from the same function — one layout, so a clamp and a
 /// drawn pane can never disagree about how tall it is.
-fn panes_of(state: &State) -> layout::Layout {
+pub(crate) fn panes_of(state: &State) -> layout::Layout {
     layout::panes(
         state.screen_width,
         state.screen_height,

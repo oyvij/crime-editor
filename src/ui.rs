@@ -3386,7 +3386,7 @@ fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout) {
         return;
     };
     let window = panes.evaluator;
-    let (snippet_area, output_area) = layout::evaluator_split(window);
+    let (snippet_area, output_area) = layout::evaluator_split(window, open.snippet_rows);
     frame.render_widget(Clear, rect(window));
     frame.render_widget(
         Block::default().borders(Borders::ALL).title("EVALUATE"),

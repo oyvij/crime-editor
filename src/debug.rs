@@ -2129,6 +2129,23 @@ pub struct Evaluator {
     /// Replaced whole at every run: the output is about the run just made,
     /// and a line left over from the one before it reads as this one's.
     pub ran: Option<Run>,
+    /// How many rows of the window the Snippet takes, and `None` until the
+    /// rule under it is dragged — half, until somebody names a number, the
+    /// way the Strip's height is a share until somebody drags it. With the
+    /// window rather than with the project: the reader is dividing the room
+    /// they have between what they are writing and what came back.
+    pub snippet_rows: Option<u16>,
+    /// How far back through the project's Snippets Up has walked, and `None`
+    /// while the keyboard is in the Snippet rather than in its history.
+    recalled: Option<usize>,
+}
+
+/// The modifier-free keyboard mode that arranges the Evaluator's window: `␣m`
+/// moves it and `␣z` resizes it, and the same four letters do both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arrange {
+    Moving,
+    Sizing,
 }
 
 /// One run of the Snippet: what the program printed while it ran and what it
@@ -2200,7 +2217,16 @@ pub fn open_evaluator(next: &mut State, expression: String) {
     next.evaluator = Some(Evaluator {
         snippet: crate::editor::Buffer::open(&expression, false, next.tab_width),
         ran: None,
+        snippet_rows: None,
+        recalled: None,
     });
+    // Where the project last left it, and the middle of the screen the first
+    // time — `settle` places it from there, so a rectangle recorded on a
+    // bigger screen needs no arm of its own here.
+    next.evaluator_at =
+        Some(next.evaluator_at.unwrap_or_else(|| {
+            crate::layout::centred_window(next.screen_width, next.screen_height)
+        }));
     next.focus = Pane::Evaluator;
     // The Selection the expression was *read from* goes with it. It is a span
     // of the buffer behind the window, and the run below reads a Selection
@@ -2266,6 +2292,119 @@ pub fn cancel(next: &mut State) -> Vec<Effect> {
         return Vec::new();
     };
     vec![ask(session, "cancel", json!({ "requestId": seq }))]
+}
+
+/// Where the window goes: the rectangle a gesture named, placed on the screen
+/// and clear of the Paused line, and recorded for the project. Placed here as
+/// well as in [`crate::settle`] — the one function, called twice — because the
+/// number written to disk has to be the number on screen, and the effect
+/// carrying it is built before the clamp every event goes through.
+pub fn place(next: &mut State, at: crate::layout::Area) -> Vec<Effect> {
+    if next.evaluator.is_none() {
+        return Vec::new();
+    }
+    next.evaluator_at = Some(crate::layout::placed_window(
+        at,
+        next.screen_width,
+        next.screen_height,
+        paused_row(next),
+    ));
+    vec![Effect::SaveState(crate::state_json(next))]
+}
+
+/// The keyboard's arrange: one cell of the window per key, in the mode `␣m`
+/// or `␣z` opened. The letters are the editor's own motions, so moving the
+/// window and moving the caret are the same four keys — the modifier-free
+/// gesture `AGENTS.md` requires, and the arrows reach it too.
+pub fn arrange(next: &mut State, direction: crate::Direction, how: Arrange) -> Vec<Effect> {
+    use crate::Direction::{Down, Left, Right, Up};
+    let Some(at) = next.evaluator_at else {
+        return Vec::new();
+    };
+    let moved = match (how, direction) {
+        (Arrange::Moving, Left) => crate::layout::Area {
+            x: at.x.saturating_sub(1),
+            ..at
+        },
+        (Arrange::Moving, Right) => crate::layout::Area { x: at.x + 1, ..at },
+        (Arrange::Moving, Up) => crate::layout::Area {
+            y: at.y.saturating_sub(1),
+            ..at
+        },
+        (Arrange::Moving, Down) => crate::layout::Area { y: at.y + 1, ..at },
+        (Arrange::Sizing, Left) => crate::layout::Area {
+            width: at.width.saturating_sub(1),
+            ..at
+        },
+        (Arrange::Sizing, Right) => crate::layout::Area {
+            width: at.width + 1,
+            ..at
+        },
+        (Arrange::Sizing, Up) => crate::layout::Area {
+            height: at.height.saturating_sub(1),
+            ..at
+        },
+        (Arrange::Sizing, Down) => crate::layout::Area {
+            height: at.height + 1,
+            ..at
+        },
+    };
+    place(next, moved)
+}
+
+/// Which screen row the Paused line is drawn on, and nothing where the file
+/// it is in is not the one on screen or the wheel has taken it off the pane.
+/// Read by the clamp that keeps the Evaluator off it, off the same
+/// `editor_scroll` the line itself is drawn from — two derivations of where a
+/// line is would be a window covering the very line it was moved to clear.
+pub fn paused_row(state: &State) -> Option<u16> {
+    let (file, line, _) = paused_line(state)?;
+    if state.current_buffer.as_deref() != Some(file) {
+        return None;
+    }
+    let editor = crate::panes_of(state).editor;
+    let row = u16::try_from(line.checked_sub(1)?.checked_sub(state.editor_scroll)?).ok()?;
+    let at = editor.y + 1 + row;
+    (at < editor.bottom().saturating_sub(1)).then_some(at)
+}
+
+/// Up and Down on an empty Snippet walk the project's Snippets, newest first,
+/// and Down comes forward again — the gesture every shell has, for its
+/// reason: the code that worked last time is the code being reached for.
+/// `true` where the arrow was the history's, which is what leaves it the
+/// caret's motion on a Snippet somebody is writing.
+///
+/// Walking outlives the emptiness that started it: the Snippet a recall put
+/// there is not empty, and a second Up that moved the caret instead would be
+/// a history one step deep.
+pub fn recall(next: &mut State, direction: crate::Direction) -> bool {
+    use crate::Direction::{Down, Up};
+    let newest = match next.snippets.len() {
+        0 => return false,
+        held => held - 1,
+    };
+    let tab_width = next.tab_width;
+    let Some(evaluator) = next.evaluator.as_mut() else {
+        return false;
+    };
+    if evaluator.recalled.is_none() && !evaluator.snippet.shown().is_empty() {
+        return false;
+    }
+    let at = match (evaluator.recalled, direction) {
+        (None, Up) => newest,
+        (Some(at), Up) => at.saturating_sub(1),
+        (Some(at), Down) => (at + 1).min(newest),
+        // Down with nothing recalled is the caret's, on a Snippet with
+        // nothing above it to come forward from.
+        (None, Down) => return false,
+        (_, crate::Direction::Left | crate::Direction::Right) => return false,
+    };
+    evaluator.recalled = Some(at);
+    let recalled = next.snippets[at].clone();
+    if let Some(evaluator) = next.evaluator.as_mut() {
+        evaluator.snippet = crate::editor::Buffer::open(&recalled, false, tab_width);
+    }
+    true
 }
 
 /// What this run sends: the Selection where the keyboard is in the Snippet
