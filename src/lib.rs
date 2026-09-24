@@ -6373,14 +6373,16 @@ fn on_breakpoint(mut next: State, event: Event, wheeled: bool) -> Answered {
                     next.breakpoints.remove(at);
                 }
                 None => next.breakpoints.push(debug::Breakpoint {
-                    file,
+                    file: file.clone(),
                     line,
                     text,
                     stale: false,
                     properties: debug::Properties::default(),
                 }),
             }
-            vec![Effect::SaveState(state_json(&next))]
+            let mut effects = debug::breakpoints_changed(&mut next, &file);
+            effects.push(Effect::SaveState(state_json(&next)));
+            effects
         }
 
         // Stale is decided here and nowhere else: a Breakpoint whose line no

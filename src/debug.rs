@@ -1539,39 +1539,19 @@ fn told(next: &mut State, message: &Value) -> Vec<Effect> {
 /// `initialized`: the Breakpoints, the Exception filters and then
 /// `configurationDone`, in the protocol's order and in one batch.
 fn configured(next: &mut State) -> Vec<Effect> {
-    let mut files: BTreeMap<&Path, Vec<Value>> = BTreeMap::new();
-    for breakpoint in &next.breakpoints {
-        let properties = &breakpoint.properties;
-        let mut sent = json!({ "line": breakpoint.line });
-        for (key, text) in [
-            ("condition", &properties.condition),
-            ("hitCondition", &properties.hit_count),
-            ("logMessage", &properties.log_message),
-        ] {
-            if !text.is_empty() {
-                sent[key] = json!(text);
-            }
-        }
-        files.entry(&breakpoint.file).or_default().push(sent);
-    }
-    let files: Vec<(PathBuf, Vec<Value>)> = files
-        .into_iter()
-        .map(|(file, breakpoints)| (file.to_path_buf(), breakpoints))
-        .collect();
     let pause_on = pause_on(next);
     let session = next.debug.as_mut().expect("a session");
     if session.phase != Phase::Starting {
         return Vec::new();
     }
+    let files: BTreeSet<&Path> = next
+        .breakpoints
+        .iter()
+        .map(|breakpoint| breakpoint.file.as_path())
+        .collect();
     let mut effects: Vec<Effect> = files
         .into_iter()
-        .map(|(file, breakpoints)| {
-            ask(
-                session,
-                "setBreakpoints",
-                json!({ "source": { "path": file }, "breakpoints": breakpoints }),
-            )
-        })
+        .map(|file| set_breakpoints(session, &next.breakpoints, file))
         .collect();
     effects.push(ask(session, "setExceptionBreakpoints", pause_on));
     effects.push(ask(session, "configurationDone", json!({})));
@@ -1655,6 +1635,49 @@ pub fn name_class(next: &mut State, class: String) -> Vec<Effect> {
     let arguments = pause_on(next);
     let session = next.debug.as_mut().expect("a session");
     vec![ask(session, "setExceptionBreakpoints", arguments)]
+}
+
+/// A file's whole list, as `setBreakpoints` replaces it: every Breakpoint in it
+/// but the Stale ones, whose line no longer holds what was set there. A file
+/// left with none is sent an empty list, or the adapter would keep the last.
+fn set_breakpoints(session: &mut Session, breakpoints: &[Breakpoint], file: &Path) -> Effect {
+    let lines: Vec<Value> = breakpoints
+        .iter()
+        .filter(|breakpoint| breakpoint.file == file && !breakpoint.stale)
+        .map(|breakpoint| {
+            let properties = &breakpoint.properties;
+            let mut sent = json!({ "line": breakpoint.line });
+            for (key, text) in [
+                ("condition", &properties.condition),
+                ("hitCondition", &properties.hit_count),
+                ("logMessage", &properties.log_message),
+            ] {
+                if !text.is_empty() {
+                    sent[key] = json!(text);
+                }
+            }
+            sent
+        })
+        .collect();
+    ask(
+        session,
+        "setBreakpoints",
+        json!({ "source": { "path": file }, "breakpoints": lines }),
+    )
+}
+
+/// A Breakpoint set or removed in `file` reaches a configured session at once.
+/// Before `initialized` it waits for [`configured`], which sends every file.
+pub fn breakpoints_changed(next: &mut State, file: &Path) -> Vec<Effect> {
+    let Some(session) = next.debug.as_mut() else {
+        return Vec::new();
+    };
+    match session.phase {
+        Phase::Running(_) | Phase::Paused(_) => {
+            vec![set_breakpoints(session, &next.breakpoints, file)]
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// F9: continue the inspected thread while Paused, pause the program while
@@ -4470,8 +4493,9 @@ mod tests {
         assert_eq!(sent(&resume(&mut state))[0]["command"], "threads");
     }
 
-    /// Stale is a claim about the text, which no answer changes, and a bound
-    /// answer that names no line binds the line it was sent.
+    /// Stale is a claim about the text, which no answer changes — a Stale
+    /// breakpoint is not even asked about — and a bound answer that names no
+    /// line binds the line it was sent.
     #[test]
     fn an_answer_is_drawn_unless_the_text_says_otherwise() {
         let file = PathBuf::from("/w/one.rs");
@@ -4493,7 +4517,6 @@ mod tests {
             &json!({"type": "response", "request_seq": seq, "success": true,
             "command": "setBreakpoints", "body": {"breakpoints": [
                 {"verified": true},
-                {"verified": false, "message": "no code"},
                 {"verified": true, "line": 7},
             ]}})
             .to_string(),

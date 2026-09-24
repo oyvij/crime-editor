@@ -14607,6 +14607,32 @@ fn adapter_sent_for_thread_alone(world: &mut VardeWorld, command: String, thread
     assert_eq!(arguments["singleThread"], true);
 }
 
+/// The lines of the last request naming `file`: a file's list is replaced
+/// whole by each one, so the last is what the adapter holds.
+fn lines_sent(world: &VardeWorld, command: &str, file: &str) -> Vec<Value> {
+    let path = abs(world, file);
+    let request = dap_requests(world, command)
+        .into_iter()
+        .rfind(|request| request["arguments"]["source"]["path"] == json!(path))
+        .unwrap_or_else(|| panic!("no {command:?} for {file:?}; sent {:?}", world.dap.sent));
+    request["arguments"]["breakpoints"]
+        .as_array()
+        .expect("a list of breakpoints")
+        .iter()
+        .map(|breakpoint| breakpoint["line"].clone())
+        .collect()
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for {string} line {int}")]
+fn adapter_sent_for_line(world: &mut VardeWorld, command: String, file: String, line: usize) {
+    assert_eq!(lines_sent(world, &command, &file), vec![json!(line)]);
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for {string} with no lines")]
+fn adapter_sent_no_lines(world: &mut VardeWorld, command: String, file: String) {
+    assert_eq!(lines_sent(world, &command, &file), Vec::<Value>::new());
+}
+
 #[then(expr = "the Debug adapter was sent a {string} request with {string} {word}")]
 fn adapter_sent_with(world: &mut VardeWorld, command: String, key: String, value: String) {
     let expected: Value = serde_json::from_str(&value).expect("a JSON value");

@@ -284,11 +284,12 @@ pub const EVALUATOR_CHORDS: [(&str, &str, &[View]); 2] = [
 
 /// The keys a Debug session reserves, listed while one exists and absent while
 /// none does — which is when the hosted panes have them back.
-pub const DEBUG_KEYS: [(&str, &str, &[View]); 5] = [
+pub const DEBUG_KEYS: [(&str, &str, &[View]); 6] = [
     ("F9", "continue / pause", &[View::Edit]),
     ("F8", "step over", &[View::Edit]),
     ("F7", "step into", &[View::Edit]),
     ("S-F8", "step out", &[View::Edit]),
+    ("C-F8", "toggle breakpoint", &[View::Edit]),
     ("C-F2", "stop debugging", &[View::Edit]),
 ];
 
@@ -625,6 +626,10 @@ fn reserved(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) -> 
         match event.code {
             KeyCode::F(9) if !ctrl => return Some(vec![Event::DebugResume]),
             KeyCode::F(2) if ctrl => return Some(vec![Event::DebugStop]),
+            KeyCode::F(8) if ctrl => {
+                let line = crate::current_buffer(state).map_or(0, |buffer| buffer.line);
+                return Some(vec![Event::ToggleBreakpoint(line)]);
+            }
             // Shift is a gesture of its own here, which is why `label` spells
             // it: stepping out is the same key as stepping over, held.
             KeyCode::F(8) if !ctrl && shift => return stepped(crate::debug::Step::Out),
@@ -3844,10 +3849,11 @@ mod tests {
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
                 arrow_label(shift, alt, ctrl)
             }
-            // Ctrl is inspected on F2, which stops a Debug session and is
-            // nothing without it. Shift is inspected on F8 and nowhere else —
-            // held, it steps out where the key alone steps over — so it is a
-            // gesture of its own there and a modifier no binding reads on
+            // Ctrl is inspected on F2, which stops a Debug session, and on F8,
+            // which toggles a Breakpoint with it held. Shift is inspected on
+            // F8 and nowhere else — held, it steps out where the key alone
+            // steps over — so it is a gesture of its own there and a
+            // modifier no binding reads on
             // every other function key, exactly as Command is on `c` and `v`.
             KeyCode::F(number) if ctrl => format!("C-F{number}"),
             KeyCode::F(8) if shift => "S-F8".to_string(),
