@@ -306,6 +306,9 @@ struct FakeAdapter {
     /// Every command the edge was asked to spawn, including one that
     /// produced no process.
     spawned: Vec<String>,
+    /// Every port the edge was asked to connect to an adapter a language
+    /// server hosts on, which is spawned by nobody.
+    dialed: Vec<u16>,
     /// Whether the edge holds the adapter.
     held: bool,
     /// Whether it answers `initialize` the moment it is asked — "is ready".
@@ -877,6 +880,16 @@ impl VardeWorld {
                     self.lsp_is_gone(&language, Gone::FailedToStart);
                 } else {
                     self.lsp_is_running(&language, &command);
+                }
+            }
+            Effect::StartDap {
+                reach: varde::debug::Reach::Port(port),
+                ..
+            } => {
+                self.dap.dialed.push(port);
+                if self.dap.ready {
+                    self.dap.held = true;
+                    self.send_now(Event::DapStarted);
                 }
             }
             Effect::StartDap { command, .. } => {
@@ -4163,6 +4176,8 @@ fn debug_adapter_configured(world: &mut VardeWorld, language: String) {
             command: format!("{language}-adapter"),
             args: Vec::new(),
             install: BTreeMap::new(),
+            server: None,
+            plugin: None,
         });
     let row = format!("[dap.{language}]\ncommand = \"{}\"", adapter.command);
     world.startup.global_config = Some(match world.startup.global_config.take() {
@@ -4179,6 +4194,14 @@ fn debug_adapter_configured(world: &mut VardeWorld, language: String) {
         world.on_path.insert(command.clone());
         world.state.commands_on_path.insert(command);
     }
+    // Spawned whatever the template says, since the scripted adapter is what
+    // answers: the Rule about adapters a language server hosts configures its
+    // own row.
+    let adapter = startup::Adapter {
+        server: None,
+        plugin: None,
+        ..adapter
+    };
     world.state.adapters.insert(language, adapter);
 }
 
@@ -10956,6 +10979,31 @@ fn server_replies(world: &mut VardeWorld, language: String, method: String, step
     );
 }
 
+#[when(expr = "the language server for {string} answers {string} with the error {string}")]
+fn server_answers_error(world: &mut VardeWorld, language: String, method: String, why: String) {
+    let id = sent(world, &language)
+        .iter()
+        .rfind(|message| message["method"] == method)
+        .unwrap_or_else(|| panic!("{language} was never sent a {method} request"))["id"]
+        .clone();
+    world.lsp_replies(
+        &language,
+        json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": why}}),
+    );
+}
+
+#[then(expr = "the language server for {string} was sent {int} {string} requests")]
+fn server_sent_count(world: &mut VardeWorld, language: String, count: usize, method: String) {
+    let messages = sent(world, &language);
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message["method"] == method)
+            .count(),
+        count
+    );
+}
+
 /// A question the server puts to Varde on a method of its own — a notification,
 /// so the protocol has no reply for it and the server is left waiting unless
 /// Varde says something back on the method its configuration names.
@@ -14575,6 +14623,16 @@ fn adapter_sent_no(world: &mut VardeWorld, command: String) {
 #[then(expr = "the Debug adapter was sent a {string} request")]
 fn adapter_sent_a(world: &mut VardeWorld, command: String) {
     last_request(world, &command);
+}
+
+#[then(expr = "no Debug adapter was spawned")]
+fn no_adapter_spawned(world: &mut VardeWorld) {
+    assert_eq!(world.dap.spawned, Vec::<String>::new());
+}
+
+#[then(expr = "the Debug adapter is reached on port {int}")]
+fn adapter_reached_on(world: &mut VardeWorld, port: u16) {
+    assert_eq!(world.dap.dialed, vec![port]);
 }
 
 #[then(expr = "the Debug adapter was sent {int} {string} requests")]

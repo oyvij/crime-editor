@@ -124,7 +124,9 @@ impl Drop for Server {
 /// has no `jsonrpc` field, so `lsp_server` cannot read one and no crate frames
 /// it for a client (`docs/stack.md`).
 pub struct Adapter {
-    child: Child,
+    /// `None` for an adapter a language server hosts: the server owns that
+    /// process, and only the connection is Varde's.
+    child: Option<Child>,
     writer: BufWriter<Box<dyn Write + Send>>,
     incoming: Receiver<String>,
     pub alive: bool,
@@ -148,7 +150,7 @@ impl Adapter {
             .spawn()?;
         let stdout = child.stdout.take().expect("a piped stdout");
         let stdin = child.stdin.take().expect("a piped stdin");
-        Ok(Self::over(child, stdout, Box::new(stdin)))
+        Ok(Self::over(Some(child), stdout, Box::new(stdin)))
     }
 
     /// An adapter that listens rather than reading its stdin: spawned with
@@ -171,13 +173,20 @@ impl Adapter {
             Some(file) => Stdio::from(file.try_clone()?),
             None => Stdio::null(),
         };
-        let mut child = Command::new(command)
+        let child = Command::new(command)
             .args(args)
             .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(stdout)
             .stderr(log.map_or_else(Stdio::null, Stdio::from))
             .spawn()?;
+        Ok(Self::dial(port, Some(child)))
+    }
+
+    /// The connection to an adapter listening on `port`, made on a thread for
+    /// the reason [`Adapter::connect`]'s is, and given up on early if `child`
+    /// — the adapter's process, where Varde spawned it — exits first.
+    pub fn dial(port: u16, mut child: Option<Child>) -> Receiver<std::io::Result<Self>> {
         let (sender, connected) = channel();
         std::thread::spawn(move || {
             let started = std::time::Instant::now();
@@ -187,7 +196,10 @@ impl Adapter {
                 match TcpStream::connect(("localhost", port)) {
                     Ok(stream) => break Ok(stream),
                     Err(error)
-                        if started.elapsed() > CONNECT || !matches!(child.try_wait(), Ok(None)) =>
+                        if started.elapsed() > CONNECT
+                            || child
+                                .as_mut()
+                                .is_some_and(|child| !matches!(child.try_wait(), Ok(None))) =>
                     {
                         break Err(error)
                     }
@@ -202,17 +214,19 @@ impl Adapter {
             let _ = sender.send(match adapter {
                 Ok((reader, writer)) => Ok(Self::over(child, reader, Box::new(writer))),
                 Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    if let Some(child) = child.as_mut() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
                     Err(error)
                 }
             });
         });
-        Ok(connected)
+        connected
     }
 
     fn over(
-        child: Child,
+        child: Option<Child>,
         reader: impl std::io::Read + Send + 'static,
         writer: Box<dyn Write + Send>,
     ) -> Self {
@@ -264,8 +278,10 @@ impl Drop for Adapter {
     /// An adapter outliving its session holds a debugged program nobody can
     /// see. `disconnect` has had its answer by the time a session lets it go.
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 

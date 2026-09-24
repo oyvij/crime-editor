@@ -156,6 +156,9 @@ pub enum Refusal {
     /// No command runs the adapter a Launch configuration names — no
     /// `[dap.*]` row, or a row whose command is not on this machine. Named.
     NoDebugAdapter(String),
+    /// The language server that hosts the adapter has not finished starting,
+    /// so there is nobody to ask for it. Named.
+    NoLanguageServer(String),
     DebugAdapterFailed,
     /// The adapter went away with a session still going.
     DebugAdapterExited,
@@ -181,6 +184,7 @@ impl Refusal {
             Refusal::NeedsInstaller(_) => "needs-installer",
             Refusal::SessionRunning => "debug-session-running",
             Refusal::NoDebugAdapter(_) => "no-debug-adapter",
+            Refusal::NoLanguageServer(_) => "no-language-server",
             Refusal::DebugAdapterFailed => "debug-adapter-failed",
             Refusal::DebugAdapterExited => "debug-adapter-exited",
             Refusal::LaunchFailed(_) => "launch-failed",

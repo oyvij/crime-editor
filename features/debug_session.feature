@@ -308,6 +308,99 @@ Feature: Starting and ending a Debug session
       Then the editor refuses with "launch-failed"
       And the Debug session is "waiting"
 
+  Rule: An adapter a language server hosts is loaded into it, and asked there for its port
+
+    The third way in (ADR 0021): the row names a language server, a plugin loaded into it when it
+    starts, and a command sent to it once a session begins. The server answers with the port its
+    adapter listens on, and from there the session is any other.
+
+    Background:
+      Given the global config is:
+        """
+        [lsp.java]
+        command = "jdtls"
+        extensions = ["java"]
+
+        [dap.java]
+        server = "java"
+        command = "vscode.java.startDebugSession"
+        plugin = { bundles = ["/opt/java-debug/plugin.jar"] }
+
+        [launch.orders]
+        adapter = "java"
+        request = "attach"
+        args = { hostName = "localhost", port = 5005 }
+        """
+      And Varde started in the project
+
+    Scenario: The plugin is loaded into the language server when it starts
+      When I open "src/main/java/Orders.java"
+      Then the initialize request for "java" carried initialization options:
+        """
+        {"bundles":["/opt/java-debug/plugin.jar"]}
+        """
+
+    Scenario: Starting a session sends the configured command to the language server
+      Given a language server for "java" is ready
+      And I open "src/main/java/Orders.java"
+      When I start the Launch configuration "orders" from the palette
+      Then the language server for "java" was sent "workspace/executeCommand" with:
+        """
+        {"command":"vscode.java.startDebugSession"}
+        """
+      And no Debug adapter was spawned
+
+    Scenario: The adapter is reached on the port the language server answers with
+      Given a language server for "java" is ready
+      And the Debug adapter for "java" is ready
+      And I open "src/main/java/Orders.java"
+      And I start the Launch configuration "orders" from the palette
+      When the language server for "java" replies to "workspace/executeCommand" with:
+        """
+        41234
+        """
+      Then the Debug adapter is reached on port 41234
+      And the Debug adapter was sent a "initialize" request
+
+    Scenario: A re-attach asks the language server for a port again
+      Given a language server for "java" is ready
+      And the Debug adapter for "java" is ready
+      And I open "src/main/java/Orders.java"
+      And I start the Launch configuration "orders" from the palette
+      And the language server for "java" replies to "workspace/executeCommand" with:
+        """
+        41234
+        """
+      And the Debug adapter sends the event "terminated"
+      When the edge reports the port 5005 answers
+      Then the language server for "java" was sent 2 "workspace/executeCommand" requests
+
+    Scenario: A hosted adapter whose language server is not running is refused by name
+      When I start the Launch configuration "orders" from the palette
+      Then the editor refuses with "no-language-server"
+      And no Debug session exists
+
+    Scenario: A language server that goes away before it answers ends the session
+      Given a language server for "java" is ready
+      And I open "src/main/java/Orders.java"
+      And I start the Launch configuration "orders" from the palette
+      When the language server for "java" exits
+      Then the editor refuses with "no-language-server"
+      And no Debug session exists
+
+    Scenario: A language server that cannot start the adapter is reported
+      Given a language server for "java" is ready
+      And I open "src/main/java/Orders.java"
+      And I start the Launch configuration "orders" from the palette
+      When the language server for "java" answers "workspace/executeCommand" with the error "No delegateCommandHandler for vscode.java.startDebugSession"
+      Then the editor refuses with "launch-failed"
+      And no Debug session exists
+
+    Scenario: A hosted adapter's row is as installed as its language server
+      Given the command "jdtls" is on PATH
+      When the tools list is shown
+      Then the Debug adapter row for "java" is "installed"
+
   Rule: Launch sessions end with their program, and stop ends everything the adapter opened
 
     Scenario: A launched program that exits ends the session

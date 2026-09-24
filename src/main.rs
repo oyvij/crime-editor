@@ -2832,6 +2832,10 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                         })
                         .map(|connected| edge.connecting = Some(connected))
                 }
+                varde::debug::Reach::Port(port) => {
+                    edge.connecting = Some(rpc::Adapter::dial(port, None));
+                    Ok(())
+                }
             };
             // What the spawn said, which only the edge can see: a command
             // that is not there is the one the reader fixes by installing.

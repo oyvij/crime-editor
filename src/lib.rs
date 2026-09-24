@@ -6666,7 +6666,11 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         Event::ReviewFileRead { path, contents } => {
             lsp::read_for_review(&mut next, &path, &contents)
         }
-        Event::LspGone { language, why } => lsp::gone(&mut next, &language, why),
+        Event::LspGone { language, why } => {
+            let mut effects = lsp::gone(&mut next, &language, why);
+            effects.extend(debug::unhosted(&mut next, &language));
+            effects
+        }
 
         Event::CandidatesDue => lsp::ask(&mut next, lsp::About::Candidates),
 

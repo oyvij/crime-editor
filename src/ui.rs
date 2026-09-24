@@ -2720,6 +2720,9 @@ fn refusal_spans(state: &State) -> Vec<Span<'static>> {
         varde::preview::Refusal::NoDebugAdapter(adapter) => {
             format!(" no debug adapter: {adapter} — install it from Tools ")
         }
+        varde::preview::Refusal::NoLanguageServer(server) => {
+            format!(" the {server} language server hosts this debug adapter — open a {server} file and wait for it ")
+        }
         varde::preview::Refusal::DebugAdapterFailed => {
             " the debug adapter could not be started ".to_string()
         }

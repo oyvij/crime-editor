@@ -93,6 +93,21 @@ optional = true
 command = "vue-language-server"
 command_marker = "../node_modules/@vue/typescript-plugin"
 
+# The plugin `[dap.java]` loads into jdtls: java-debug is no program of its own.
+# Maven Central publishes the bundle, so the install fetches its newest release
+# into `~/.varde/java-debug`, with a script beside it that prints where it is
+# and a link to that on `PATH` — the command fallback reads the marker off the
+# script's real directory, which is the only way a fact reaches a file outside
+# the workspace. `optional` because jdtls starts without it: a Java server no
+# Debug session can be started in is still a Java server.
+[facts.java_debug_plugin]
+marker = "com.microsoft.java.debug.plugin.jar"
+optional = true
+command = "java-debug-plugin"
+command_marker = "com.microsoft.java.debug.plugin.jar"
+install.macos = "curl -sfL https://repo1.maven.org/maven2/com/microsoft/java/com.microsoft.java.debug.plugin/maven-metadata.xml | sed -n 's:.*<release>::; s:</release>.*::p' | { read v && curl -sfL --create-dirs https://repo1.maven.org/maven2/com/microsoft/java/com.microsoft.java.debug.plugin/$v/com.microsoft.java.debug.plugin-$v.jar -o ~/.varde/java-debug/com.microsoft.java.debug.plugin.jar; } && mkdir -p ~/.local/bin && printf '#!/bin/sh\\necho %s\\n' ~/.varde/java-debug/com.microsoft.java.debug.plugin.jar > ~/.varde/java-debug/java-debug-plugin && chmod +x ~/.varde/java-debug/java-debug-plugin && ln -sf ~/.varde/java-debug/java-debug-plugin ~/.local/bin/java-debug-plugin"
+install.linux = "curl -sfL https://repo1.maven.org/maven2/com/microsoft/java/com.microsoft.java.debug.plugin/maven-metadata.xml | sed -n 's:.*<release>::; s:</release>.*::p' | { read v && curl -sfL --create-dirs https://repo1.maven.org/maven2/com/microsoft/java/com.microsoft.java.debug.plugin/$v/com.microsoft.java.debug.plugin-$v.jar -o ~/.varde/java-debug/com.microsoft.java.debug.plugin.jar; } && mkdir -p ~/.local/bin && printf '#!/bin/sh\\necho %s\\n' ~/.varde/java-debug/com.microsoft.java.debug.plugin.jar > ~/.varde/java-debug/java-debug-plugin && chmod +x ~/.varde/java-debug/java-debug-plugin && ln -sf ~/.varde/java-debug/java-debug-plugin ~/.local/bin/java-debug-plugin"
+
 [lsp.rust]
 command = "rust-analyzer"
 extensions = ["rs"]
@@ -590,7 +605,9 @@ install.windows = "npm install -g prettier"
 
 # A Debug adapter per language, spoken to over its standard streams — or, where
 # its `args` name `${port}`, started listening on a port Varde fills in and
-# connected to over TCP
+# connected to over TCP — or, where it names a `server`, loaded into that
+# language server as a plugin and reached on the port the server answers its
+# `command` with
 # (`docs/adr/0021-a-debug-adapter-is-a-hosted-child-reached-three-ways.md`).
 # codelldb has spoken stdio since 1.11. It ships as a VS Code extension and
 # nothing packages it, so the install unpacks the release into
@@ -601,6 +618,15 @@ install.windows = "npm install -g prettier"
 command = "codelldb"
 install.macos = "curl -sL --create-dirs https://github.com/vadimcn/codelldb/releases/latest/download/codelldb-darwin-$(uname -m | sed 's/x86_64/x64/').vsix -o ~/.varde/codelldb.vsix && unzip -qo ~/.varde/codelldb.vsix -d ~/.varde/codelldb && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec %s \"$@\"\\n' ~/.varde/codelldb/extension/adapter/codelldb > ~/.local/bin/codelldb && chmod +x ~/.local/bin/codelldb"
 install.linux = "curl -sL --create-dirs https://github.com/vadimcn/codelldb/releases/latest/download/codelldb-linux-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/').vsix -o ~/.varde/codelldb.vsix && unzip -qo ~/.varde/codelldb.vsix -d ~/.varde/codelldb && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec %s \"$@\"\\n' ~/.varde/codelldb/extension/adapter/codelldb > ~/.local/bin/codelldb && chmod +x ~/.local/bin/codelldb"
+
+# java-debug lives inside jdtls, where the classpath that maps a file and line to
+# a class is. `plugin` is merged into the `[lsp.java]` server's
+# `initializationOptions` when it starts, and `command` is what that server is
+# sent once a session begins; it answers with the port the adapter listens on.
+[dap.java]
+server = "java"
+command = "vscode.java.startDebugSession"
+plugin = { bundles = ["${java_debug_plugin}"] }
 
 # What reads a Selection aloud (F35). The synthesizer, the voice and the player
 # are named here and in no branch anywhere: a voice nobody has tried works for
@@ -1097,17 +1123,28 @@ pub struct Formatter {
 
 /// What runs a language's Debug adapter, as configuration named it — the
 /// `[dap.*]` row ADR 0021 puts every adapter in, so no arm names one. Spoken
-/// to over its standard streams, or over TCP where `args` name `${port}`.
+/// to over its standard streams, over TCP where `args` name `${port}`, or —
+/// where it names a `server` — over TCP on the port that language server
+/// answers `command` with.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Adapter {
     /// Defaulted and held to being named by the merged table, for the reason
-    /// [`Server::command`] is.
+    /// [`Server::command`] is. For a hosted adapter it is not a program but
+    /// the command sent to its `server`.
     #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
     pub install: BTreeMap<String, String>,
+    /// The `[lsp.*]` row whose server hosts this adapter as a plugin.
+    #[serde(default)]
+    pub server: Option<String>,
+    /// Merged into that server's `initializationOptions` when it starts,
+    /// which is how a server is told what to load: what the keys mean is the
+    /// server's business, for the reason its own options are.
+    #[serde(default)]
+    pub plugin: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// A named way to start a Debug session: which adapter, whether it launches
@@ -1743,6 +1780,7 @@ pub fn deps(global_config: Option<&str>, os: &str) -> Result<Vec<Dep>, ConfigErr
     };
     let speech = speech(&config, os);
     let install = (!speech.install.is_empty()).then_some(&speech.install);
+    let servers = config.servers();
     Ok(config
         .servers()
         .iter()
@@ -1753,12 +1791,17 @@ pub fn deps(global_config: Option<&str>, os: &str) -> Result<Vec<Dep>, ConfigErr
                 .iter()
                 .map(|(name, f)| row("formatter", name, &f.command, f.install.get(os))),
         )
-        .chain(
-            config
-                .adapters()
-                .iter()
-                .map(|(name, a)| row("dap", name, &a.command, a.install.get(os))),
-        )
+        .chain(config.adapters().iter().map(|(name, a)| {
+            // A hosted adapter is there when the server it is loaded into is,
+            // as Tools reads it.
+            let command = match &a.server {
+                Some(server) => servers
+                    .get(server)
+                    .map_or_else(|| server.clone(), |server| server.command.clone()),
+                None => a.command.clone(),
+            };
+            row("dap", name, &command, a.install.get(os))
+        }))
         .chain([
             row("speech", "speech", &speech.command, install),
             row("player", "speech", &speech.player, None),
@@ -2310,6 +2353,11 @@ mod tests {
                 .find(|dep| (dep.kind, dep.name.as_str()) == ("dap", "rust"))
                 .expect("the rust adapter");
             assert_eq!(codelldb.command, "codelldb");
+            let java = table
+                .iter()
+                .find(|dep| (dep.kind, dep.name.as_str()) == ("dap", "java"))
+                .expect("the java adapter");
+            assert_eq!(java.command, "jdtls");
             assert!(
                 codelldb
                     .install

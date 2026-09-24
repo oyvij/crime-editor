@@ -505,14 +505,7 @@ pub fn sync(state: &mut State) -> Vec<Effect> {
             json: request(
                 INITIALIZE,
                 "initialize",
-                initialize(
-                    &state.root,
-                    state
-                        .servers
-                        .get(&language)
-                        .and_then(|server| server.initialization_options.as_ref()),
-                    &facts,
-                ),
+                initialize(&state.root, options(state, &language, &facts)),
             ),
         });
         state
@@ -2438,6 +2431,9 @@ pub fn received(state: &mut State, language: &str, message: &str) -> Vec<Effect>
     if id == INITIALIZE && waiting(state, language) {
         return handshaken(state, language, &message);
     }
+    if let Some(effects) = crate::debug::ported(state, language, id, &message) {
+        return effects;
+    }
     answered(state, language, id, &message)
 }
 
@@ -2966,11 +2962,53 @@ pub(crate) fn facts(state: &State) -> BTreeMap<String, Option<String>> {
         .collect()
 }
 
-fn initialize(
-    root: &Path,
-    options: Option<&serde_json::Map<String, Value>>,
+/// What a server is told in `initializationOptions`: its own row's options and
+/// the `plugin` of every Debug adapter it hosts, each filled on its own and then
+/// joined — so a plugin whose fact was not found goes alone, rather than taking
+/// the server's own entry under the same key with it.
+fn options(
+    state: &State,
+    language: &str,
     facts: &BTreeMap<String, Option<String>>,
-) -> InitializeParams {
+) -> Option<Value> {
+    let own = state
+        .servers
+        .get(language)
+        .and_then(|server| server.initialization_options.as_ref());
+    let plugins = state
+        .adapters
+        .values()
+        .filter(|adapter| adapter.server.as_deref() == Some(language))
+        .filter_map(|adapter| adapter.plugin.as_ref());
+    own.into_iter()
+        .chain(plugins)
+        .map(|options| Value::Object(filled_options(options, facts)))
+        .reduce(|mut into, from| {
+            joined(&mut into, from);
+            into
+        })
+}
+
+/// A table merged key by key and a list added to, so neither of two rows
+/// passing one server options has to know what the other passes.
+fn joined(into: &mut Value, from: Value) {
+    match (into, from) {
+        (Value::Object(into), Value::Object(from)) => {
+            for (key, value) in from {
+                match into.get_mut(&key) {
+                    Some(held) => joined(held, value),
+                    None => {
+                        into.insert(key, value);
+                    }
+                }
+            }
+        }
+        (Value::Array(into), Value::Array(from)) => into.extend(from),
+        (into, from) => *into = from,
+    }
+}
+
+fn initialize(root: &Path, options: Option<Value>) -> InitializeParams {
     InitializeParams {
         // The client's own pid is the edge's to know, and null is what the
         // protocol has for a client that does not say.
@@ -3023,8 +3061,7 @@ fn initialize(
         // Varde can do — it is how a server is told where its own toolchain
         // lives, and several will not run without it. A language that
         // configured none says nothing.
-        initialization_options: options
-            .map(|options| Value::Object(filled_options(options, facts))),
+        initialization_options: options,
         ..InitializeParams::default()
     }
 }
@@ -3040,6 +3077,30 @@ fn uri(path: &Path) -> Option<Url> {
     Url::from_file_path(path).ok()
 }
 
+/// A command put to `language`'s server — how a Debug adapter it hosts is
+/// started — and the id its answer comes back under. `None` until that server
+/// has finished its handshake, since it reads nothing sent before then.
+pub(crate) fn execute(state: &mut State, language: &str, command: &str) -> Option<(i64, Effect)> {
+    let conversation = state
+        .lsp
+        .get_mut(language)
+        .filter(|held| held.handshake == Handshake::Ready)?;
+    let id = conversation.next_id;
+    conversation.next_id += 1;
+    let json = request(
+        id,
+        "workspace/executeCommand",
+        json!({ "command": command }),
+    );
+    Some((
+        id,
+        Effect::LspSend {
+            language: language.to_string(),
+            json,
+        },
+    ))
+}
+
 fn request(id: i64, method: &str, params: impl Serialize) -> String {
     json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string()
 }
@@ -3052,6 +3113,54 @@ fn notification(method: &str, params: impl Serialize) -> String {
 mod tests {
     use super::*;
     use crate::editor::Buffer;
+
+    /// A hosted adapter's plugin joins what the server's own row passes it,
+    /// each filled on its own: a plugin whose fact was not found goes without
+    /// taking the server's entry under the same key with it.
+    #[test]
+    fn a_plugin_joins_the_options_of_the_server_that_hosts_it() {
+        let mut state = workspace("rust", "rust-analyzer");
+        state.facts.insert(
+            "plugin_jar".to_string(),
+            serde_json::from_value(json!({"marker": "plugin.jar"})).unwrap(),
+        );
+        state
+            .servers
+            .get_mut("rust")
+            .unwrap()
+            .initialization_options =
+            serde_json::from_str(r#"{"bundles": ["/own.jar"], "x": {"y": 1}}"#).ok();
+        let adapter = |server: &str, plugin: &str| crate::startup::Adapter {
+            command: "start".to_string(),
+            args: Vec::new(),
+            install: std::collections::BTreeMap::new(),
+            server: Some(server.to_string()),
+            plugin: serde_json::from_str(plugin).ok(),
+        };
+        state.adapters.insert(
+            "rust".to_string(),
+            adapter("rust", r#"{"bundles": ["${plugin_jar}"], "x": {"z": 2}}"#),
+        );
+        state
+            .adapters
+            .insert("other".to_string(), adapter("go", r#"{"elsewhere": true}"#));
+        assert_eq!(
+            options(&state, "rust", &facts(&state)),
+            Some(json!({"bundles": ["/own.jar"], "x": {"y": 1, "z": 2}}))
+        );
+        state
+            .workspace_facts
+            .insert("plugin_jar".to_string(), "/plugin.jar".to_string());
+        assert_eq!(
+            options(&state, "rust", &facts(&state)),
+            Some(json!({"bundles": ["/own.jar", "/plugin.jar"], "x": {"y": 1, "z": 2}}))
+        );
+        assert_eq!(
+            options(&state, "go", &facts(&state)),
+            Some(json!({"elsewhere": true}))
+        );
+        assert_eq!(options(&state, "vue", &facts(&state)), None);
+    }
 
     /// The last line, not the gate. [`sync`] refuses to spawn a server whose
     /// requirement is unmet, so at the system level the empty argument can no

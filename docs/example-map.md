@@ -3199,11 +3199,19 @@ ends a Waiting session. The Transport says `waiting`, and every stepping Chip is
 never a picker, and stopping stops every child too.
 **R41.8** Every failure is told once, by state: `no-debug-adapter` for an adapter that is not
 configured or not on PATH, `debug-adapter-failed` when the edge could not spawn it, and
-`launch-failed` when the adapter rejects the launch. The edge tells the core the adapter exists
+`launch-failed` when the adapter rejects the launch, and `no-language-server` when the language
+server hosting the adapter has not finished starting. The edge tells the core the adapter exists
 (ADR 0021), so a failed spawn is never a session.
 **R41.9** Each `[dap.<language>]` row is a Tools row with `install.<os>` keys (ADR 0012, ADR 0018).
 A row whose `args` name `${port}` is a server: the edge fills in a free port, spawns it and connects
 over TCP.
+**R41.10** A row naming a `server` is an adapter that language server hosts. Its `plugin` table is
+merged into that server's `initializationOptions` when it starts (tables key by key, lists added
+to), and starting a session sends its `command` to the server as `workspace/executeCommand`. The
+integer the server answers with is the port the edge connects to, and a re-attach asks again. A
+refusal from the server is `launch-failed` and ends the session. Its Tools row is as installed as
+the server's command. The Java row ships this way, with java-debug a `[facts.*]` row that installs
+the plugin.
 
 ### F42 — Breakpoints
 

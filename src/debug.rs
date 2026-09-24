@@ -546,9 +546,9 @@ pub struct Session {
     /// request below.
     adapter: String,
     command: String,
-    /// The spawn that started the adapter, asked again when a Waiting session
-    /// attaches anew.
-    spawn: Effect,
+    /// How the session came to hold its adapter, done again when a Waiting
+    /// session attaches anew.
+    begin: Begin,
     pub phase: Phase,
     /// `launch` or `attach`, and what that request carries — taken when the
     /// session starts, so a config edited mid-session changes the next one.
@@ -686,12 +686,23 @@ pub fn on_port(args: &[String], port: u16) -> Vec<String> {
 }
 
 /// How the edge reaches a Debug adapter, which its row says as data (ADR
-/// 0021): over its standard streams, or — for a row whose arguments name
-/// `${port}` — over TCP on a port the edge fills in.
+/// 0021): over its standard streams, over TCP on a port the edge fills in for
+/// a row whose arguments name `${port}`, or over TCP on the port the language
+/// server hosting it answered with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reach {
     Stdio,
     Server,
+    Port(u16),
+}
+
+/// How a session comes to hold its adapter: a spawn asked of the edge, or the
+/// row's command put to the language server that hosts the adapter, under the
+/// id of the latest asking, whose answer is the port.
+#[derive(Debug, Clone, PartialEq)]
+enum Begin {
+    Spawn(Effect),
+    Ask { server: String, id: i64 },
 }
 
 /// One thread stopped, the call stack it stopped in, and which Frame is being
@@ -908,20 +919,38 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
         next.refusal = Some(Refusal::SessionRunning);
         return Vec::new();
     }
-    let Some(launch) = next.launches.get(name) else {
+    let Some(launch) = next.launches.get(name).cloned() else {
         return Vec::new();
     };
-    let Some(adapter) = next.adapters.get(&launch.adapter) else {
+    let Some(adapter) = next.adapters.get(&launch.adapter).cloned() else {
         next.refusal = Some(Refusal::NoDebugAdapter(launch.adapter.clone()));
         return Vec::new();
     };
-    let effect = Effect::StartDap {
-        command: adapter.command.clone(),
-        args: adapter.args.clone(),
-        reach: match adapter.args.iter().any(|arg| arg.contains(PORT)) {
-            true => Reach::Server,
-            false => Reach::Stdio,
+    let (begin, effect) = match &adapter.server {
+        Some(server) => match crate::lsp::execute(next, server, &adapter.command) {
+            Some((id, effect)) => (
+                Begin::Ask {
+                    server: server.clone(),
+                    id,
+                },
+                effect,
+            ),
+            None => {
+                next.refusal = Some(Refusal::NoLanguageServer(server.clone()));
+                return Vec::new();
+            }
         },
+        None => {
+            let effect = Effect::StartDap {
+                command: adapter.command.clone(),
+                args: adapter.args.clone(),
+                reach: match adapter.args.iter().any(|arg| arg.contains(PORT)) {
+                    true => Reach::Server,
+                    false => Reach::Stdio,
+                },
+            };
+            (Begin::Spawn(effect.clone()), effect)
+        }
     };
     let watch = match (launch.request.as_str(), launch.reattach) {
         ("attach", true) => launch
@@ -941,7 +970,7 @@ pub fn start(next: &mut State, name: &str) -> Vec<Effect> {
     next.debug = Some(Session {
         adapter: launch.adapter.clone(),
         command: adapter.command.clone(),
-        spawn: effect.clone(),
+        begin,
         phase: Phase::Spawning,
         request: launch.request.clone(),
         args: launch.args.clone(),
@@ -981,8 +1010,27 @@ pub fn reattach(next: &mut State) -> Vec<Effect> {
         return Vec::new();
     }
     let session = next.debug.take().expect("a Waiting session");
-    let effect = session.spawn.clone();
+    let (begin, effect) = match &session.begin {
+        Begin::Spawn(effect) => (session.begin.clone(), effect.clone()),
+        Begin::Ask { server, .. } => match crate::lsp::execute(next, server, &session.command) {
+            Some((id, effect)) => (
+                Begin::Ask {
+                    server: server.clone(),
+                    id,
+                },
+                effect,
+            ),
+            // The server went away while the session waited, so there is
+            // nobody to ask for the adapter.
+            None => {
+                next.refusal = Some(Refusal::NoLanguageServer(server.clone()));
+                next.debug = Some(session);
+                return end(next);
+            }
+        },
+    };
     next.debug = Some(Session {
+        begin,
         phase: Phase::Spawning,
         asked: BTreeMap::new(),
         verdicts: BTreeMap::new(),
@@ -993,6 +1041,59 @@ pub fn reattach(next: &mut State) -> Vec<Effect> {
         ..session
     });
     vec![effect]
+}
+
+/// The answer of the language server hosting the adapter to the command that
+/// starts it: the port to reach the adapter on, or the server's refusal, which
+/// ends the session in its words. `None` for every other reply it sends.
+pub fn ported(next: &mut State, server: &str, id: i64, message: &Value) -> Option<Vec<Effect>> {
+    let session = next.debug.as_ref()?;
+    let asked = Begin::Ask {
+        server: server.to_string(),
+        id,
+    };
+    if session.phase != Phase::Spawning || session.begin != asked {
+        return None;
+    }
+    let port = message["result"]
+        .as_u64()
+        .and_then(|port| u16::try_from(port).ok());
+    Some(match port {
+        Some(port) => vec![Effect::StartDap {
+            command: session.command.clone(),
+            args: Vec::new(),
+            reach: Reach::Port(port),
+        }],
+        // Ended rather than sent back to Waiting as a refused attach is: the
+        // program is not party to this, so there is nothing on its way up to
+        // wait for, and a server that cannot host the adapter — its plugin
+        // not loaded — says the same thing every time it is asked.
+        None => {
+            let why = printable(
+                message["error"]["message"]
+                    .as_str()
+                    .unwrap_or(&session.command),
+            );
+            next.refusal = Some(Refusal::LaunchFailed(why.clone()));
+            let mut effects = end(next);
+            effects.push(Effect::notify_about("launch-failed", why));
+            effects
+        }
+    })
+}
+
+/// The language server `server` went away. A session still asking it for its
+/// adapter would wait on an answer nothing is left to send, so it ends.
+pub fn unhosted(next: &mut State, server: &str) -> Vec<Effect> {
+    let asking = next.debug.as_ref().is_some_and(|session| {
+        session.phase == Phase::Spawning
+            && matches!(&session.begin, Begin::Ask { server: asked, .. } if asked == server)
+    });
+    if !asking {
+        return Vec::new();
+    }
+    next.refusal = Some(Refusal::NoLanguageServer(server.to_string()));
+    end(next)
 }
 
 /// The edge holds the adapter now, so the conversation begins.
@@ -3632,6 +3733,8 @@ pub(crate) fn paused(mut state: State) -> State {
             command: "adapter".to_string(),
             args: Vec::new(),
             install: BTreeMap::new(),
+            server: None,
+            plugin: None,
         },
     );
     state.launches.insert(
@@ -3879,6 +3982,8 @@ mod tests {
                 command: "adapter".to_string(),
                 args: Vec::new(),
                 install: BTreeMap::new(),
+                server: None,
+                plugin: None,
             },
         );
         can.launches.insert(
@@ -4203,6 +4308,8 @@ mod tests {
                 command: "adapter".to_string(),
                 args: Vec::new(),
                 install: BTreeMap::new(),
+                server: None,
+                plugin: None,
             },
         );
         state.launches.insert(
@@ -4283,6 +4390,8 @@ mod tests {
                 command: "adapter".to_string(),
                 args: Vec::new(),
                 install: BTreeMap::new(),
+                server: None,
+                plugin: None,
             },
         );
         state.launches.insert(
@@ -4674,6 +4783,60 @@ mod tests {
         assert_eq!(call_start("total = 0\nprint(total)", 2), 1);
     }
 
+    /// A hosted adapter's port is the answer to the latest asking and nothing
+    /// else: not a reply to another id, not one from another server, and not
+    /// one arriving after the session already holds its adapter.
+    #[test]
+    fn only_the_answer_to_the_latest_asking_is_the_port() {
+        let mut state = State::default();
+        state.adapters.insert(
+            "java".to_string(),
+            crate::startup::Adapter {
+                command: "start-debugging".to_string(),
+                args: Vec::new(),
+                install: BTreeMap::new(),
+                server: Some("java".to_string()),
+                plugin: None,
+            },
+        );
+        state.launches.insert(
+            "app".to_string(),
+            crate::startup::Launch {
+                adapter: "java".to_string(),
+                request: "attach".to_string(),
+                args: serde_json::Map::new(),
+                reattach: true,
+            },
+        );
+        state.lsp_running.insert("java".to_string());
+        crate::lsp::sync(&mut state);
+        crate::lsp::received(
+            &mut state,
+            "java",
+            r#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}"#,
+        );
+        let asked = start(&mut state, "app");
+        let [Effect::LspSend { json, .. }] = asked.as_slice() else {
+            panic!("the command is put to the server");
+        };
+        let id = serde_json::from_str::<Value>(json).unwrap()["id"]
+            .as_i64()
+            .unwrap();
+        let answer = |id: i64| json!({"jsonrpc": "2.0", "id": id, "result": 41234});
+        assert_eq!(ported(&mut state, "java", id + 1, &answer(id + 1)), None);
+        assert_eq!(ported(&mut state, "go", id, &answer(id)), None);
+        assert_eq!(
+            ported(&mut state, "java", id, &answer(id)),
+            Some(vec![Effect::StartDap {
+                command: "start-debugging".to_string(),
+                args: Vec::new(),
+                reach: Reach::Port(41234),
+            }])
+        );
+        started(&mut state);
+        assert_eq!(ported(&mut state, "java", id, &answer(id)), None);
+    }
+
     fn started_with(adapter: &[&str], request: &str, args: Value) -> (State, Vec<Effect>) {
         let mut state = State::default();
         state.adapters.insert(
@@ -4682,6 +4845,8 @@ mod tests {
                 command: "adapter".to_string(),
                 args: adapter.iter().map(|arg| arg.to_string()).collect(),
                 install: BTreeMap::new(),
+                server: None,
+                plugin: None,
             },
         );
         state.launches.insert(
