@@ -17,7 +17,7 @@ use std::io::{BufReader, BufWriter, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 
 /// How long a server-reached Debug adapter has to start listening. Generous,
 /// since an adapter unpacking its own runtime on first start is slow, and one
@@ -26,7 +26,7 @@ const CONNECT: std::time::Duration = std::time::Duration::from_secs(10);
 
 pub struct Server {
     child: Child,
-    stdin: BufWriter<std::process::ChildStdin>,
+    outgoing: Sender<String>,
     incoming: Receiver<String>,
     /// Whether the child is still there. Read by the loop, which tells the core
     /// the moment it is not: a conversation nobody is party to any more.
@@ -65,27 +65,38 @@ impl Server {
                 }
             }
         });
+        // Writing is on a thread of its own, because a pipe holds 64 KB and a
+        // server busy with the last file is not reading: a `didOpen` carrying
+        // a large one would stop the screen until it did (ADR 0023). Nothing
+        // here is dropped quietly either. A message the protocol cannot carry
+        // is Varde's own bug and the conversation cannot continue past it, so
+        // it ends the way a closed stdin does: the thread exits, and the next
+        // send finds the channel closed.
+        let (outgoing, unsent) = channel::<String>();
+        std::thread::spawn(move || {
+            let mut stdin = BufWriter::new(stdin);
+            for json in unsent {
+                let written = serde_json::from_str::<Message>(&json)
+                    .ok()
+                    .map(|message| message.write(&mut stdin).and_then(|()| stdin.flush()));
+                if !matches!(written, Some(Ok(()))) {
+                    break;
+                }
+            }
+        });
         Ok(Self {
             child,
-            stdin: BufWriter::new(stdin),
+            outgoing,
             incoming,
             alive: true,
         })
     }
 
-    /// One message the core built, framed and written. A server that will not
-    /// take it is a server that is gone, which the caller learns from `alive`.
-    pub fn send(&mut self, json: &str) {
-        // Nothing here is dropped quietly. A message the protocol cannot carry
-        // is Varde's own bug and the conversation cannot continue past it, so
-        // it ends the same way a closed stdin does: the caller sees `alive`
-        // go false and tells the core the server is gone.
-        let written = serde_json::from_str::<Message>(json).ok().map(|message| {
-            message
-                .write(&mut self.stdin)
-                .and_then(|()| self.stdin.flush())
-        });
-        if !matches!(written, Some(Ok(()))) {
+    /// One message the core built, handed to the writer thread. A server that
+    /// would not take the last one is a server that is gone, which the caller
+    /// learns from `alive` — one message later than the failure, never silently.
+    pub fn send(&mut self, json: String) {
+        if self.outgoing.send(json).is_err() {
             self.alive = false;
         }
     }
@@ -127,7 +138,7 @@ pub struct Adapter {
     /// `None` for an adapter a language server hosts: the server owns that
     /// process, and only the connection is Varde's.
     child: Option<Child>,
-    writer: BufWriter<Box<dyn Write + Send>>,
+    outgoing: Sender<String>,
     incoming: Receiver<String>,
     pub alive: bool,
 }
@@ -242,18 +253,28 @@ impl Adapter {
                 }
             }
         });
+        // Off the loop for the reason a server's writing is.
+        let (outgoing, unsent) = channel::<String>();
+        std::thread::spawn(move || {
+            let mut writer = BufWriter::new(writer);
+            for json in unsent {
+                let written = write!(writer, "Content-Length: {}\r\n\r\n{json}", json.len())
+                    .and_then(|()| writer.flush());
+                if written.is_err() {
+                    break;
+                }
+            }
+        });
         Self {
             child,
-            writer: BufWriter::new(writer),
+            outgoing,
             incoming,
             alive: true,
         }
     }
 
-    pub fn send(&mut self, json: &str) {
-        let written = write!(self.writer, "Content-Length: {}\r\n\r\n{json}", json.len())
-            .and_then(|()| self.writer.flush());
-        if written.is_err() {
+    pub fn send(&mut self, json: String) {
+        if self.outgoing.send(json).is_err() {
             self.alive = false;
         }
     }
@@ -312,7 +333,9 @@ fn read_frame(reader: &mut impl std::io::BufRead) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::read_frame;
+    use super::{read_frame, Adapter, Server};
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
 
     /// Two frames back to back, a header the framing does not know, and a
     /// body holding a multi-byte character — the length counts bytes.
@@ -323,5 +346,106 @@ mod tests {
         assert_eq!(read_frame(&mut reader).as_deref(), Some("{\"seq\":\"é\"}"));
         assert_eq!(read_frame(&mut reader).as_deref(), Some("{}"));
         assert_eq!(read_frame(&mut reader), None);
+    }
+
+    /// Bigger than a pipe's buffer, so writing it on the sender's thread
+    /// waits for a reader.
+    fn large(seq: usize) -> String {
+        format!("{{\"seq\":{seq},\"text\":\"{}\"}}", "x".repeat(1 << 20))
+    }
+
+    fn notification(text: &str) -> String {
+        format!("{{\"jsonrpc\":\"2.0\",\"method\":\"x\",\"params\":{{\"text\":\"{text}\"}}}}")
+    }
+
+    #[test]
+    fn an_adapter_not_reading_holds_nobody_up_and_gets_every_message_in_order() {
+        let (reader, writer) = std::io::pipe().unwrap();
+        let mut adapter = Adapter::over(None, std::io::empty(), Box::new(writer));
+        let (done, sent) = channel();
+        std::thread::spawn(move || {
+            for seq in 0..3 {
+                adapter.send(large(seq));
+            }
+            let _ = done.send(adapter);
+        });
+        let adapter = sent
+            .recv_timeout(Duration::from_secs(2))
+            .expect("sending waited for the adapter to read");
+        assert!(adapter.alive);
+        let mut reader = std::io::BufReader::new(reader);
+        for seq in 0..3 {
+            assert_eq!(read_frame(&mut reader), Some(large(seq)));
+        }
+    }
+
+    #[test]
+    fn an_adapter_that_stops_reading_is_reported_gone() {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let mut adapter = Adapter::over(None, std::io::empty(), Box::new(writer));
+        for _ in 0..200 {
+            adapter.send("{}".to_string());
+            if !adapter.alive {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("a closed connection was never reported");
+    }
+
+    #[test]
+    fn a_server_not_reading_holds_nobody_up() {
+        let mut server =
+            Server::spawn("sleep", &["30".to_string()], &std::env::temp_dir(), None).unwrap();
+        let json = notification(&"x".repeat(1 << 20));
+        let (done, sent) = channel();
+        std::thread::spawn(move || {
+            server.send(json);
+            let _ = done.send(server);
+        });
+        let server = sent
+            .recv_timeout(Duration::from_secs(2))
+            .expect("sending waited for the server to read");
+        assert!(server.alive);
+    }
+
+    #[test]
+    fn a_server_sent_what_the_protocol_cannot_carry_is_reported_gone() {
+        let mut server =
+            Server::spawn("sleep", &["30".to_string()], &std::env::temp_dir(), None).unwrap();
+        for _ in 0..200 {
+            server.send("not a message".to_string());
+            if !server.alive {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("a writer that stopped was never reported");
+    }
+
+    /// `cat` says back what it is told, so what the reader thread hands over
+    /// is what reached the server, in the order it got there.
+    #[test]
+    fn a_server_gets_every_message_in_the_order_it_was_sent() {
+        let mut server = Server::spawn("cat", &[], &std::env::temp_dir(), None).unwrap();
+        for text in ["one", "two", "three"] {
+            server.send(notification(text));
+        }
+        let mut arrived = Vec::new();
+        for _ in 0..200 {
+            arrived.extend(server.drain());
+            if arrived.len() == 3 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let texts: Vec<serde_json::Value> = arrived
+            .iter()
+            .map(|json| {
+                serde_json::from_str::<serde_json::Value>(json).unwrap()["params"]["text"].clone()
+            })
+            .collect();
+        assert_eq!(texts, ["one", "two", "three"]);
     }
 }
