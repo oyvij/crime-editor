@@ -400,7 +400,7 @@ impl VardeWorld {
 
     fn recompute_file_hunks(&mut self) {
         let repo = self.state.repo_root().to_path_buf();
-        self.state.file_hunks = self.read_files(&repo, &[]);
+        self.state.file_hunks = self.read_files(&repo, &[]).into();
     }
 
     /// Marks a path `Modified` in `state.repo` if it isn't listed already —

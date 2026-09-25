@@ -733,6 +733,32 @@ struct Edge {
     /// the first poll (#83).
     blaming: BTreeSet<PathBuf>,
     blamed: Sender<(PathBuf, String, Vec<authorship::Authored>)>,
+    /// The git poll that is out, if one is. Diffing the working tree is tens of
+    /// milliseconds on a branch with large uncommitted files, so the poll runs
+    /// on a thread (#98), and one that falls due while the last is still out
+    /// waits for it rather than queueing behind it (ADR 0023). A handle rather
+    /// than a flag: a poll that panicked sends nothing, and a flag would wait
+    /// for it forever and never read git again.
+    polling: Option<std::thread::JoinHandle<()>>,
+    polled: Sender<Polled>,
+    /// The buffers the last poll was asked about, so a buffer opened since is
+    /// asked now rather than in two seconds. What was *asked* rather than what
+    /// came back: outside a repository the answer names no buffer at all, and
+    /// keying on it asked again on every pump.
+    asked: BTreeSet<PathBuf>,
+}
+
+/// A git poll's answer, read on the poll's thread. Everything but `workdir` is
+/// told to the core as it came; `workdir` is what [`authorship`] needs to start
+/// a walk without opening the repository on the main loop.
+struct Polled {
+    repo: Option<Vec<GitFile>>,
+    file_hunks: Arc<[story::FileHunks]>,
+    ignored: BTreeSet<PathBuf>,
+    branch: Option<String>,
+    committed: BTreeMap<PathBuf, Option<String>>,
+    head: Option<String>,
+    workdir: Option<PathBuf>,
 }
 
 /// A Reading as audio, and everything a position report needs about it. The
@@ -824,6 +850,7 @@ fn run(
     let (replaced_tx, replaced_rx) = channel();
     let (highlit_tx, highlit_rx) = channel();
     let (blamed_tx, blamed_rx) = channel();
+    let (polled_tx, polled_rx) = channel();
     let mut edge = Edge {
         output: None,
         shells: vec![pty::Pane::spawn(
@@ -870,6 +897,9 @@ fn run(
         authored: BTreeMap::new(),
         blaming: BTreeSet::new(),
         blamed: blamed_tx,
+        polling: None,
+        polled: polled_tx,
+        asked: BTreeSet::new(),
         area: ratatui::layout::Rect::new(0, 0, size.width, size.height),
         analysed: analysed_tx,
         tested: tested_tx,
@@ -898,7 +928,8 @@ fn run(
         state.repo_root(),
         story::inventory(&state.story_set),
         &story::named_files(&state.story_set),
-    );
+    )
+    .into();
     let mut queue: VecDeque<Event> = VecDeque::new();
     // Creating `.varde`, and asking for the figures nobody had to request.
     // Both wait for the edge to exist rather than running before the TUI opens:
@@ -961,8 +992,15 @@ fn run(
         reap_player(&mut edge, &mut queue);
         queue_position(&edge, &mut last_position, &mut queue);
         tell_core(&mut state, &mut edge);
-        dirty |= refresh_ignored(&root, &mut state, &mut last_shape);
-        dirty |= refresh_git(&root, &mut state, &mut edge, &blamed_rx, &mut last_git);
+        dirty |= refresh_git(
+            &root,
+            &mut state,
+            &mut edge,
+            &blamed_rx,
+            &polled_rx,
+            &mut last_git,
+            &mut last_shape,
+        );
         set_cursor_style(&state, &mut edge);
         dirty |= cache_highlight(&state, &mut edge, &highlit_rx);
         cache_preview(&state, &mut edge);
@@ -1494,52 +1532,87 @@ fn adapter_is_gone(edge: &mut Edge, queue: &mut VecDeque<Event>, why: varde::deb
     queue.push_back(Event::DapGone { why, from: 0 });
 }
 
-/// Asking git which paths are ignored costs milliseconds, so it is asked when
-/// the tree changed shape — a folder listed, a file that appeared or went, each
-/// moves one of these two numbers — and not per frame. A .gitignore edited
-/// under a tree that kept its shape is picked up by [`refresh_git`] instead.
-fn refresh_ignored(root: &Path, state: &mut State, last_shape: &mut (usize, usize)) -> bool {
-    let shape = (
-        state.contents.len(),
-        state.contents.values().map(Vec::len).sum::<usize>(),
-    );
-    if shape == *last_shape {
-        return false;
-    }
-    *last_shape = shape;
-    let fresh = ignored(root, &state.contents);
-    let dirty = fresh != state.ignored;
-    state.ignored = fresh;
-    dirty
-}
-
+/// Tells the core what the last git poll found, and asks the next one. Nothing
+/// here opens the repository: the poll reads a snapshot on its own thread and
+/// answers down `polled`, and a finished poll redraws only when its answer
+/// differs, so idle CPU stays at 0% (ADR 0023).
+///
+/// An answer read before the buffers or the Story moved is applied as it is and
+/// corrected by the next poll, never merged with a fresher one: at most one poll
+/// is out, so answers arrive in the order they were asked and none can land on
+/// top of a newer one.
 fn refresh_git(
     root: &Path,
     state: &mut State,
     edge: &mut Edge,
     blamed: &Receiver<(PathBuf, String, Vec<authorship::Authored>)>,
+    polled: &Receiver<Polled>,
     last_git: &mut Instant,
+    last_shape: &mut (usize, usize),
 ) -> bool {
-    // A buffer opened since the last poll is not made to wait two seconds for
-    // its change marks: a file nobody has asked the commit about yet is asked
-    // now. `None` counts as asked, so an untracked file does not ask per pump.
-    let unasked = state
-        .buffers
-        .keys()
-        .any(|path| !state.committed.contains_key(path));
     // An Authorship that has arrived is a poll now rather than up to two
-    // seconds from now, for the same reason.
-    let mut arrived = false;
+    // seconds from now, so its border does not wait on the cadence.
+    let mut due = false;
     while let Ok((path, at, lines)) = blamed.try_recv() {
         edge.blaming.remove(&path);
         edge.authored.insert(path, (at, lines.into()));
-        arrived = true;
+        due = true;
     }
-    if !unasked && !arrived && last_git.elapsed() <= Duration::from_secs(2) {
-        return false;
+    let mut dirty = false;
+    // Asked before the channel is read: the poll sends before it ends, so one
+    // that has ended with nothing waiting died without answering.
+    let ended = edge.polling.as_ref().is_some_and(|poll| poll.is_finished());
+    if let Ok(answer) = polled.try_recv() {
+        edge.polling = None;
+        let fresh_authorship = authorship(
+            answer.workdir.as_deref(),
+            state.buffers.keys(),
+            answer.head.as_deref(),
+            &mut edge.authored,
+            &mut edge.blaming,
+            &edge.blamed,
+        );
+        dirty = answer.repo != state.repo
+            || !Arc::ptr_eq(&answer.file_hunks, &state.file_hunks)
+            || answer.ignored != state.ignored
+            || answer.branch != state.branch
+            || answer.committed != state.committed
+            || fresh_authorship != state.authorship;
+        state.repo = answer.repo;
+        state.file_hunks = answer.file_hunks;
+        state.ignored = answer.ignored;
+        state.committed = answer.committed;
+        state.authorship = fresh_authorship;
+        // A commit that moved is what makes the figure worth recomputing, so the
+        // core is told on the same poll rather than remembering the commit it
+        // started at. The workspace's commit, not the repository under review's:
+        // `head` is Review view's base and the Risk delta's revision, and both of
+        // those are about the folder on screen.
+        state.head = answer.head;
+        // Which branch that commit is on, told on the same poll and for the same
+        // reason: only the edge can read it, and a `git switch` in the terminal
+        // pane is a branch change Varde did not make.
+        state.branch = answer.branch;
+    } else if ended {
+        edge.polling = None;
+    }
+    // A buffer opened since the last poll is not made to wait two seconds for
+    // its change marks, nor a folder just listed for its ignored rows to dim —
+    // listing one, or a file appearing or going, moves one of these two numbers.
+    // A .gitignore edited under a tree that kept its shape waits for the cadence.
+    let shape = (
+        state.contents.len(),
+        state.contents.values().map(Vec::len).sum::<usize>(),
+    );
+    due |= shape != *last_shape
+        || state.buffers.keys().any(|path| !edge.asked.contains(path))
+        || last_git.elapsed() > Duration::from_secs(2);
+    if !due || edge.polling.is_some() {
+        return dirty;
     }
     *last_git = Instant::now();
-    let fresh = git_status(root);
+    *last_shape = shape;
+    edge.asked = state.buffers.keys().cloned().collect();
     // The repository under review, which is the Guest repo when there is one:
     // a Step's staleness is judged against what its Site's lines hold in the
     // repository the Story describes, and which branch is checked out there is
@@ -1547,48 +1620,39 @@ fn refresh_git(
     // workspace's — the tree's marks and what it hides are about the folder
     // Varde was opened on, not about a clone that is not in it.
     let repo = state.repo_root().to_path_buf();
-    let fresh_hunks = file_hunks(
-        &repo,
-        story::inventory(&state.story_set),
-        &story::named_files(&state.story_set),
+    let range = match story::inventory(&state.story_set) {
+        story::Inventory::Committed { base, head } => Some((base.to_string(), head.to_string())),
+        story::Inventory::Worktree => None,
+    };
+    let named = story::named_files(&state.story_set);
+    let (root, contents, buffers, told) = (
+        root.to_path_buf(),
+        state.contents.clone(),
+        edge.asked.clone(),
+        state.file_hunks.clone(),
     );
-    let fresh_ignored = ignored(root, &state.contents);
-    let fresh_branch = head_branch(&repo);
-    let fresh_committed = committed(root, state.buffers.keys());
-    // Read before the assignment below, because this poll's Authorship is keyed
-    // on the commit this poll found: keying it on the one the last poll left
-    // would hand back the previous commit's authors for a whole poll after a
-    // commit.
-    let head = head_commit(root);
-    let fresh_authorship = authorship(
-        root,
-        state.buffers.keys(),
-        head.as_deref(),
-        &mut edge.authored,
-        &mut edge.blaming,
-        &edge.blamed,
-    );
-    let dirty = fresh != state.repo
-        || fresh_hunks != state.file_hunks
-        || fresh_ignored != state.ignored
-        || fresh_branch != state.branch
-        || fresh_committed != state.committed
-        || fresh_authorship != state.authorship;
-    state.repo = fresh;
-    state.file_hunks = fresh_hunks;
-    state.ignored = fresh_ignored;
-    state.committed = fresh_committed;
-    state.authorship = fresh_authorship;
-    // A commit that moved is what makes the figure worth recomputing, so the
-    // core is told on the same poll rather than remembering the commit it
-    // started at. The workspace's commit, not the repository under review's:
-    // `head` is Review view's base and the Risk delta's revision, and both of
-    // those are about the folder on screen.
-    state.head = head;
-    // Which branch that commit is on, told on the same poll and for the same
-    // reason: only the edge can read it, and a `git switch` in the terminal
-    // pane is a branch change Varde did not make.
-    state.branch = head_branch(&repo);
+    let answer = edge.polled.clone();
+    edge.polling = Some(std::thread::spawn(move || {
+        let inventory = match &range {
+            Some((base, head)) => story::Inventory::Committed { base, head },
+            None => story::Inventory::Worktree,
+        };
+        // The hunks carry whole files' text, megabytes on a large change, so
+        // they are compared here and an unchanged read hands back the very
+        // `Arc` the core holds: the loop tells the two apart by pointer.
+        let fresh = file_hunks(&repo, inventory, &named);
+        let _ = answer.send(Polled {
+            repo: git_status(&root),
+            file_hunks: if *fresh == *told { told } else { fresh.into() },
+            ignored: ignored(&root, &contents),
+            branch: head_branch(&repo),
+            committed: committed(&root, buffers.iter()),
+            head: head_commit(&root),
+            workdir: git2::Repository::discover(&root)
+                .ok()
+                .and_then(|repository| repository.workdir().map(Path::to_path_buf)),
+        });
+    }));
     dirty
 }
 
@@ -1632,7 +1696,7 @@ fn committed<'a>(
 /// loop and answers into [`refresh_git`]; a file whose walk is out reads as
 /// nobody's until it lands.
 fn authorship<'a>(
-    root: &Path,
+    workdir: Option<&Path>,
     buffers: impl Iterator<Item = &'a PathBuf>,
     head: Option<&str>,
     cached: &mut BTreeMap<PathBuf, (String, Arc<[authorship::Authored]>)>,
@@ -1644,22 +1708,19 @@ fn authorship<'a>(
     let Some(head) = head else {
         return BTreeMap::new();
     };
-    let Ok(repository) = git2::Repository::discover(root) else {
-        return BTreeMap::new();
-    };
-    let Some(workdir) = repository.workdir().map(Path::to_path_buf) else {
+    let Some(workdir) = workdir else {
         return BTreeMap::new();
     };
     for path in open {
         if cached.contains_key(path) || blaming.contains(path) {
             continue;
         }
-        let Ok(relative) = path.strip_prefix(&workdir) else {
+        let Ok(relative) = path.strip_prefix(workdir) else {
             continue;
         };
         blaming.insert(path.clone());
         let (relative, path, head) = (relative.to_path_buf(), path.clone(), head.to_string());
-        let (workdir, answer) = (workdir.clone(), blamed.clone());
+        let (workdir, answer) = (workdir.to_path_buf(), blamed.clone());
         std::thread::spawn(move || {
             let lines = git2::Repository::open(&workdir)
                 .map(|repository| authored_lines(&repository, &relative))
@@ -5250,7 +5311,7 @@ mod tests {
         // and one that comes before the answer does not ask again.
         for _ in 0..2 {
             let asked = authorship(
-                &root,
+                Some(&root),
                 buffers.iter(),
                 Some("head"),
                 &mut cached,
@@ -5262,7 +5323,7 @@ mod tests {
         }
         land(&mut cached, &mut blaming);
         let found = authorship(
-            &root,
+            Some(&root),
             buffers.iter(),
             Some("head"),
             &mut cached,
@@ -5284,7 +5345,7 @@ mod tests {
             ("head".to_string(), vec![poison.clone()].into()),
         );
         let again = authorship(
-            &root,
+            Some(&root),
             buffers.iter(),
             Some("head"),
             &mut cached,
@@ -5298,7 +5359,7 @@ mod tests {
         assert_eq!(blaming, BTreeSet::new(), "walked twice");
 
         let moved = authorship(
-            &root,
+            Some(&root),
             buffers.iter(),
             Some("another"),
             &mut cached,
@@ -5308,7 +5369,7 @@ mod tests {
         assert_eq!(moved, BTreeMap::new());
         land(&mut cached, &mut blaming);
         let moved = authorship(
-            &root,
+            Some(&root),
             buffers.iter(),
             Some("another"),
             &mut cached,
@@ -5320,12 +5381,12 @@ mod tests {
             Some(&[ada.clone(), ada][..])
         );
 
-        // Nothing at all outside a repository, which is what makes the border
-        // silent there rather than reporting an absence on every file.
-        let bare = tempfile::tempdir().expect("a temp directory");
+        // Nothing at all outside a repository, which the poll answers as no
+        // working directory, and which is what makes the border silent there
+        // rather than reporting an absence on every file.
         assert_eq!(
             authorship(
-                bare.path(),
+                None,
                 buffers.iter(),
                 Some("head"),
                 &mut cached,
