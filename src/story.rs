@@ -2088,37 +2088,38 @@ pub enum Row<'a> {
 /// dispatches the story surface on: everything deriving a row from a line
 /// (the caret, the scroll clamp, the mouse hit-test) asks this for every
 /// buffer, so a surface drawn without comment rows must answer without them.
-pub fn rows(state: &State, lines: usize) -> Vec<Row<'_>> {
+pub fn rows(state: &State, lines: usize) -> impl Iterator<Item = Row<'_>> {
     // A folded block's body is not drawn, so it is not a row — asked here
     // rather than by each of this map's readers, for the reason the comment
     // rows are interleaved here: a second count of which lines are on screen
     // is one of them landing a row off.
     let hidden = crate::fold::hidden(state);
     let shown = (1..=lines as u32).filter(move |number| !hidden.contains(&(*number as usize)));
-    let file = match state.walking {
-        Some(_) => shown_file(state),
-        None => return shown.map(Row::Code).collect(),
-    };
+    let file = state.walking.as_ref().map(|_| shown_file(state));
     // Under the comments: a comment is about the line above it, and a removed
     // line is about the gap before the next one.
     let removed = site_diff(state).map_or_else(Vec::new, |diff| diff.removed);
-    let removed_under = |line: u32| {
+    let removed_under = move |line: u32| -> Vec<Row<'_>> {
         removed
             .iter()
-            .filter(move |(under, _)| *under == line)
+            .filter(|(under, _)| *under == line)
             .map(|(_, text)| Row::Removed(text.clone()))
+            .collect()
     };
+    // Lazily, line by line: the editor reads from its scroll offset to the
+    // foot of the pane, and a row laid out for every line of a big file on
+    // every frame was a frame spent on rows nobody draws (#104).
     removed_under(0)
-        .chain(shown.flat_map(|number| {
+        .into_iter()
+        .chain(shown.flat_map(move |number| {
+            let comments = file
+                .as_deref()
+                .map(|file| crate::review::comments_at(state, file, number))
+                .unwrap_or_default();
             std::iter::once(Row::Code(number))
-                .chain(
-                    crate::review::comments_at(state, &file, number)
-                        .into_iter()
-                        .map(Row::Comment),
-                )
+                .chain(comments.into_iter().map(Row::Comment))
                 .chain(removed_under(number))
         }))
-        .collect()
 }
 
 /// What the Range changed inside a Site: the new-side lines it added, and the
@@ -2267,7 +2268,7 @@ pub fn row_of(state: &State, line: u32) -> usize {
     // Every row above this line, comment rows counted and folded-away lines
     // not. A line inside a fold answers the row its opening line is drawn on,
     // which is where the reader can see it: there is no row of its own to name.
-    let above = rows(state, line.saturating_sub(1) as usize).len();
+    let above = rows(state, line.saturating_sub(1) as usize).count();
     match hidden.contains(&(line as usize)) {
         true => above.max(1),
         false => above + 1,
@@ -2292,9 +2293,9 @@ pub fn line_at_row(state: &State, row: usize) -> usize {
     // a row past the last one answers the last line there is, which is the
     // click landing on the bottom of what is on screen.
     let lines = crate::current_buffer(state).map_or(0, |buffer| buffer.shown().split('\n').count());
-    for (index, entry) in rows(state, lines.max(row)).iter().enumerate() {
+    for (index, entry) in rows(state, lines.max(row)).enumerate() {
         if let Row::Code(number) = entry {
-            line = *number as usize;
+            line = number as usize;
         }
         if index + 1 == row {
             break;
@@ -2307,6 +2308,16 @@ pub fn line_at_row(state: &State, row: usize) -> usize {
 mod tests {
 
     use super::*;
+
+    /// #104: the editor asks for the rows from its scroll offset to the foot
+    /// of the pane, so the rows are worked out as they are read and no
+    /// further — a file too long to ever lay out whole still answers its
+    /// first rows, and a big one costs a frame its window and not its length.
+    #[test]
+    fn rows_are_worked_out_only_as_far_as_they_are_read() {
+        let state = State::default();
+        assert_eq!(rows(&state, u32::MAX as usize).nth(2), Some(Row::Code(3)));
+    }
 
     /// The picker's whole ordering and dedup contract. A repository states its
     /// branches as refs; what a reviewer wants is a list of *branches*, newest
@@ -4232,7 +4243,7 @@ from b
             "src/keys.rs",
             vec![commented_on("src/keys.rs", 2, "the catch-all")],
         );
-        let rows = rows(&state, 3);
+        let rows: Vec<_> = rows(&state, 3).collect();
         assert_eq!(rows[0], Row::Code(1));
         assert_eq!(rows[1], Row::Code(2));
         assert!(matches!(rows[2], Row::Comment(comment) if comment.body == "the catch-all"));
@@ -4247,7 +4258,6 @@ from b
         let state = showing("src/keys.rs", vec![commented_on("src/keys.rs", 1, "first")]);
         assert_eq!(
             rows(&state, 3)
-                .into_iter()
                 .filter_map(|row| match row {
                     Row::Code(number) => Some(number),
                     Row::Comment(_) | Row::Removed(_) => None,
@@ -4265,7 +4275,10 @@ from b
             "src/keys.rs",
             vec![commented_on("src/mouse.rs", 2, "elsewhere")],
         );
-        assert_eq!(rows(&state, 2), vec![Row::Code(1), Row::Code(2)]);
+        assert_eq!(
+            rows(&state, 2).collect::<Vec<_>>(),
+            vec![Row::Code(1), Row::Code(2)]
+        );
     }
 
     #[test]
@@ -4277,7 +4290,7 @@ from b
                 commented_on("src/keys.rs", 2, "second"),
             ],
         );
-        assert_eq!(rows(&state, 2).len(), 4);
+        assert_eq!(rows(&state, 2).count(), 4);
     }
 
     /// The lookup anchors to the workspace-relative name the Site is authored
@@ -4289,7 +4302,10 @@ from b
     fn a_file_being_edited_rather_than_walked_gets_no_comment_rows() {
         let mut state = showing("src/keys.rs", vec![commented_on("src/keys.rs", 1, "first")]);
         state.walking = None;
-        assert_eq!(rows(&state, 2), vec![Row::Code(1), Row::Code(2)]);
+        assert_eq!(
+            rows(&state, 2).collect::<Vec<_>>(),
+            vec![Row::Code(1), Row::Code(2)]
+        );
         assert_eq!(row_of(&state, 2), 2);
         assert_eq!(line_at_row(&state, 2), 2);
     }
@@ -4449,7 +4465,7 @@ from b
     fn a_removed_row_sits_under_the_line_before_it_and_pushes_the_rest_down() {
         let state = diff_shown("a\nB\nc\nd\ne\nf\n", Side::New, 1, 3);
         assert_eq!(
-            rows(&state, 3),
+            rows(&state, 3).collect::<Vec<_>>(),
             vec![
                 Row::Code(1),
                 Row::Removed("b".to_string()),

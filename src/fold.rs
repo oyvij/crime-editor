@@ -13,7 +13,7 @@
 use crate::editor::Buffer;
 use crate::{Place, State};
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::{Bound, RangeBounds};
+use std::ops::RangeBounds;
 
 /// A foldable block: the line that opens it and the last line it covers, both
 /// 1-based. The opening line stays on screen while the block is folded — it is
@@ -44,30 +44,32 @@ pub enum Toggle {
 /// line nobody thinks of as part of this one.
 pub fn blocks(source: &str) -> Vec<Block> {
     let indents: Vec<Option<usize>> = source.split('\n').map(indent).collect();
-    let mut blocks = Vec::new();
-    for (index, indent) in indents.iter().enumerate() {
-        let Some(indent) = indent else { continue };
-        let mut last = None;
-        for (below, under) in indents.iter().enumerate().skip(index + 1) {
-            match under {
-                None => continue,
-                Some(deeper) if deeper > indent => last = Some(below + 1),
-                Some(_) => break,
-            }
-        }
-        if let Some(to) = last {
-            blocks.push(Block {
-                from: index + 1,
-                to,
-            });
+    (0..indents.len())
+        .filter_map(|index| block_at(&indents, index))
+        .collect()
+}
+
+/// The block the line at `index` opens, 0-based, out of every line's
+/// [`indent`] — or nothing, for a line that opens none.
+fn block_at(indents: &[Option<usize>], index: usize) -> Option<Block> {
+    let indent = (*indents.get(index)?)?;
+    let mut last = None;
+    for (below, under) in indents.iter().enumerate().skip(index + 1) {
+        match under {
+            None => continue,
+            Some(deeper) if *deeper > indent => last = Some(below + 1),
+            Some(_) => break,
         }
     }
-    blocks
+    last.map(|to| Block {
+        from: index + 1,
+        to,
+    })
 }
 
 /// A line's indentation in characters, or nothing for a line with nothing on
 /// it: a blank line opens no block and ends none.
-fn indent(line: &str) -> Option<usize> {
+pub(crate) fn indent(line: &str) -> Option<usize> {
     (!line.trim().is_empty()).then(|| line.chars().take_while(|c| c.is_whitespace()).count())
 }
 
@@ -117,9 +119,13 @@ pub fn hidden(state: &State) -> BTreeSet<usize> {
     let Some(buffer) = folding(state).filter(|buffer| !buffer.folded.is_empty()) else {
         return BTreeSet::new();
     };
-    blocks(buffer.shown())
+    // Only the folded blocks, off the depths the revision already worked out:
+    // this is asked for on every frame, and laying out every block in the
+    // file to find the few folded was a big file's frame (#104).
+    buffer
+        .folded
         .iter()
-        .filter(|block| buffer.folded.contains(&block.from))
+        .filter_map(|from| block_at(buffer.indents(), from.checked_sub(1)?))
         .flat_map(|block| block.from + 1..=block.to)
         .collect()
 }
@@ -128,34 +134,34 @@ pub fn hidden(state: &State) -> BTreeSet<usize> {
 /// line. A line that opens nothing carries none: an affordance on every line is
 /// an affordance nobody reads.
 ///
-/// Read off the lines themselves rather than off [`blocks`]: a line opens a
+/// Read off each line's depth rather than off [`blocks`]: a line opens a
 /// block exactly when the first line under it with anything on it is indented
 /// deeper, so the editor's window is answered without laying out every block
 /// in the file on every frame (#101).
 pub fn toggles(state: &State, lines: impl RangeBounds<usize>) -> BTreeMap<usize, Toggle> {
-    let mut toggles = BTreeMap::new();
     let Some(buffer) = folding(state) else {
-        return toggles;
+        return BTreeMap::new();
     };
-    let from = (lines.start_bound().cloned(), Bound::Unbounded);
-    let mut opening: Option<(usize, usize)> = None;
-    for (number, line) in crate::lines_within(buffer.shown(), from) {
-        let Some(depth) = indent(line) else {
-            continue;
-        };
-        if let Some((opener, _)) = opening.take().filter(|(_, above)| depth > *above) {
-            let toggle = match buffer.folded.contains(&opener) {
+    let indents = buffer.indents();
+    buffer
+        .lines_within(lines)
+        .filter(|(number, _)| {
+            indents[number - 1].is_some_and(|depth| {
+                indents[*number..]
+                    .iter()
+                    .flatten()
+                    .next()
+                    .is_some_and(|below| *below > depth)
+            })
+        })
+        .map(|(number, _)| {
+            let toggle = match buffer.folded.contains(&number) {
                 true => Toggle::Folded,
                 false => Toggle::Open,
             };
-            toggles.insert(opener, toggle);
-        }
-        if !lines.contains(&number) {
-            break;
-        }
-        opening = Some((number, depth));
-    }
-    toggles
+            (number, toggle)
+        })
+        .collect()
 }
 
 /// The buffer whose folds are showing, or nothing.

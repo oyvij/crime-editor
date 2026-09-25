@@ -120,7 +120,17 @@ fn plain_line(line: &str) -> Vec<Token> {
 /// Owned, and cut rather than copied: it runs on the main loop once per edit,
 /// and a copy of every token of a big file would be the cost being moved off
 /// it.
-pub fn carried(mut tokens: Vec<Vec<Token>>, source: &str) -> Vec<Vec<Token>> {
+///
+/// The lines the parse's Run marks stand on are carried with the colours, for
+/// the same reason: a mark on a line the edit left alone moves with that line,
+/// so an edit that added a line above it does not leave it on the line before
+/// (#104), and one on a line the edit touched waits for the parse. Found again
+/// on the loop instead, they would be a syntax tree of the whole file per key.
+pub fn carried(
+    mut tokens: Vec<Vec<Token>>,
+    marks: Vec<usize>,
+    source: &str,
+) -> (Vec<Vec<Token>>, Vec<usize>) {
     let lines: Vec<&str> = source.split('\n').collect();
     let holds = |tokens: &[Token], line: &str| {
         let mut rest = line;
@@ -143,13 +153,21 @@ pub fn carried(mut tokens: Vec<Vec<Token>>, source: &str) -> Vec<Vec<Token>> {
         .take_while(|&back| holds(&tokens[tokens.len() - back], lines[lines.len() - back]))
         .count();
     let end = tokens.len() - below;
+    let marks = marks
+        .into_iter()
+        .filter_map(|line| match line {
+            line if line <= above => Some(line),
+            line if line > end => Some(line - end + lines.len() - below),
+            _ => None,
+        })
+        .collect();
     tokens.splice(
         above..end,
         lines[above..lines.len() - below]
             .iter()
             .map(|line| plain_line(line)),
     );
-    tokens
+    (tokens, marks)
 }
 
 /// Adjacent text of the same kind is one token, so a quoted string arrives
@@ -254,13 +272,29 @@ mod tests {
     #[test]
     fn an_edit_keeps_the_colours_of_every_line_it_left_alone() {
         let before = highlight("main.rs", "fn a() {}\nlet x = 1;\nfn b() {}");
-        let after = carried(
+        let (after, _) = carried(
             before.clone(),
+            Vec::new(),
             "fn a() {}\nlet x = 12;\nlet y = 2;\nfn b() {}",
         );
         assert_eq!(after[0], before[0]);
         assert_eq!(after[1..3], plain("let x = 12;\nlet y = 2;")[..]);
         assert_eq!(after[3], before[2]);
+    }
+
+    /// #104: a Run mark comes from the same parse, so it is carried with the
+    /// colours — on the line it stood on, wherever an edit above moved that
+    /// line, and gone from a line the edit touched until the parse lands.
+    #[test]
+    fn a_run_mark_moves_with_the_line_it_stands_on() {
+        let before = "fn a() {}\nlet x = 1;\nfn b() {}";
+        let marks = |after| carried(highlight("main.rs", before), vec![1, 2, 3], after).1;
+        assert_eq!(
+            marks("fn a() {}\nlet x = 12;\nlet y = 2;\nfn b() {}"),
+            [1, 4]
+        );
+        assert_eq!(marks("fn b() {}"), [1]);
+        assert_eq!(marks(before), [1, 2, 3]);
     }
 
     /// Whatever was carried, the text drawn is the text now: tokens carry the
@@ -289,7 +323,7 @@ mod tests {
             ("x", "x"),
         ] {
             assert_eq!(
-                text(&carried(highlight("main.rs", before), after)),
+                text(&carried(highlight("main.rs", before), Vec::new(), after).0),
                 after,
                 "{before:?} to {after:?}"
             );

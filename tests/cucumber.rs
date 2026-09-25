@@ -650,15 +650,13 @@ impl VardeWorld {
         self.state.player_installed = self.player_on_path;
         // A blank voice names no file, so none is on disk.
         self.state.voice_installed = self.voice_on_disk && !self.state.speech.voice.is_empty();
-        // What `tell_traced` tells the core once its thread has answered. The
-        // world has no thread to wait on, so the answer is always the current
-        // revision's.
+        // What `tell_traced` tells the core before every frame: the trace of
+        // the current revision.
         if let Some(path) = self.state.current_buffer.clone() {
             let committed = self.state.committed.get(&path).and_then(Option::as_deref);
-            let shown = self.state.buffers.get(&path).map(|buffer| buffer.shown());
-            if let Some(shown) = shown {
-                let lines = varde::authorship::traced(committed, shown);
-                self.state.traced = Some((path, lines.into()));
+            if let Some(buffer) = self.state.buffers.get(&path) {
+                let lines = varde::authorship::traced(committed, buffer.shown());
+                self.state.traced = Some((path, buffer.revision(), lines.into()));
             }
         }
     }
@@ -3485,7 +3483,7 @@ fn code_shows_comment_on_line(world: &mut VardeWorld, line: u32, file: String) {
         file,
         "Story view is showing another file"
     );
-    let rows = story::rows(&world.state, line as usize + 1);
+    let rows: Vec<_> = story::rows(&world.state, line as usize + 1).collect();
     let under = rows
         .iter()
         .position(|row| *row == story::Row::Code(line))

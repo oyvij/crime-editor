@@ -257,9 +257,12 @@ its modes — comes back in as an `Event` or is answered as data the library dec
   (`highlight::carried`), because a re-parse of a big file on the loop held a keystroke (#101).
 - **Draw only the rows on screen.** The editor settles which lines it shows (the scroll offset, the
   pane's height and the folds, through `story::rows`) before building anything, then builds and
-  marks only those. An analysis that needs the whole file is worked out off the loop once per
-  revision and told, the way `State::traced` is, never once per frame. Built whole and scrolled, a
-  frame of a 600 KB file cost 90 ms (#101).
+  marks only those. An analysis that needs the whole file is worked out once per revision, never
+  once per frame: the buffer's `Shape` (line starts, depths, bracket pairs) with the edit itself,
+  and the Change-bar trace (`State::traced`) by the edge before the frame that draws it, keyed by
+  the revision so a trace of the text before an edit is never read. Only a parse — syntect, or the
+  tree-sitter behind the Run marks — runs off the loop, and it is carried onto the new text until it
+  lands. Built whole and scrolled, a frame of a 600 KB file cost 90 ms (#101).
 - **Never type at a pty the instant you spawn it.** A CLI that has not printed its prompt yet drops
   what you send, so the edge reports when the child is ready (`Event::AiSpoke`) and the core holds
   what is queued until then. Ready is not its first byte: a CLI opens with cursor housekeeping and

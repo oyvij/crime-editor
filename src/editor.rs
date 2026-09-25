@@ -5,6 +5,8 @@
 //! overwritten. Editing is vim-shaped: normal mode moves and deletes, insert
 //! mode types.
 
+use std::ops::{Bound, RangeBounds};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
     #[default]
@@ -75,6 +77,9 @@ pub struct Buffer {
     /// Bumped on every content change, so a cached parse can be invalidated
     /// without comparing the text.
     revision: u64,
+    /// What the editor reads off the whole text, worked out with each
+    /// revision. Shared, since `update` clones the buffer with every event.
+    shape: std::sync::Arc<Shape>,
     /// Digits typed so far, so `3j` moves three lines.
     count: Option<usize>,
     /// Where a linewise visual selection started.
@@ -303,6 +308,7 @@ impl Buffer {
             // version of zero is a document a server may treat as one it has
             // already seen.
             revision: 1,
+            shape: std::sync::Arc::new(Shape::of(contents, tab_width)),
             count: None,
             anchor: 0,
             register: Vec::new(),
@@ -330,7 +336,7 @@ impl Buffer {
     pub fn follow(&mut self, contents: String) {
         self.disk = contents;
         self.changed_on_disk = self.draft.is_some();
-        self.revision += 1;
+        self.changed();
         self.clamp();
     }
 
@@ -339,7 +345,7 @@ impl Buffer {
     pub fn reload(&mut self) {
         self.draft = None;
         self.changed_on_disk = false;
-        self.revision += 1;
+        self.changed();
         self.clamp();
     }
 
@@ -351,11 +357,53 @@ impl Buffer {
     /// trustworthy.
     fn set(&mut self, lines: &[String]) {
         self.draft = Some(lines.join("\n"));
+        self.changed();
+    }
+
+    /// The text is not what it was: a new revision, and its [`Shape`].
+    fn changed(&mut self) {
         self.revision += 1;
+        self.shape = std::sync::Arc::new(Shape::of(self.shown(), self.tab_width));
     }
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Line `number` of the text, 1-based, found by where it starts rather
+    /// than by counting the lines above it.
+    pub fn line_text(&self, number: usize) -> Option<&str> {
+        let starts = &self.shape.starts;
+        let from = *starts.get(number.checked_sub(1)?)?;
+        let to = starts
+            .get(number)
+            .map_or(self.shown().len(), |next| next - 1);
+        self.shown().get(from..to)
+    }
+
+    /// The lines a range of 1-based line numbers covers, each with its number.
+    /// The editor draws a window of the file, and marking the lines it does not
+    /// draw was most of what a frame of a big file cost (#101) — so what the
+    /// renderer asks for is found in its window, and what steps through the
+    /// whole file asks for all of it.
+    pub fn lines_within(
+        &self,
+        lines: impl RangeBounds<usize>,
+    ) -> impl Iterator<Item = (usize, &str)> {
+        let first = match lines.start_bound() {
+            Bound::Included(first) => *first,
+            Bound::Excluded(first) => first + 1,
+            Bound::Unbounded => 1,
+        };
+        (first.max(1)..=self.shape.starts.len())
+            .take_while(move |number| lines.contains(number))
+            .filter_map(|number| Some((number, self.line_text(number)?)))
+    }
+
+    /// Each line's own indentation in characters, and nothing for a line with
+    /// nothing on it, worked out with the revision.
+    pub(crate) fn indents(&self) -> &[Option<usize>] {
+        &self.shape.indents
     }
 
     fn remember(&mut self) {
@@ -538,12 +586,7 @@ impl Buffer {
     /// The one line read rather than every line copied: the editor asks for
     /// this on every frame (#101).
     pub fn word_at_cursor(&self) -> Option<String> {
-        let line: Vec<char> = self
-            .shown()
-            .split('\n')
-            .nth(self.line - 1)?
-            .chars()
-            .collect();
+        let line: Vec<char> = self.line_text(self.line)?.chars().collect();
         let (from, to) = self.word_span(self.line, self.column.min(line.len()))?;
         Some(line[from - 1..to].iter().collect())
     }
@@ -552,12 +595,7 @@ impl Buffer {
     /// that place holds no word character at all. What `*` searches for and
     /// what a link underlines are the same run, so they are measured once.
     pub fn word_span(&self, line: usize, column: usize) -> Option<(usize, usize)> {
-        let text: Vec<char> = self
-            .shown()
-            .split('\n')
-            .nth(line.checked_sub(1)?)?
-            .chars()
-            .collect();
+        let text: Vec<char> = self.line_text(line)?.chars().collect();
         let word = |c: &char| c.is_alphanumeric() || *c == '_';
         let at = column.checked_sub(1)?;
         if !text.get(at).is_some_and(word) {
@@ -854,7 +892,7 @@ impl Buffer {
         let block = matches!((left, right), (Some(open), Some(close))
             if closes(open) == Some(close) && open != close);
         let deeper = if block {
-            indent_unit(&lines, self.tab_width)
+            self.shape.unit.clone()
         } else {
             String::new()
         };
@@ -1224,7 +1262,7 @@ impl Buffer {
         if from > to {
             return;
         }
-        let unit = indent_unit(&lines, self.tab_width);
+        let unit = self.shape.unit.clone();
         if unit.is_empty() {
             return;
         }
@@ -1363,7 +1401,7 @@ impl Buffer {
     pub fn undo(&mut self) {
         if let Some(previous) = self.undo.pop() {
             self.draft = (previous != self.disk).then_some(previous);
-            self.revision += 1;
+            self.changed();
         }
     }
 
@@ -1384,44 +1422,24 @@ impl Buffer {
     /// revision, and a mark one column wide is not worth threading them
     /// through — a mismatched closer is passed over rather than guessed at.
     ///
-    /// Read only as far as the answer: the editor asks on every frame, and a
-    /// big file read to its end for a pair that closed near the top was a
-    /// frame spent on nothing (#101).
+    /// Looked up in the pairs the revision found rather than read off the
+    /// text: the editor asks on every frame, and a cursor deep in a big file
+    /// was a read from the top of it down to the cursor (#101, #104).
     pub fn bracket_pair(&self) -> Option<(crate::Place, crate::Place)> {
-        let at = crate::Place {
-            line: self.line,
-            column: self.column,
-        };
-        let before = |place: &crate::Place| (place.line, place.column) <= (at.line, at.column);
-        let reaches = |place: &crate::Place| (at.line, at.column) <= (place.line, place.column);
-        let mut open: Vec<(crate::Place, char)> = Vec::new();
-        for (index, text) in self.shown().split('\n').enumerate() {
-            for (offset, character) in text.chars().enumerate() {
-                let here = crate::Place {
-                    line: index + 1,
-                    column: offset + 1,
-                };
-                // Past the cursor with nothing opened before it still open,
-                // every pair left to close opened after it and holds nothing
-                // the cursor is in: the stack is in the order it was opened.
-                if !before(&here) && open.first().is_none_or(|(from, _)| !before(from)) {
-                    return None;
-                }
-                if let Some(close) = shuts(character) {
-                    open.push((here, close));
-                    continue;
-                }
-                if open.last().is_some_and(|(_, close)| *close == character) {
-                    let (from, _) = open.pop().expect("matched above");
-                    // The first pair to close around the cursor is the
-                    // innermost one, because an inner pair shuts before the
-                    // pair holding it. Keeping the last instead would answer
-                    // the outermost pair in the file every time.
-                    if before(&from) && reaches(&here) {
-                        return Some((from, here));
-                    }
-                }
+        let at = (self.line, self.column);
+        let brackets = &self.shape.brackets;
+        // The last bracket opened at or before the cursor. Pairs nest, so the
+        // pair around the cursor is that one or one of the brackets that were
+        // open when it was.
+        let mut within = brackets
+            .partition_point(|(from, ..)| (from.line, from.column) <= at)
+            .checked_sub(1);
+        while let Some(index) = within {
+            let (from, to, held) = brackets[index];
+            if let Some(to) = to.filter(|to| at <= (to.line, to.column)) {
+                return Some((from, to));
             }
+            within = held;
         }
         None
     }
@@ -1437,9 +1455,8 @@ impl Buffer {
     /// working out every line's guides on every frame was a big file's frame
     /// spent on lines nobody sees (#101).
     pub fn guides(&self, lines: impl IntoIterator<Item = usize>) -> Vec<Vec<Guide>> {
-        let text: Vec<&str> = self.shown().split('\n').collect();
-        let unit = indent_unit(&text, self.tab_width).chars().count().max(1);
-        let indent = |index: usize| indent_at(&text, index);
+        let unit = self.shape.unit.chars().count().max(1);
+        let indent = |index: usize| indent_at(&self.shape.indents, index);
         let column = active_column(indent, unit, self.line - 1);
         let run = column.and_then(|column| block(indent, column, self.line - 1));
         lines
@@ -1590,6 +1607,57 @@ fn shuts(open: char) -> Option<char> {
     }
 }
 
+/// What the editor reads off a buffer's whole text on every frame, worked out
+/// once per revision (#104): the guides and the bracket pair are asked for with
+/// every frame, and each of them read the whole file to answer, which is what
+/// a frame of a big file cost with the cursor deep in it.
+#[derive(Debug, PartialEq, Eq)]
+struct Shape {
+    /// Where each line starts, in bytes.
+    starts: Vec<usize>,
+    /// Each line's own indentation in characters, or nothing for a blank line.
+    indents: Vec<Option<usize>>,
+    /// [`indent_unit`]'s answer.
+    unit: String,
+    /// Every bracket opened, in the order it was: where, where it closed — if
+    /// it did — and which of these was still open around it. A mismatched
+    /// closer is passed over rather than guessed at.
+    brackets: Vec<(crate::Place, Option<crate::Place>, Option<usize>)>,
+}
+
+impl Shape {
+    fn of(text: &str, tab_width: usize) -> Self {
+        let lines: Vec<&str> = text.split('\n').collect();
+        let mut starts = Vec::with_capacity(lines.len());
+        let mut brackets: Vec<(crate::Place, Option<crate::Place>, Option<usize>)> = Vec::new();
+        let mut open: Vec<(usize, char)> = Vec::new();
+        let mut start = 0;
+        for (index, line) in lines.iter().enumerate() {
+            starts.push(start);
+            start += line.len() + 1;
+            for (offset, character) in line.chars().enumerate() {
+                let here = crate::Place {
+                    line: index + 1,
+                    column: offset + 1,
+                };
+                if let Some(close) = shuts(character) {
+                    brackets.push((here, None, open.last().map(|(held, _)| *held)));
+                    open.push((brackets.len() - 1, close));
+                } else if open.last().is_some_and(|(_, close)| *close == character) {
+                    let (opened, _) = open.pop().expect("matched above");
+                    brackets[opened].1 = Some(here);
+                }
+            }
+        }
+        Shape {
+            starts,
+            indents: lines.iter().map(|line| crate::fold::indent(line)).collect(),
+            unit: indent_unit(&lines, tab_width),
+            brackets,
+        }
+    }
+}
+
 pub fn closes(open: char) -> Option<char> {
     PAIRS
         .iter()
@@ -1607,13 +1675,9 @@ pub fn closes(open: char) -> Option<char> {
 /// Shallowest rather than first, and blank lines skipped, because
 /// carrying the indentation down *leaves whitespace-only lines behind* — one
 /// abandoned above would otherwise set the unit for everything below it.
-///
-/// Sliced rather than collected: the editor asks for this on every frame, and a
-/// string per line of a big file was an allocation per line per frame.
-fn indent_unit(lines: &[impl AsRef<str>], fallback: usize) -> String {
+fn indent_unit(lines: &[&str], fallback: usize) -> String {
     lines
         .iter()
-        .map(AsRef::as_ref)
         .filter(|line| !line.trim().is_empty())
         .map(|line| &line[..line.len() - line.trim_start().len()])
         .filter(|indent| !indent.is_empty())
@@ -1663,15 +1727,11 @@ pub struct Guide {
 /// whitespace-only line has none of its own, so it takes the shallower of its
 /// neighbours' — which carries a guide unbroken through the blank line inside
 /// a block without drawing one past the end of it.
-fn indent_at(lines: &[&str], index: usize) -> Option<usize> {
-    let own = |line: &&str| {
-        (!line.trim().is_empty()).then(|| line.chars().take_while(|c| c.is_whitespace()).count())
-    };
-    let line = lines.get(index)?;
-    Some(own(line).unwrap_or_else(|| {
-        let above = lines[..index].iter().rev().find_map(own);
-        let below = lines[index + 1..].iter().find_map(own);
-        above.unwrap_or(0).min(below.unwrap_or(0))
+fn indent_at(indents: &[Option<usize>], index: usize) -> Option<usize> {
+    Some(indents.get(index)?.unwrap_or_else(|| {
+        let above = indents[..index].iter().rev().flatten().next();
+        let below = indents[index + 1..].iter().flatten().next();
+        (*above.unwrap_or(&0)).min(*below.unwrap_or(&0))
     }))
 }
 
@@ -2755,5 +2815,27 @@ mod tests {
         buffer.key('\n');
         assert_eq!(buffer.shown(), "say \"\n\"");
         assert_eq!((buffer.line, buffer.column), (2, 1));
+    }
+
+    /// #104: the guides and the bracket pair are asked for on every frame, so
+    /// what they need of the whole text — the indent unit, every line's depth,
+    /// every pair — is worked out when the text changes and only read after.
+    /// A draft swapped in behind the buffer's back, with no revision to say so,
+    /// is therefore invisible to both: reading the text again would see it.
+    #[test]
+    fn the_guides_and_the_pair_are_read_off_the_revision_not_the_text() {
+        let mut buffer = Buffer::open("fn a() {\n    b(1);\n}", false, 4);
+        buffer.go_to_place(Place { line: 2, column: 7 });
+        let (guides, pair) = (buffer.guides(1..=3), buffer.bracket_pair());
+        assert!(
+            pair.is_some() && guides[1].len() == 1,
+            "{pair:?} {guides:?}"
+        );
+
+        buffer.draft = Some("x\ny\nz".to_string());
+        assert_eq!(
+            (buffer.guides(1..=3), buffer.bracket_pair()),
+            (guides, pair)
+        );
     }
 }

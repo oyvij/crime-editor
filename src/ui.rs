@@ -1954,7 +1954,6 @@ fn source_lines(
     faint: Style,
 ) -> Vec<Line<'static>> {
     let shown: Vec<usize> = story::rows(state, tokens.len())
-        .into_iter()
         .skip(state.editor_scroll)
         .take(area.height.saturating_sub(2) as usize)
         .filter_map(|row| match row {
@@ -3309,7 +3308,6 @@ fn marked_code(
     // the interleave; marking afterwards against a row index would slide every
     // bar below a comment down by one.
     story::rows(state, code.len())
-        .into_iter()
         .map(|row| match row {
             // Taken, not cloned: `rows` yields each line exactly once, so the
             // one left behind is never read again.
@@ -4948,7 +4946,7 @@ mod tests {
         );
         let traced =
             |committed: &str| varde::authorship::traced(Some(committed), "fn main() {}\n").into();
-        state.traced = Some((path.clone(), traced("fn main() {}\n")));
+        state.traced = Some((path.clone(), 1, traced("fn main() {}\n")));
         state.authorship.insert(
             path.clone(),
             vec![varde::authorship::Authored {
@@ -4964,7 +4962,7 @@ mod tests {
         assert_eq!(authorship_clause(&state, 12), "");
 
         // And the one clause with no date to keep, so nothing is cut against it.
-        state.traced = Some((path, traced("fn main() { run() }\n")));
+        state.traced = Some((path, 1, traced("fn main() { run() }\n")));
         assert_eq!(authorship_clause(&state, 40), " Not committed yet ");
     }
 
@@ -5047,6 +5045,7 @@ mod tests {
         let committed = text.replace("+ 11;", "+ 0;");
         state.traced = Some((
             path.clone(),
+            1,
             varde::authorship::traced(Some(&committed), &text).into(),
         ));
         state.find_query = "step".to_string();
@@ -5120,33 +5119,34 @@ mod tests {
         buffer
     }
 
-    /// #101: the editor draws only the rows the pane shows, so every row it draws
-    /// at an offset has to be, cell for cell, the row a pane tall enough for the
-    /// whole file draws there — the folds, the picks, the hits, the underlines
-    /// and every mark in the gutter included. Scrolled past the top, through a
-    /// fold and off the end, because the edges of a window are where a line
-    /// found by its number lands on the wrong row.
+    /// #101: the editor draws only the rows the pane shows, and every row it
+    /// draws has to be, cell for cell, the row the renderer that built the
+    /// whole file and scrolled it drew there — the folds, the picks, the hits,
+    /// the underlines and every mark in the gutter included. Scrolled past the
+    /// top, through a fold and off the end, because the edges of a window are
+    /// where a line found by its number lands on the wrong row.
+    ///
+    /// Against that renderer's own output, taken at the commit before #101 and
+    /// committed beside the suite: a comparison with a whole-file render of
+    /// today's code passes any regression the two paths share (#104).
     #[test]
-    fn a_scrolled_pane_draws_the_rows_the_whole_file_draws_there() {
-        for (state, tokens, marks) in decorated() {
-            let whole = editor_drawn(&state, &tokens, &marks, 80);
+    fn a_scrolled_pane_draws_what_the_whole_file_renderer_drew() {
+        let before = include_str!("../tests/snapshots/editor_before_101.txt");
+        let mut before = before.split_inclusive("\n}\n");
+        for (index, (state, tokens, marks)) in decorated().into_iter().enumerate() {
             for scroll in [0, 1, 5, 7, 8, 17, 30, 44, 49, 60] {
                 let mut scrolled = state.clone();
                 scrolled.editor_scroll = scroll;
                 let window = editor_drawn(&scrolled, &tokens, &marks, 14);
-                for row in 1..=14 {
-                    for column in 0..60 {
-                        let drawn = &window[(column, row)];
-                        let expected = &whole[(column, row + scroll as u16)];
-                        assert_eq!(
-                            (drawn.symbol(), drawn.style()),
-                            (expected.symbol(), expected.style()),
-                            "row {row} column {column} scrolled {scroll}"
-                        );
-                    }
-                }
+                let drawn = format!("fixture {index} scrolled {scroll}\n{window:?}\n");
+                assert_eq!(Some(drawn.as_str()), before.next());
             }
         }
+        assert_eq!(
+            before.next(),
+            None,
+            "a render the snapshot has and this does not"
+        );
     }
 
     /// #101: a frame of a long file costs what the pane shows rather than what
@@ -5495,6 +5495,7 @@ mod tests {
         );
         state.traced = Some((
             path.clone(),
+            1,
             varde::authorship::traced(Some("# Guide\n"), "# Guide\n").into(),
         ));
         state.authorship.insert(

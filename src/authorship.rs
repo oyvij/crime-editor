@@ -77,12 +77,14 @@ pub fn at_cursor(state: &State) -> Option<Authorship> {
 /// [`traced`] for the buffer on screen, as the edge last told it
 /// ([`State::traced`](crate::State::traced)) — nothing while it has not, which
 /// the border says nothing about rather than claiming a line nobody has
-/// looked up yet was never committed.
+/// looked up yet was never committed. Nothing for a trace of another revision
+/// either: after an edit that added or removed a line, every entry past it
+/// names the wrong line.
 pub fn traced_lines(state: &State) -> Option<&[Option<usize>]> {
-    match (&state.traced, &state.current_buffer) {
-        (Some((path, lines)), Some(current)) if path == current => Some(lines),
-        _ => None,
-    }
+    let (path, revision, lines) = state.traced.as_ref()?;
+    let buffer = crate::current_buffer(state)?;
+    (state.current_buffer.as_ref() == Some(path) && buffer.revision() == *revision)
+        .then_some(&lines[..])
 }
 
 /// Which line of the file as the commit holds it each buffer line came from,
@@ -152,8 +154,9 @@ mod tests {
 
     /// #101: the Change bars and the Authorship read the trace the edge told
     /// and never diff the file themselves — both are asked on every frame, and
-    /// the diff is a whole file's worth of work. Keyed by the buffer, so
-    /// another file's trace is not this one's.
+    /// the diff is a whole file's worth of work. Keyed by the buffer and its
+    /// revision, so another file's trace is not this one's and nor is the
+    /// trace of the text before an edit (#104).
     #[test]
     fn the_marks_read_the_trace_the_edge_told() {
         let path = std::path::PathBuf::from("/w/main.rs");
@@ -170,10 +173,18 @@ mod tests {
             .insert(path.clone(), Some("a\n".to_string()));
         assert!(crate::changed_lines(&state).is_empty(), "diffed on its own");
 
-        state.traced = Some((path, vec![Some(1), None, None].into()));
+        let revision = state.buffers[&path].revision();
+        state.traced = Some((path.clone(), revision, vec![Some(1), None, None].into()));
         assert_eq!(crate::changed_lines(&state), [2, 3]);
 
-        state.traced = Some((std::path::PathBuf::from("/w/other.rs"), vec![None].into()));
+        state.traced = Some((path, revision - 1, vec![None, Some(1), None].into()));
+        assert!(
+            crate::changed_lines(&state).is_empty(),
+            "an older revision's"
+        );
+
+        let other = std::path::PathBuf::from("/w/other.rs");
+        state.traced = Some((other, revision, vec![None].into()));
         assert!(crate::changed_lines(&state).is_empty());
     }
 

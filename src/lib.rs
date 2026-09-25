@@ -44,7 +44,7 @@ use editor::Buffer;
 use review::{Comment, GitFile};
 use search::Results;
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::{Bound, RangeBounds};
+use std::ops::RangeBounds;
 use std::path::{Path, PathBuf};
 use tree::Entry;
 use tree_actions::{Action, Target};
@@ -1886,13 +1886,13 @@ pub struct State {
     pub authorship: BTreeMap<PathBuf, std::sync::Arc<[authorship::Authored]>>,
     /// The current buffer traced back through its commit — which committed
     /// line each of its lines came from ([`authorship::traced`]) — keyed by
-    /// the buffer it is about. Both the Change bars and the Authorship read it.
-    /// Told by the edge, which works it out off the main loop once per revision
-    /// and once per commit: it is a diff of the whole file, and worked out on
-    /// every frame it was most of what a big file's frame cost (#101). Until
-    /// the answer for a new revision lands it is the one before, so a bar is a
-    /// keystroke late rather than a keystroke held.
-    pub traced: Option<(PathBuf, std::sync::Arc<[Option<usize>]>)>,
+    /// the buffer and the revision it is about. Both the Change bars and the
+    /// Authorship read it. Told by the edge, which works it out once per
+    /// revision and once per commit, before the frame that draws them: it is a
+    /// diff of the whole file, and worked out on every frame it was most of
+    /// what a big file's frame cost (#101), while a trace a keystroke late put
+    /// every bar below an added line on the wrong line (#104).
+    pub traced: Option<Traced>,
     pub comments: Vec<Comment>,
     pub reviews: BTreeSet<u32>,
     pub retention_limit: usize,
@@ -2967,6 +2967,9 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
     }
     (next, effects)
 }
+
+/// [`State::traced`]: the buffer, its revision, and the trace of that text.
+pub type Traced = (PathBuf, u64, std::sync::Arc<[Option<usize>]>);
 
 /// One event a group did not claim, handed back with the state it has not
 /// touched. `update`'s match ran to a hundred and forty arms; the arms are the
@@ -9827,7 +9830,7 @@ fn editor_focus(state: &State, rows: &[preview::Row]) -> (usize, usize) {
                 let lines = buffer.shown().lines().count();
                 (
                     story::row_of(state, buffer.line as u32).saturating_sub(1),
-                    story::rows(state, lines).len(),
+                    story::rows(state, lines).count(),
                 )
             }
             None => (0, 0),
@@ -10080,7 +10083,7 @@ pub fn current_buffer(state: &State) -> Option<&Buffer> {
 /// Worked out on the spot for the reason [`matches`] is, and empty while a
 /// Preview is up: rendered rows are not source, and a source column reported
 /// over them names a place that is not on screen. Only in `lines`, for the
-/// reason [`lines_within`] gives.
+/// reason [`Buffer::lines_within`] gives.
 pub fn word_occurrences(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
     if previewing(state) {
         return Vec::new();
@@ -10097,7 +10100,7 @@ pub fn word_occurrences(state: &State, lines: impl RangeBounds<usize>) -> Vec<Pl
     };
     let part = |c: char| c.is_alphanumeric() || c == '_';
     let mut places = Vec::new();
-    for (number, line) in lines_within(buffer.shown(), lines) {
+    for (number, line) in buffer.lines_within(lines) {
         for (at, _) in line.match_indices(&word) {
             if line[..at].chars().next_back().is_some_and(part)
                 || line[at + word.len()..].chars().next().is_some_and(part)
@@ -10111,27 +10114,6 @@ pub fn word_occurrences(state: &State, lines: impl RangeBounds<usize>) -> Vec<Pl
         }
     }
     places
-}
-
-/// The lines of `text` a range of 1-based line numbers covers, each with its
-/// number. The editor draws a window of the file, and marking the lines it
-/// does not draw was most of what a frame of a big file cost (#101) — so what
-/// the renderer asks for is found in its window, and what steps through the
-/// whole file asks for all of it.
-pub(crate) fn lines_within(
-    text: &str,
-    lines: impl RangeBounds<usize>,
-) -> impl Iterator<Item = (usize, &str)> {
-    let first = match lines.start_bound() {
-        Bound::Included(first) => *first,
-        Bound::Excluded(first) => first + 1,
-        Bound::Unbounded => 1,
-    };
-    text.split('\n')
-        .enumerate()
-        .skip(first.saturating_sub(1))
-        .map(|(index, line)| (index + 1, line))
-        .take_while(move |(number, _)| lines.contains(number))
 }
 
 /// Every match of the in-file query in the current buffer, in reading order —
@@ -10153,7 +10135,7 @@ pub(crate) fn lines_within(
 /// is not free — a mermaid pass on a query nobody typed is wasted work
 /// `AGENTS.md`'s "never parse per frame" is aimed straight at.
 ///
-/// Only in `lines` — rows, while previewing — for the reason [`lines_within`]
+/// Only in `lines` — rows, while previewing — for the reason [`Buffer::lines_within`]
 /// gives: `n` and `N` ask for the whole file, the renderer for its window.
 pub fn matches(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
     if state.find_query.is_empty() {
@@ -10181,7 +10163,8 @@ pub fn matches(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
     else {
         return Vec::new();
     };
-    lines_within(buffer.shown(), lines)
+    buffer
+        .lines_within(lines)
         .flat_map(|(number, line)| {
             search::occurrences(&state.find_query, line)
                 .into_iter()
@@ -10219,7 +10202,7 @@ pub fn changed_lines(state: &State) -> Vec<usize> {
 /// look through, which is what [`Selection::buffer_span`] answering nothing
 /// already says.
 ///
-/// Only in `lines`, for the reason [`lines_within`] gives.
+/// Only in `lines`, for the reason [`Buffer::lines_within`] gives.
 pub fn echoes(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
     let Some((from, to)) = state.selection.as_ref().and_then(Selection::buffer_span) else {
         return Vec::new();
@@ -10233,7 +10216,8 @@ pub fn echoes(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
     let Some(buffer) = current_buffer(state) else {
         return Vec::new();
     };
-    lines_within(buffer.shown(), lines)
+    buffer
+        .lines_within(lines)
         .flat_map(|(number, line)| {
             line.match_indices(&word).map(move |(at, _)| Place {
                 line: number,
