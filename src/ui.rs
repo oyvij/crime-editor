@@ -191,7 +191,7 @@ pub fn draw(
             (chrome.tokens, chrome.run_marks),
             (chrome.diff_new, chrome.diff_old),
             chrome.preview,
-            areas.editor.width,
+            areas.editor,
             chrome.faint,
         ),
         areas.editor,
@@ -1851,9 +1851,10 @@ fn editor_widget(
     (tokens, run_marks): (&[Vec<highlight::Token>], &[usize]),
     diff_sides: (&[Vec<highlight::Token>], &[Vec<highlight::Token>]),
     preview: &[varde::preview::Row],
-    width: u16,
+    area: Rect,
     faint: Style,
 ) -> Paragraph<'static> {
+    let width = area.width;
     // Both of these substitute the whole drawing of the editor's rectangle
     // rather than being a `Pane` of their own. They never coexist:
     // `move_to_view` empties `state.diff` on every way out of
@@ -1924,8 +1925,51 @@ fn editor_widget(
         return preview_widget(state, command, title, footer, preview, width);
     }
 
+    Paragraph::new(source_lines(
+        state,
+        path,
+        buffer,
+        (tokens, run_marks),
+        area,
+        faint,
+    ))
+    .block(editor_block(state, title, footer, command, width))
+}
+
+/// The buffer's rows the pane has room for, and nothing else. Which lines
+/// those are is settled first — the scroll offset, the pane's height and the
+/// folds decide it, through the same [`story::rows`] the caret and a click
+/// count with — and only they are built and marked. Built for the whole file
+/// and then scrolled, a frame cost as much as the file was long (#101).
+///
+/// Split out of `editor_widget` for the reason `risk_lines` is: a `Paragraph`
+/// will not give its text back, and how many lines it was handed is what this
+/// promises.
+fn source_lines(
+    state: &State,
+    path: &std::path::Path,
+    buffer: &varde::editor::Buffer,
+    (tokens, run_marks): (&[Vec<highlight::Token>], &[usize]),
+    area: Rect,
+    faint: Style,
+) -> Vec<Line<'static>> {
+    let shown: Vec<usize> = story::rows(state, tokens.len())
+        .skip(state.editor_scroll)
+        .take(area.height.saturating_sub(2) as usize)
+        .filter_map(|row| match row {
+            story::Row::Code(number) => Some(number as usize),
+            _ => None,
+        })
+        .collect();
+    let (Some(&first), Some(&last)) = (shown.first(), shown.last()) else {
+        return Vec::new();
+    };
+    // Which of the drawn rows a line is on, if it is drawn at all. Every pass
+    // below finds a line by its number, and a fold means a number is not an
+    // offset.
+    let row = |number: usize| shown.binary_search(&number).ok();
     let dark = state.editor_theme != "light";
-    let mut lines = code_lines(tokens, dark, cursor_line(state));
+    let mut lines = code_lines(tokens, shown.iter().copied(), dark, cursor_line(state));
     // Under everything below, the way an indentation guide is under the code
     // in an IDE: each of the passes below counts columns, and substituting a
     // character for a glyph leaves every column where it was.
@@ -1937,20 +1981,19 @@ fn editor_widget(
     } else {
         Color::Indexed(254)
     });
-    let guides = buffer.guides();
+    let guides = buffer.guides(shown.iter().copied());
     // The one pair the cursor is inside, whose two halves are on one line or on
     // two. Which pair that is is the library's answer; the columns of it that
     // fall on this row are all this needs.
     let pair = buffer.bracket_pair();
-    for (index, line) in lines.iter_mut().enumerate() {
-        let row: &[varde::editor::Guide] = guides.get(index).map_or(&[], Vec::as_slice);
+    for ((line, number), guides) in lines.iter_mut().zip(&shown).zip(&guides) {
         let marks: Vec<usize> = pair
             .iter()
             .flat_map(|(from, to)| [from, to])
-            .filter(|at| at.line == index + 1)
+            .filter(|at| at.line == *number)
             .map(|at| at.column - 1)
             .collect();
-        *line = guided(line, row, &marks, bracket, faint);
+        *line = guided(line, guides, &marks, bracket, faint);
     }
     // Where the word under the cursor is used, washed rather than picked: it is
     // not a selection, and a mark as bright as one would read as text having
@@ -1959,8 +2002,8 @@ fn editor_widget(
     let word = buffer
         .word_at_cursor()
         .map_or(0, |word| word.chars().count());
-    for at in varde::word_occurrences(state) {
-        let Some(line) = lines.get_mut(at.line - 1) else {
+    for at in varde::word_occurrences(state, first..=last) {
+        let Some(line) = row(at.line).map(|index| &mut lines[index]) else {
             continue;
         };
         *line = picked(
@@ -1976,7 +2019,7 @@ fn editor_widget(
     // saying what it was read off, and the reader is left to guess whether
     // the field or the whole chain was evaluated.
     if let Some((at, width)) = varde::debug::hover_span(state) {
-        if let Some(line) = lines.get_mut(at.line - 1) {
+        if let Some(line) = row(at.line).map(|index| &mut lines[index]) {
             *line = picked(
                 line,
                 at.column - 1,
@@ -1989,18 +2032,22 @@ fn editor_widget(
     // Without this a visual selection is invisible, which reads as V not
     // working at all.
     if let Some((from, to)) = buffer.selected_lines() {
-        for line in lines.iter_mut().take(to).skip(from - 1) {
+        for (line, _) in lines
+            .iter_mut()
+            .zip(&shown)
+            .filter(|(_, number)| (from..=to).contains(*number))
+        {
             line.style = line.style.add_modifier(Modifier::REVERSED);
         }
     }
     // Every other place the picked word is used, quieter than the pick and under
     // both it and the search marks: an echo is a hint about the file, not a
     // second selection.
-    let echoed = varde::echoes(state);
+    let echoed = varde::echoes(state, first..=last);
     if let Some(word) = state.selected_text().filter(|_| !echoed.is_empty()) {
         let width = word.chars().count();
         for at in echoed {
-            let Some(line) = lines.get_mut(at.line - 1) else {
+            let Some(line) = row(at.line).map(|index| &mut lines[index]) else {
                 continue;
             };
             *line = picked(
@@ -2016,8 +2063,8 @@ fn editor_widget(
     // the count is visible without walking them. Under the selection, so the
     // match being stepped to still reads as picked.
     let matched = state.find_query.chars().count();
-    for at in varde::matches(state) {
-        let Some(line) = lines.get_mut(at.line - 1) else {
+    for at in varde::matches(state, first..=last) {
+        let Some(line) = row(at.line).map(|index| &mut lines[index]) else {
             continue;
         };
         *line = picked(
@@ -2034,8 +2081,8 @@ fn editor_widget(
     // underline's alone — `picked` patches, so the syntax colour underneath is
     // still the one the text is drawn in, the way an editor marks a span rather
     // than repainting it.
-    for (index, line) in lines.iter_mut().enumerate() {
-        for (from, to, severity) in lsp::underlines(state, path, index + 1) {
+    for (line, number) in lines.iter_mut().zip(&shown) {
+        for (from, to, severity) in lsp::underlines(state, path, *number) {
             *line = picked(
                 line,
                 from - 1,
@@ -2049,6 +2096,7 @@ fn editor_widget(
     }
     paint_drag(
         &mut lines,
+        &row,
         state.selection.as_ref().and_then(Selection::buffer_span),
         &state.occurrences,
         true,
@@ -2056,9 +2104,9 @@ fn editor_widget(
     // The whole affordance a link has: a terminal has no hand pointer to turn
     // the mouse into, so the underline is what says a click here jumps.
     if let Some((line, from, to)) = varde::link(state) {
-        if let Some(row) = lines.get_mut(line - 1) {
-            *row = picked(
-                row,
+        if let Some(drawn) = row(line).map(|index| &mut lines[index]) {
+            *drawn = picked(
+                drawn,
                 from - 1,
                 to,
                 Style::default().add_modifier(Modifier::UNDERLINED),
@@ -2075,7 +2123,7 @@ fn editor_widget(
     // a line, so none of them can reach into a span that is not the file's
     // text.
     for (number, values) in varde::debug::inline(state, tokens, varde::fits(state).2) {
-        let Some(line) = lines.get_mut(number - 1) else {
+        let Some(line) = row(number).map(|index| &mut lines[index]) else {
             continue;
         };
         for value in values {
@@ -2101,14 +2149,13 @@ fn editor_widget(
     // the line. The wash goes on either way, so the passage is still whole.
     let spoken = reading::mark(state);
     let changed = varde::changed_lines(state);
-    for (index, line) in lines.iter_mut().enumerate() {
-        let number = index + 1;
+    for (line, &number) in lines.iter_mut().zip(&shown) {
         let reading = spoken.is_some_and(|(from, to)| number >= from && number <= to);
         if let Some(severity) = lsp::mark(state, path, number) {
             *line = barred(line, number, severity_colour(severity));
         } else if reading {
             *line = barred(line, number, READING);
-        } else if changed.contains(&number) {
+        } else if changed.binary_search(&number).is_ok() {
             *line = barred(line, number, Color::Green);
         }
         if reading {
@@ -2116,16 +2163,27 @@ fn editor_widget(
         }
     }
 
-    // After the fold, which recognises a line's gutter by its first span: the
-    // rows it leaves are numbered by the lines it did not hide.
-    let hidden = varde::fold::hidden(state);
+    // The fold toggles, last of everything the editor draws for the reason
+    // the Site's mark is last: everything above counts columns from the start
+    // of the line. The toggle takes `layout::TOGGLE_COLUMN` of the gutter's
+    // pad, so text still starts where `layout::GUTTER` says it does and a drag
+    // lands on the character it is over; a line the language server or a
+    // Reading has marked keeps that mark too — the bar is in the column
+    // before, which is what the seventh gutter column was for. The Breakpoint
+    // marks go after it, since the toggle recognises a line's gutter by its
+    // first span.
+    let toggles = varde::fold::toggles(state, first..=last);
     let marks = varde::debug::marks(state);
     let paused = varde::debug::paused_line(state)
         .filter(|(file, _, _)| state.current_buffer.as_deref() == Some(*file));
-    let lines: Vec<Line> = folded(lines, state)
+    lines
         .into_iter()
-        .zip((1..).filter(|number| !hidden.contains(number)))
+        .zip(shown)
         .map(|(line, number)| {
+            let line = match toggles.get(&number) {
+                Some(toggle) => with_toggle(&line, number, *toggle, dark),
+                None => line,
+            };
             // A Breakpoint over a Run mark, as a click in the column takes it.
             let line = match marks.get(&number) {
                 Some(mark) => with_breakpoint(line, *mark),
@@ -2133,16 +2191,11 @@ fn editor_widget(
                 None => line,
             };
             match paused {
-                Some((_, at, why)) if at == number => {
-                    on_paused_line(line, why, width, state.editor_theme != "light")
-                }
+                Some((_, at, why)) if at == number => on_paused_line(line, why, area.width, dark),
                 _ => line,
             }
         })
-        .collect();
-    Paragraph::new(lines)
-        .scroll((state.editor_scroll as u16, 0))
-        .block(editor_block(state, title, footer, command, width))
+        .collect()
 }
 
 /// The mirror of the file down the editor's right-hand edge, and the scrollbar
@@ -2261,34 +2314,6 @@ fn minimap(frame: &mut Frame, state: &State, areas: &Areas, tokens: &[Vec<highli
             height as u16,
         ),
     );
-}
-
-/// The lines a fold leaves on screen, each one that opens a block carrying its
-/// toggle. Last of everything the editor draws, for the reason the Site's mark
-/// is last: everything above indexes a line by its own number, and a row taken
-/// out moves every index below it.
-///
-/// The toggle takes `layout::TOGGLE_COLUMN` of the gutter's pad, so text still
-/// starts where `layout::GUTTER` says it does and a drag lands on the character
-/// it is over. A line the language server or a Reading has marked keeps that
-/// mark too — the bar is in the column before, which is what the seventh gutter
-/// column was for.
-fn folded(lines: Vec<Line<'static>>, state: &State) -> Vec<Line<'static>> {
-    let hidden = varde::fold::hidden(state);
-    let toggles = varde::fold::toggles(state);
-    if hidden.is_empty() && toggles.is_empty() {
-        return lines;
-    }
-    let dark = state.editor_theme != "light";
-    lines
-        .into_iter()
-        .enumerate()
-        .filter(|(index, _)| !hidden.contains(&(index + 1)))
-        .map(|(index, line)| match toggles.get(&(index + 1)) {
-            Some(toggle) => with_toggle(&line, index + 1, *toggle, dark),
-            None => line,
-        })
-        .collect()
 }
 
 /// The Breakpoint box's rows, the one the keys type into marked. The switch
@@ -2598,7 +2623,7 @@ fn preview_widget(
     // same highlight Source draws, over rows rather than lines, since
     // `varde::matches` already answers in row coordinates while previewing.
     let matched = state.find_query.chars().count();
-    for at in varde::matches(state) {
+    for at in varde::matches(state, ..) {
         let Some(line) = lines.get_mut(at.line - 1) else {
             continue;
         };
@@ -2613,6 +2638,7 @@ fn preview_widget(
     // No gutter to skip: a Preview draws none, so its first span is text.
     paint_drag(
         &mut lines,
+        &|row| Some(row - 1),
         state
             .selection
             .as_ref()
@@ -3049,9 +3075,12 @@ fn title_room(state: &State, width: u16) -> usize {
 /// over rendered rows while Source's is a `Buffer` one over lines (ADR-0007):
 /// read from the wrong shape it is a highlight over characters nobody picked.
 /// `has_gutter` is what the surface draws in front of its text, the same fact
-/// `layout::gutter` answers for the caret and the hit-test.
+/// `layout::gutter` answers for the caret and the hit-test, and `row` is where
+/// a line is drawn among `lines` — nowhere, for a line outside the editor's
+/// window.
 fn paint_drag(
     lines: &mut [Line<'static>],
+    row: &dyn Fn(usize) -> Option<usize>,
     span: Option<(varde::Place, varde::Place)>,
     occurrences: &[Place],
     has_gutter: bool,
@@ -3069,11 +3098,12 @@ fn paint_drag(
     let width = if from.line == to.line {
         to.column - from.column
     } else {
-        return paint_span(lines, from, to, has_gutter);
+        return paint_span(lines, row, from, to, has_gutter);
     };
     for start in occurrences {
         paint_span(
             lines,
+            row,
             *start,
             Place {
                 line: start.line,
@@ -3082,14 +3112,20 @@ fn paint_drag(
             has_gutter,
         );
     }
-    paint_span(lines, from, to, has_gutter)
+    paint_span(lines, row, from, to, has_gutter)
 }
 
 /// One charwise span, cut at the columns rather than styling the whole row.
-fn paint_span(lines: &mut [Line<'static>], from: Place, to: Place, has_gutter: bool) {
+fn paint_span(
+    lines: &mut [Line<'static>],
+    row: &dyn Fn(usize) -> Option<usize>,
+    from: Place,
+    to: Place,
+    has_gutter: bool,
+) {
     for number in from.line..=to.line {
-        let Some(line) = lines.get_mut(number - 1) else {
-            break;
+        let Some(line) = row(number).and_then(|index| lines.get_mut(index)) else {
+            continue;
         };
         let first = if number == from.line {
             from.column - 1
@@ -3186,15 +3222,15 @@ fn cursor_line(state: &State) -> Option<usize> {
 
 fn code_lines(
     tokens: &[Vec<highlight::Token>],
+    numbers: impl IntoIterator<Item = usize>,
     dark: bool,
     cursor: Option<usize>,
 ) -> Vec<Line<'static>> {
-    tokens
-        .iter()
-        .enumerate()
-        .map(|(index, line)| {
-            let mut row = numbered(index + 1, cursor);
-            for span in spans(line, dark) {
+    numbers
+        .into_iter()
+        .map(|number| {
+            let mut row = numbered(number, cursor);
+            for span in spans(tokens.get(number - 1).map_or(&[], Vec::as_slice), dark) {
                 row.push_span(span);
             }
             row
@@ -3227,12 +3263,18 @@ fn marked_code(
     marked: &story::SiteMark,
     relative: &str,
 ) -> Vec<Line<'static>> {
-    let mut code = code_lines(tokens, state.editor_theme != "light", cursor_line(state));
+    let mut code = code_lines(
+        tokens,
+        1..=tokens.len(),
+        state.editor_theme != "light",
+        cursor_line(state),
+    );
     // Before the mark, so a dragged span is already on the line the mark then
     // bars or dims — `picked` counts the gutter as one span, which a barred
     // line no longer is.
     paint_drag(
         &mut code,
+        &|number| Some(number - 1),
         state.selection.as_ref().and_then(Selection::buffer_span),
         &state.occurrences,
         true,
@@ -3266,7 +3308,6 @@ fn marked_code(
     // the interleave; marking afterwards against a row index would slide every
     // bar below a comment down by one.
     story::rows(state, code.len())
-        .into_iter()
         .map(|row| match row {
             // Taken, not cloned: `rows` yields each line exactly once, so the
             // one left behind is never read again.
@@ -4075,7 +4116,7 @@ fn glyph(mark: Mark) -> (&'static str, Color) {
 /// drawn as a dot. Which columns hold a guide, which guide is the cursor's and
 /// which columns hold the marked brackets are all the library's answer; this
 /// only draws them. One pass rather than a rebuild per mark, because the editor
-/// redraws the whole file's lines on every keystroke.
+/// redraws every line on screen on every keystroke.
 ///
 /// Every line goes through it, guides or none: a line at no indentation still
 /// holds the spaces between its words, and skipping it left the outermost
@@ -4879,8 +4920,8 @@ fn overlay(frame: &mut Frame, title: &str, lines: Vec<Line<'static>>) {
 mod tests {
     use super::{
         action_icon, authorship_clause, branch_lines, buffer_title, cheatsheet_rows, code_lines,
-        colour, diff_rows, editor_block, faint, folded, guided, highlight, icon_colour, layout,
-        paint_drag, pane_actions_title, preview_line, right_title, risk_lines, risk_title, shift,
+        colour, diff_rows, editor_block, faint, guided, highlight, icon_colour, layout, paint_drag,
+        pane_actions_title, preview_line, right_title, risk_lines, risk_title, shift, source_lines,
         status_line, story_title, title_room, tree_lines, truncate, with_breakpoint, with_caret,
         Block, Borders, Color, Kind, Line, Modifier, Place, Selection, Span, State, Style, Tone,
         UnicodeWidthStr, DIRTY, DOTS, WARNING,
@@ -4903,9 +4944,9 @@ mod tests {
             path.clone(),
             varde::editor::Buffer::open("fn main() {}\n", false, 4),
         );
-        state
-            .committed
-            .insert(path.clone(), Some("fn main() {}\n".to_string()));
+        let traced =
+            |committed: &str| varde::authorship::traced(Some(committed), "fn main() {}\n").into();
+        state.traced = Some((path.clone(), 1, traced("fn main() {}\n")));
         state.authorship.insert(
             path.clone(),
             vec![varde::authorship::Authored {
@@ -4921,9 +4962,7 @@ mod tests {
         assert_eq!(authorship_clause(&state, 12), "");
 
         // And the one clause with no date to keep, so nothing is cut against it.
-        state
-            .committed
-            .insert(path, Some("fn main() { run() }\n".to_string()));
+        state.traced = Some((path, 1, traced("fn main() { run() }\n")));
         assert_eq!(authorship_clause(&state, 40), " Not committed yet ");
     }
 
@@ -4974,6 +5013,175 @@ mod tests {
         // branch change Varde did not make and must not go on denying.
         state.branch = Some("something-else".to_string());
         assert_eq!(story_title(&state), "story  on something-else (was main)");
+    }
+
+    /// A file drawn with every mark the editor lays over code at once — folds
+    /// open and shut, a linewise pick, a charwise pick and its echoes, search
+    /// hits, diagnostics, change bars, Run marks and a slide to the right — as
+    /// the state, its tokens and its Run marks. Twice, because a charwise pick
+    /// and a linewise one are two different selections.
+    fn decorated() -> Vec<(State, Vec<Vec<highlight::Token>>, Vec<usize>)> {
+        let text: String = (1..=64)
+            .map(|n| match n % 8 {
+                0 => "\n".to_string(),
+                1 => format!("fn step{n}(count: usize) {{\n"),
+                2 | 3 => format!("    let count = count + {n}; // step\n"),
+                4 => "    if count > 3 {\n".to_string(),
+                5 => format!("        println!(\"{{count}} {n}\");\n"),
+                6 => "    }\n".to_string(),
+                _ => "}\n".to_string(),
+            })
+            .collect();
+        let path = std::path::PathBuf::from("/w/main.rs");
+        let mut state = State::default();
+        state.current_buffer = Some(path.clone());
+        let mut buffer = varde::editor::Buffer::open(&text, false, 4);
+        buffer.folded = vec![9, 33];
+        buffer.go_to_place(Place {
+            line: 18,
+            column: 9,
+        });
+        state.buffers.insert(path.clone(), buffer);
+        let committed = text.replace("+ 11;", "+ 0;");
+        state.traced = Some((
+            path.clone(),
+            1,
+            varde::authorship::traced(Some(&committed), &text).into(),
+        ));
+        state.find_query = "step".to_string();
+        state.diagnostics.insert(
+            path.clone(),
+            [(
+                "rust".to_string(),
+                [
+                    (3, varde::lsp::Severity::Error),
+                    (20, varde::lsp::Severity::Warning),
+                ]
+                .into_iter()
+                .map(|(line, severity)| varde::lsp::Diagnostic {
+                    line,
+                    column: 9,
+                    end_column: Some(13),
+                    severity,
+                    message: "no".to_string(),
+                })
+                .collect(),
+            )]
+            .into(),
+        );
+        let tokens = highlight::highlight("main.rs", &text);
+        let marks = vec![1, 17, 41, 57];
+
+        let mut linewise = state.clone();
+        let buffer = linewise.buffers.get_mut(&path).expect("open");
+        buffer.key('V');
+        buffer.key('j');
+        buffer.key('j');
+
+        let mut charwise = state;
+        charwise.selection = Some(Selection::Buffer {
+            anchor: Place {
+                line: 18,
+                column: 9,
+            },
+            cursor: Place {
+                line: 18,
+                column: 13,
+            },
+        });
+        charwise.editor_hscroll = 3;
+        vec![
+            (linewise, tokens.clone(), marks.clone()),
+            (charwise, tokens, marks),
+        ]
+    }
+
+    /// The editor pane `rows` tall, drawn the way `draw` draws it.
+    fn editor_drawn(
+        state: &State,
+        tokens: &[Vec<highlight::Token>],
+        marks: &[usize],
+        rows: u16,
+    ) -> ratatui::buffer::Buffer {
+        use ratatui::widgets::Widget;
+        let area = ratatui::layout::Rect::new(0, 0, 60, rows + 2);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        super::editor_widget(
+            state,
+            None,
+            (tokens, marks),
+            (&[], &[]),
+            &[],
+            area,
+            faint(None),
+        )
+        .render(area, &mut buffer);
+        buffer
+    }
+
+    /// #101: the editor draws only the rows the pane shows, and every row it
+    /// draws has to be, cell for cell, the row the renderer that built the
+    /// whole file and scrolled it drew there — the folds, the picks, the hits,
+    /// the underlines and every mark in the gutter included. Scrolled past the
+    /// top, through a fold and off the end, because the edges of a window are
+    /// where a line found by its number lands on the wrong row.
+    ///
+    /// Against that renderer's own output, taken at the commit before #101 and
+    /// committed beside the suite: a comparison with a whole-file render of
+    /// today's code passes any regression the two paths share (#104).
+    #[test]
+    fn a_scrolled_pane_draws_what_the_whole_file_renderer_drew() {
+        let before = include_str!("../tests/snapshots/editor_before_101.txt");
+        let mut before = before.split_inclusive("\n}\n");
+        for (index, (state, tokens, marks)) in decorated().into_iter().enumerate() {
+            for scroll in [0, 1, 5, 7, 8, 17, 30, 44, 49, 60] {
+                let mut scrolled = state.clone();
+                scrolled.editor_scroll = scroll;
+                let window = editor_drawn(&scrolled, &tokens, &marks, 14);
+                let drawn = format!("fixture {index} scrolled {scroll}\n{window:?}\n");
+                assert_eq!(Some(drawn.as_str()), before.next());
+            }
+        }
+        assert_eq!(
+            before.next(),
+            None,
+            "a render the snapshot has and this does not"
+        );
+    }
+
+    /// #101: a frame of a long file costs what the pane shows rather than what
+    /// the file holds — the editor builds and marks exactly the rows it has
+    /// room for, the first of them the row it is scrolled to, and fewer only
+    /// where the file runs out.
+    #[test]
+    fn the_editor_builds_only_the_rows_the_pane_shows() {
+        let text = "let x = 1; // x\n".repeat(20_000);
+        let path = std::path::PathBuf::from("/w/main.rs");
+        let mut state = State::default();
+        state.current_buffer = Some(path.clone());
+        state.find_query = "x".to_string();
+        state
+            .buffers
+            .insert(path.clone(), varde::editor::Buffer::open(&text, false, 4));
+        let tokens = highlight::plain(&text);
+        let area = ratatui::layout::Rect::new(0, 0, 60, 12);
+        for (scroll, rows) in [(0, 10), (9_990, 10), (19_995, 6)] {
+            state.editor_scroll = scroll;
+            let lines = source_lines(
+                &state,
+                &path,
+                &state.buffers[&path],
+                (&tokens, &[]),
+                area,
+                faint(None),
+            );
+            assert_eq!(lines.len(), rows, "scrolled {scroll}");
+            assert_eq!(
+                lines[0].spans[0].content.trim(),
+                (scroll + 1).to_string(),
+                "scrolled {scroll}"
+            );
+        }
     }
 
     fn measured() -> State {
@@ -5285,9 +5493,11 @@ mod tests {
             path.clone(),
             varde::editor::Buffer::open("# Guide\n", false, 4),
         );
-        state
-            .committed
-            .insert(path.clone(), Some("# Guide\n".to_string()));
+        state.traced = Some((
+            path.clone(),
+            1,
+            varde::authorship::traced(Some("# Guide\n"), "# Guide\n").into(),
+        ));
         state.authorship.insert(
             path,
             vec![varde::authorship::Authored {
@@ -6293,10 +6503,15 @@ mod tests {
             .buffers
             .insert(path.clone(), varde::editor::Buffer::open(source, false, 4));
         state.current_buffer = Some(path.clone());
+        let tokens = highlight::highlight("main.rs", source);
         let drawn = |state: &State| {
-            folded(
-                code_lines(&highlight::highlight("main.rs", source), true, None),
+            source_lines(
                 state,
+                &path,
+                &state.buffers[&path],
+                (&tokens, &[]),
+                ratatui::layout::Rect::new(0, 0, 40, 10),
+                faint(None),
             )
             .iter()
             .map(|line| {
@@ -6310,8 +6525,8 @@ mod tests {
         assert_eq!(
             drawn(&state),
             [
-                "    1 \u{25bc}  fn main() {",
-                "    2        go();",
+                "    1 \u{25bc}  fn\u{b7}main()\u{b7}{",
+                "    2    \u{2503}\u{b7}\u{b7}\u{b7}go();",
                 "    3    }",
                 "    4    "
             ]
@@ -6332,7 +6547,7 @@ mod tests {
         assert_eq!(
             drawn(&state),
             [
-                format!("    1 \u{25ba}  fn main() {{{DOTS}"),
+                format!("    1 \u{25ba}  fn\u{b7}main()\u{b7}{{{DOTS}"),
                 "    3    }".to_string(),
                 "    4    ".to_string()
             ]
@@ -6344,8 +6559,13 @@ mod tests {
     /// number, the toggle and the text are where they were.
     #[test]
     fn a_breakpoint_is_drawn_in_the_column_its_click_lands_in() {
-        let plain =
-            code_lines(&highlight::highlight("main.rs", "fn main() {}"), true, None).remove(0);
+        let plain = code_lines(
+            &highlight::highlight("main.rs", "fn main() {}"),
+            [1],
+            true,
+            None,
+        )
+        .remove(0);
         let text = |line: &Line| {
             line.spans
                 .iter()
@@ -6392,6 +6612,7 @@ mod tests {
         let mut lines = vec![Line::from(vec![Span::raw("1 "), Span::raw("one and one")])];
         paint_drag(
             &mut lines,
+            &|number| Some(number - 1),
             state.selection.as_ref().and_then(Selection::buffer_span),
             &state.occurrences,
             true,

@@ -59,17 +59,12 @@ pub fn at_cursor(state: &State) -> Option<Authorship> {
             .map(|row| row.line)?,
         false => buffer.line,
     };
-    let committed = state
-        .committed
-        .get(path)
-        .and_then(Option::as_deref)
-        .unwrap_or_default();
     let authors = state
         .authorship
         .get(path)
         .map(|lines| &lines[..])
         .unwrap_or_default();
-    let at = traced(committed, buffer.shown())
+    let at = traced_lines(state)?
         .get(line.checked_sub(1)?)
         .copied()
         .flatten();
@@ -77,6 +72,19 @@ pub fn at_cursor(state: &State) -> Option<Authorship> {
         Some(authored) => Authorship::Committed(authored.clone()),
         None => Authorship::NotCommittedYet,
     })
+}
+
+/// [`traced`] for the buffer on screen, as the edge last told it
+/// ([`State::traced`](crate::State::traced)) — nothing while it has not, which
+/// the border says nothing about rather than claiming a line nobody has
+/// looked up yet was never committed. Nothing for a trace of another revision
+/// either: after an edit that added or removed a line, every entry past it
+/// names the wrong line.
+pub fn traced_lines(state: &State) -> Option<&[Option<usize>]> {
+    let (path, revision, lines) = state.traced.as_ref()?;
+    let buffer = crate::current_buffer(state)?;
+    (state.current_buffer.as_ref() == Some(path) && buffer.revision() == *revision)
+        .then_some(&lines[..])
 }
 
 /// Which line of the file as the commit holds it each buffer line came from,
@@ -94,7 +102,15 @@ pub fn at_cursor(state: &State) -> Option<Authorship> {
 /// which is what the trailing context line of that hunk states: it is the same
 /// line on both sides, so the difference between its two numbers is the offset
 /// every line after it carries until the next hunk.
-pub fn traced(committed: &str, shown: &str) -> Vec<Option<usize>> {
+///
+/// Nothing at all for a file the commit has no copy of: every line of it would
+/// be a Change bar, which is the one thing R37.1 says a mark is not, and a line
+/// with no entry is one the commit does not hold, which is what the Authorship
+/// says of all of them.
+pub fn traced(committed: Option<&str>, shown: &str) -> Vec<Option<usize>> {
+    let Some(committed) = committed else {
+        return Vec::new();
+    };
     let count = shown.split('\n').count();
     let Ok(patch) =
         git2::Patch::from_buffers(committed.as_bytes(), None, shown.as_bytes(), None, None)
@@ -136,6 +152,42 @@ mod tests {
 
     const COMMITTED: &str = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n";
 
+    /// #101: the Change bars and the Authorship read the trace the edge told
+    /// and never diff the file themselves — both are asked on every frame, and
+    /// the diff is a whole file's worth of work. Keyed by the buffer and its
+    /// revision, so another file's trace is not this one's and nor is the
+    /// trace of the text before an edit (#104).
+    #[test]
+    fn the_marks_read_the_trace_the_edge_told() {
+        let path = std::path::PathBuf::from("/w/main.rs");
+        let mut state = State {
+            current_buffer: Some(path.clone()),
+            ..State::default()
+        };
+        state.buffers.insert(
+            path.clone(),
+            crate::editor::Buffer::open("a\nb\n", false, 4),
+        );
+        state
+            .committed
+            .insert(path.clone(), Some("a\n".to_string()));
+        assert!(crate::changed_lines(&state).is_empty(), "diffed on its own");
+
+        let revision = state.buffers[&path].revision();
+        state.traced = Some((path.clone(), revision, vec![Some(1), None, None].into()));
+        assert_eq!(crate::changed_lines(&state), [2, 3]);
+
+        state.traced = Some((path, revision - 1, vec![None, Some(1), None].into()));
+        assert!(
+            crate::changed_lines(&state).is_empty(),
+            "an older revision's"
+        );
+
+        let other = std::path::PathBuf::from("/w/other.rs");
+        state.traced = Some((other, revision, vec![None].into()));
+        assert!(crate::changed_lines(&state).is_empty());
+    }
+
     /// The whole of the mapping's contract, which no scenario can reach: an
     /// unchanged buffer is the identity, an inserted line belongs to nobody and
     /// shifts every line under it, and a deleted one shifts them the other way.
@@ -144,7 +196,8 @@ mod tests {
     /// line after a hunk carries.
     #[test]
     fn a_buffer_line_is_traced_back_to_the_line_the_commit_holds() {
-        let at = |committed: &str, shown: &str, line: usize| traced(committed, shown)[line - 1];
+        let at =
+            |committed: &str, shown: &str, line: usize| traced(Some(committed), shown)[line - 1];
 
         let same = |line| at(COMMITTED, COMMITTED, line);
         assert_eq!((same(1), same(5), same(10)), (Some(1), Some(5), Some(10)));
@@ -173,8 +226,8 @@ mod tests {
     /// reached: an untracked file has no rows of authors to index either.
     #[test]
     fn every_line_of_an_uncommitted_file_belongs_to_nobody() {
-        assert_eq!(traced("", "fn new() {}"), [None]);
-        assert_eq!(traced("", "fn new() {}\nfn old() {}"), [None, None]);
+        assert_eq!(traced(Some(""), "fn new() {}"), [None]);
+        assert_eq!(traced(Some(""), "fn new() {}\nfn old() {}"), [None, None]);
     }
 
     /// The Change bar's half of the same answer, which used to be its own diff
@@ -185,7 +238,7 @@ mod tests {
     #[test]
     fn the_lines_the_commit_does_not_hold_are_the_ones_with_no_committed_line() {
         let changed = |committed: &str, shown: &str| -> Vec<usize> {
-            traced(committed, shown)
+            traced(Some(committed), shown)
                 .into_iter()
                 .enumerate()
                 .filter(|(_, at)| at.is_none())

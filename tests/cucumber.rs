@@ -650,6 +650,15 @@ impl VardeWorld {
         self.state.player_installed = self.player_on_path;
         // A blank voice names no file, so none is on disk.
         self.state.voice_installed = self.voice_on_disk && !self.state.speech.voice.is_empty();
+        // What `tell_traced` tells the core before every frame: the trace of
+        // the current revision.
+        if let Some(path) = self.state.current_buffer.clone() {
+            let committed = self.state.committed.get(&path).and_then(Option::as_deref);
+            if let Some(buffer) = self.state.buffers.get(&path) {
+                let lines = varde::authorship::traced(committed, buffer.shown());
+                self.state.traced = Some((path, buffer.revision(), lines.into()));
+            }
+        }
     }
 
     /// What the edge does wherever it stops holding a pane: the core is told
@@ -3474,7 +3483,7 @@ fn code_shows_comment_on_line(world: &mut VardeWorld, line: u32, file: String) {
         file,
         "Story view is showing another file"
     );
-    let rows = story::rows(&world.state, line as usize + 1);
+    let rows: Vec<_> = story::rows(&world.state, line as usize + 1).collect();
     let under = rows
         .iter()
         .position(|row| *row == story::Row::Code(line))
@@ -4068,7 +4077,7 @@ fn hides_no_lines(world: &mut VardeWorld) {
 
 #[then(expr = "the fold toggle on line {int} is {word}")]
 fn fold_toggle_is(world: &mut VardeWorld, line: usize, state: String) {
-    let toggle = varde::fold::toggles(&world.state)
+    let toggle = varde::fold::toggles(&world.state, ..)
         .get(&line)
         .copied()
         .unwrap_or_else(|| panic!("line {line} carries no fold toggle"));
@@ -4081,7 +4090,7 @@ fn fold_toggle_is(world: &mut VardeWorld, line: usize, state: String) {
 
 #[then(expr = "line {int} carries no fold toggle")]
 fn no_fold_toggle(world: &mut VardeWorld, line: usize) {
-    let toggles = varde::fold::toggles(&world.state);
+    let toggles = varde::fold::toggles(&world.state, ..);
     assert!(!toggles.contains_key(&line), "{toggles:?}");
 }
 
@@ -5338,6 +5347,7 @@ fn commit_holds(world: &mut VardeWorld, path: String, step: &Step) {
         .to_string();
     let absolute = abs(world, &path);
     world.state.committed.insert(absolute, Some(contents));
+    world.tell_core();
 }
 
 #[then(expr = "lines {string} are marked as changed")]
@@ -5514,12 +5524,12 @@ fn word_marked_at(world: &mut VardeWorld, step: &Step) {
             column: row[1].parse().expect("a column"),
         })
         .collect();
-    assert_eq!(varde::word_occurrences(&world.state), expected);
+    assert_eq!(varde::word_occurrences(&world.state, ..), expected);
 }
 
 #[then(expr = "no word is marked")]
 fn no_word_marked(world: &mut VardeWorld) {
-    assert_eq!(varde::word_occurrences(&world.state), Vec::new());
+    assert_eq!(varde::word_occurrences(&world.state, ..), Vec::new());
 }
 
 #[then(expr = "{string} has unsaved edits")]
@@ -6809,7 +6819,7 @@ fn find_is_closed(world: &mut VardeWorld) {
 
 #[then(expr = "there are no matches")]
 fn there_are_no_matches(world: &mut VardeWorld) {
-    assert!(varde::matches(&world.state).is_empty());
+    assert!(varde::matches(&world.state, ..).is_empty());
 }
 
 /// One event per character, because that is what the editor sees: the cursor
@@ -6837,7 +6847,7 @@ fn accept_find(world: &mut VardeWorld) {
 
 #[then(expr = "nothing is highlighted")]
 fn nothing_highlighted(world: &mut VardeWorld) {
-    assert_eq!(varde::matches(&world.state), Vec::new());
+    assert_eq!(varde::matches(&world.state, ..), Vec::new());
 }
 
 /// Every match, not only the one the cursor is on — walking the file is not the
@@ -6856,7 +6866,7 @@ fn highlighted_matches(world: &mut VardeWorld, step: &Step) {
             )
         })
         .collect();
-    let found: Vec<(usize, usize)> = varde::matches(&world.state)
+    let found: Vec<(usize, usize)> = varde::matches(&world.state, ..)
         .iter()
         .map(|at| (at.line, at.column))
         .collect();
@@ -6865,7 +6875,7 @@ fn highlighted_matches(world: &mut VardeWorld, step: &Step) {
 
 #[then(expr = "nothing is echoed")]
 fn nothing_echoed(world: &mut VardeWorld) {
-    assert_eq!(varde::echoes(&world.state), Vec::new());
+    assert_eq!(varde::echoes(&world.state, ..), Vec::new());
 }
 
 #[then(expr = "the echoed occurrences are:")]
@@ -6882,7 +6892,7 @@ fn echoed_occurrences(world: &mut VardeWorld, step: &Step) {
             )
         })
         .collect();
-    let found: Vec<(usize, usize)> = varde::echoes(&world.state)
+    let found: Vec<(usize, usize)> = varde::echoes(&world.state, ..)
         .iter()
         .map(|at| (at.line, at.column))
         .collect();
@@ -14507,10 +14517,9 @@ fn every_transport_action_has_a_key(world: &mut VardeWorld) {
 
 fn guides_on(world: &VardeWorld, line: usize) -> Vec<varde::editor::Guide> {
     current_buffer(world)
-        .guides()
-        .get(line - 1)
+        .guides([line])
+        .pop()
         .expect("a line that far down")
-        .clone()
 }
 
 #[then(expr = "the indent guides on line {int} are at columns {string}")]
