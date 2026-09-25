@@ -4911,7 +4911,8 @@ mod tests {
             vec![varde::authorship::Authored {
                 author: "Ada Lovelace".to_string(),
                 date: "2026-01-05".to_string(),
-            }],
+            }]
+            .into(),
         );
 
         assert_eq!(authorship_clause(&state, 40), " Ada Lovelace  2026-01-05 ");
@@ -5292,7 +5293,8 @@ mod tests {
             vec![varde::authorship::Authored {
                 author: "Ada Lovelace".to_string(),
                 date: "2026-01-05".to_string(),
-            }],
+            }]
+            .into(),
         );
 
         // Through `editor_block`, so what is pinned is the border the editor
