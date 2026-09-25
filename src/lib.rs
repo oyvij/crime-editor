@@ -2157,8 +2157,10 @@ pub struct State {
     pub walking: Option<story::Walking>,
     /// The hunks in every changed file, supplied by the edge alongside
     /// `repo` and on the same cadence — the Remainder recomputes from this
-    /// rather than from a snapshot taken when the story set loaded.
-    pub file_hunks: Vec<story::FileHunks>,
+    /// rather than from a snapshot taken when the story set loaded. Shared
+    /// rather than owned: it holds every changed file's text on both sides,
+    /// and every event clones `State` (ADR 0023).
+    pub file_hunks: std::sync::Arc<[story::FileHunks]>,
     /// Every story-set filename the watcher has told this workspace about,
     /// oldest first — the core's only way to know which one is oldest, since
     /// the AI writes each file and Varde never lists the directory itself.
@@ -2581,7 +2583,7 @@ impl Default for State {
             story_selection: 0,
             spine_scroll: 0,
             walking: None,
-            file_hunks: Vec::new(),
+            file_hunks: std::sync::Arc::default(),
             committed: BTreeMap::new(),
             authorship: BTreeMap::new(),
             story_sets: Vec::new(),
@@ -11449,7 +11451,8 @@ mod tests {
                 head_text: "a\nX\nc\n".to_string(),
                 new_exists: true,
                 new_text: "a\nX\nc\n".to_string(),
-            }],
+            }]
+            .into(),
             ..State::default()
         };
         let moved = update(&state, Event::MoveSelection(Direction::Down)).0;

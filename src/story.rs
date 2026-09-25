@@ -1883,7 +1883,7 @@ pub fn remainder(state: &State) -> Remainder {
     let mut deletions_total = 0usize;
     let mut deletions_unwalked = 0usize;
 
-    for file in &state.file_hunks {
+    for file in state.file_hunks.iter() {
         for hunk in &file.hunks {
             let claimed = is_claimed(&sites, &file.file, hunk);
             if hunk.is_deletion() {
@@ -1923,7 +1923,7 @@ pub struct RemainderLocation {
 pub fn remainder_locations(state: &State) -> Vec<RemainderLocation> {
     let sites = claim_sites(state);
     let mut locations = Vec::new();
-    for file in &state.file_hunks {
+    for file in state.file_hunks.iter() {
         for hunk in &file.hunks {
             if !hunk.is_deletion() && !is_claimed(&sites, &file.file, hunk) {
                 // `new_lines - 1` leans on the `is_deletion` guard above —
@@ -3551,7 +3551,8 @@ from b
         state.file_hunks = vec![
             file_hunks("keys.rs", "a\nb\nc\nd\ne\n", "a\nb\nc\nX\ne\n"),
             file_hunks("mouse.rs", "a\nb\nc\n", "a\nX\nc\n"),
-        ];
+        ]
+        .into();
         let found = remainder(&state);
         assert_eq!(found.unclaimed, 1);
         assert_eq!(found.locations, vec!["mouse.rs".to_string()]);
@@ -3566,7 +3567,8 @@ from b
         state.file_hunks = vec![
             file_hunks("keys.rs", "a\nb\nc\nd\ne\n", "a\nb\nc\nX\ne\n"),
             file_hunks("mouse.rs", "a\nb\nc\n", "a\nX\nc\n"),
-        ];
+        ]
+        .into();
         let found = remainder_locations(&state);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].file, "mouse.rs");
@@ -3576,7 +3578,7 @@ from b
     #[test]
     fn remainder_locations_excludes_a_pure_deletion() {
         let mut state = loaded(Vec::new());
-        state.file_hunks = vec![file_hunks("dead.rs", "gone\n", "")];
+        state.file_hunks = vec![file_hunks("dead.rs", "gone\n", "")].into();
         assert!(remainder_locations(&state).is_empty());
     }
 
@@ -3598,7 +3600,7 @@ from b
         )]);
         // Whole file falls inside one hunk (context 3 on a 5-line file); the
         // site names only two of its five lines.
-        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\nd\ne\n", "a\nb\nc\nX\ne\n")];
+        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\nd\ne\n", "a\nb\nc\nX\ne\n")].into();
         assert_eq!(remainder(&state).unclaimed, 0);
     }
 
@@ -3608,7 +3610,7 @@ from b
             "Story",
             vec![step("s1", site("keys.rs", Side::New, Kind::Context, 4, 4))],
         )]);
-        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\nd\ne\n", "a\nb\nc\nX\ne\n")];
+        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\nd\ne\n", "a\nb\nc\nX\ne\n")].into();
         assert_eq!(remainder(&state).unclaimed, 1);
     }
 
@@ -3624,7 +3626,7 @@ from b
                 vec![step("s2", site("keys.rs", Side::New, Kind::Changed, 4, 4))],
             ),
         ]);
-        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\nd\ne\n", "a\nb\nc\nX\ne\n")];
+        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\nd\ne\n", "a\nb\nc\nX\ne\n")].into();
         assert_eq!(remainder(&state).unclaimed, 0);
     }
 
@@ -3637,7 +3639,7 @@ from b
     #[test]
     fn a_deletion_no_old_side_step_claims_is_an_unwalked_deletion() {
         let mut state = loaded(Vec::new());
-        state.file_hunks = vec![file_hunks("dead.rs", "gone\n", "")];
+        state.file_hunks = vec![file_hunks("dead.rs", "gone\n", "")].into();
         assert_eq!(remainder(&state).unwalked_deletions, Some(1));
         // A pure deletion carries no new-side lines, so it never inflates the
         // ordinary unclaimed count too.
@@ -3665,7 +3667,7 @@ from b
             "Story",
             vec![step("s1", site("dead.rs", Side::Old, Kind::Changed, 1, 1))],
         )]);
-        state.file_hunks = vec![file_hunks("dead.rs", "gone\n", "")];
+        state.file_hunks = vec![file_hunks("dead.rs", "gone\n", "")].into();
         assert_eq!(remainder(&state).unwalked_deletions, Some(0));
     }
 
@@ -3705,7 +3707,7 @@ from b
             "Story",
             vec![step("s1", site_with_text("keys.rs", Side::New, 2, 2, "b"))],
         )]);
-        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\n", "a\nb\nc\n")];
+        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\n", "a\nb\nc\n")].into();
         assert_eq!(staleness(&state, only_step(&state)), Staleness::Fresh);
     }
 
@@ -3724,7 +3726,8 @@ from b
             head_text: String::new(),
             new_exists: false,
             new_text: String::new(),
-        }];
+        }]
+        .into();
         assert_eq!(staleness(&state, only_step(&state)), Staleness::Gone);
     }
 
@@ -3734,7 +3737,7 @@ from b
             "Story",
             vec![step("s1", site_with_text("keys.rs", Side::New, 4, 4, "d"))],
         )]);
-        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\nd\n", "a\nb\nc\n")];
+        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\nd\n", "a\nb\nc\n")].into();
         assert_eq!(staleness(&state, only_step(&state)), Staleness::TooShort);
     }
 
@@ -3744,7 +3747,7 @@ from b
             "Story",
             vec![step("s1", site_with_text("keys.rs", Side::New, 2, 2, "b"))],
         )]);
-        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\n", "a\nX\nc\n")];
+        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\n", "a\nX\nc\n")].into();
         assert_eq!(
             staleness(&state, only_step(&state)),
             Staleness::Changed {
@@ -3762,7 +3765,7 @@ from b
                 site_with_text("keys.rs", Side::New, 2, 2, "    b"),
             )],
         )]);
-        state.file_hunks = vec![file_hunks("keys.rs", "a\n    b\nc\n", "a\nb\nc\n")];
+        state.file_hunks = vec![file_hunks("keys.rs", "a\n    b\nc\n", "a\nb\nc\n")].into();
         assert_eq!(staleness(&state, only_step(&state)), Staleness::Fresh);
     }
 
@@ -3772,7 +3775,7 @@ from b
             "Story",
             vec![step("s1", site_with_text("keys.rs", Side::Old, 2, 2, "b"))],
         )]);
-        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\n", "a\nX\nc\n")];
+        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\n", "a\nX\nc\n")].into();
         assert_eq!(staleness(&state, only_step(&state)), Staleness::Fresh);
     }
 
@@ -3782,7 +3785,7 @@ from b
             "Story",
             vec![step("s1", site_with_text("keys.rs", Side::Old, 2, 2, "b"))],
         )]);
-        state.file_hunks = vec![file_hunks("keys.rs", "a\nX\nc\n", "a\nX\nc\n")];
+        state.file_hunks = vec![file_hunks("keys.rs", "a\nX\nc\n", "a\nX\nc\n")].into();
         assert_eq!(
             staleness(&state, only_step(&state)),
             Staleness::Changed {
@@ -3797,7 +3800,7 @@ from b
             "Story",
             vec![step("s1", site_with_text("keys.rs", Side::New, 2, 2, "b"))],
         )]);
-        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\n", "a\nb\nc\n")];
+        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\n", "a\nb\nc\n")].into();
         let path = state.root.join("keys.rs");
         let mut buffer = crate::editor::Buffer::open("a\nb\nc\n", false, 4);
         buffer.key('j'); // move onto line 2
@@ -3912,7 +3915,7 @@ from b
                 step("s2", site_with_text("keys.rs", Side::New, 3, 3, "WRONG")),
             ],
         )]);
-        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\n", "a\nb\nc\n")];
+        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\n", "a\nb\nc\n")].into();
         assert_eq!(spine(&state)[0].stale, 1);
     }
 
@@ -3971,7 +3974,7 @@ from b
             "Story",
             vec![step("s1", site("keys.rs", Side::New, Kind::Changed, 2, 2))],
         )]);
-        state.file_hunks = vec![file_hunks("mouse.rs", "a\nb\nc\n", "a\nX\nc\n")];
+        state.file_hunks = vec![file_hunks("mouse.rs", "a\nb\nc\n", "a\nX\nc\n")].into();
         state.walking = Some(Walking::Remainder { index: 0 });
         assert!(matches!(
             mark(&state),
@@ -4004,7 +4007,7 @@ from b
             "Story",
             vec![step("s1", site("keys.rs", Side::New, Kind::Changed, 2, 2))],
         )]);
-        state.file_hunks = vec![file_hunks("mouse.rs", "a\nb\nc\n", "a\nX\nc\n")];
+        state.file_hunks = vec![file_hunks("mouse.rs", "a\nb\nc\n", "a\nX\nc\n")].into();
         state.walking = Some(Walking::Remainder { index: 0 });
         assert!(step_menu(&state).is_empty());
     }
@@ -4138,7 +4141,7 @@ from b
                 site("keys.rs", Side::New, Kind::Changed, 2, 900),
             )],
         )]);
-        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\n", "a\nX\nc\n")];
+        state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\n", "a\nX\nc\n")].into();
         state.walking = Some(Walking::Story {
             story: 0,
             step: 0,
@@ -4354,7 +4357,7 @@ from b
         let mut state = State {
             root: std::path::PathBuf::from("/work"),
             current_buffer: Some(path.clone()),
-            file_hunks: vec![file_hunks("src/keys.rs", BASE, head)],
+            file_hunks: vec![file_hunks("src/keys.rs", BASE, head)].into(),
             ..loaded(vec![(
                 "Story",
                 vec![step(
