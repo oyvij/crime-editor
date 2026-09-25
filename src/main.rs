@@ -3026,7 +3026,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                 child => edge.children.get_mut(&child),
             };
             let alive = adapter.is_some_and(|adapter| {
-                adapter.send(&json);
+                adapter.send(json);
                 adapter.alive
             });
             if !alive {
@@ -3086,7 +3086,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
         }
         Effect::LspSend { language, json } => match edge.servers.get_mut(&language) {
             Some(server) => {
-                server.send(&json);
+                server.send(json);
                 if !server.alive {
                     edge.servers.remove(&language);
                     queue.push_back(Event::LspGone {
