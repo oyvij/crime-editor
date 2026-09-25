@@ -71,6 +71,15 @@ threads already do.
 "One in flight per question" already bounds how many threads exist at once. A pool is an answer to a
 problem nobody has measured.
 
+**One job channel.** The five jobs the core asks for each have a typed channel, a `Sender` on the
+edge, a `Receiver`, and a line in `collect_job_events` that turns the answer into its `Event`. A
+single `Sender<Event>`, with each thread sending its finished `Event`, would make a new job one
+`Event` variant and one spawn. It was turned down because the typed channels read better. Each
+channel's type states what its job answers, and `collect_job_events` shows every answer becoming
+its `Event` in one place, where a single channel would spread that across five spawn sites. A new
+job pays for a channel and one conversion line, and in exchange the whole set is readable in one
+function.
+
 **Leaving work on the loop until it is felt.** This was the practice until now, and it is how a git
 poll that was cheap on a clean tree cost up to 78 ms on a branch with large uncommitted files. It is
 felt first by the user, on the input they happen to have, and a feature's own tests never feel it.
@@ -79,9 +88,6 @@ felt first by the user, on the input they happen to have, and a feature's own te
 
 - A feature that reads files, git, a process or the network ships with its work off the loop. The
   code review asks where its work runs, not only what it does.
-- The five core-requested jobs each carry a channel, a `Sender` on the edge, a `Receiver` and a
-  conversion from a tuple to an `Event`. One `Sender<Event>` that threads send their finished
-  `Event` on would make the next job one `Event` variant and one spawn; that is its own ticket.
 - Synchronous effects remain, such as indexing the project, reading stories and branches, and
   checking out a branch. They move when a measurement or a new feature gives a reason to, and the
   rule says which way they move.
