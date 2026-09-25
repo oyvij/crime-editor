@@ -534,9 +534,16 @@ impl Buffer {
     /// The word the cursor sits in — what `*` searches for. The cursor may sit
     /// past the last character of a line, where a pointer cannot: it is pulled
     /// back onto it, which is the one difference from [`Buffer::word_span`].
+    ///
+    /// The one line read rather than every line copied: the editor asks for
+    /// this on every frame (#101).
     pub fn word_at_cursor(&self) -> Option<String> {
-        let lines = self.lines();
-        let line: Vec<char> = lines.get(self.line - 1)?.chars().collect();
+        let line: Vec<char> = self
+            .shown()
+            .split('\n')
+            .nth(self.line - 1)?
+            .chars()
+            .collect();
         let (from, to) = self.word_span(self.line, self.column.min(line.len()))?;
         Some(line[from - 1..to].iter().collect())
     }
@@ -545,8 +552,12 @@ impl Buffer {
     /// that place holds no word character at all. What `*` searches for and
     /// what a link underlines are the same run, so they are measured once.
     pub fn word_span(&self, line: usize, column: usize) -> Option<(usize, usize)> {
-        let lines = self.lines();
-        let text: Vec<char> = lines.get(line.checked_sub(1)?)?.chars().collect();
+        let text: Vec<char> = self
+            .shown()
+            .split('\n')
+            .nth(line.checked_sub(1)?)?
+            .chars()
+            .collect();
         let word = |c: &char| c.is_alphanumeric() || *c == '_';
         let at = column.checked_sub(1)?;
         if !text.get(at).is_some_and(word) {
@@ -1372,19 +1383,30 @@ impl Buffer {
     /// tokens that would tell them apart are the edge's, re-parsed per
     /// revision, and a mark one column wide is not worth threading them
     /// through — a mismatched closer is passed over rather than guessed at.
+    ///
+    /// Read only as far as the answer: the editor asks on every frame, and a
+    /// big file read to its end for a pair that closed near the top was a
+    /// frame spent on nothing (#101).
     pub fn bracket_pair(&self) -> Option<(crate::Place, crate::Place)> {
         let at = crate::Place {
             line: self.line,
             column: self.column,
         };
+        let before = |place: &crate::Place| (place.line, place.column) <= (at.line, at.column);
+        let reaches = |place: &crate::Place| (at.line, at.column) <= (place.line, place.column);
         let mut open: Vec<(crate::Place, char)> = Vec::new();
-        let mut innermost = None;
         for (index, text) in self.shown().split('\n').enumerate() {
             for (offset, character) in text.chars().enumerate() {
                 let here = crate::Place {
                     line: index + 1,
                     column: offset + 1,
                 };
+                // Past the cursor with nothing opened before it still open,
+                // every pair left to close opened after it and holds nothing
+                // the cursor is in: the stack is in the order it was opened.
+                if !before(&here) && open.first().is_none_or(|(from, _)| !before(from)) {
+                    return None;
+                }
                 if let Some(close) = shuts(character) {
                     open.push((here, close));
                     continue;
@@ -1395,34 +1417,36 @@ impl Buffer {
                     // innermost one, because an inner pair shuts before the
                     // pair holding it. Keeping the last instead would answer
                     // the outermost pair in the file every time.
-                    if innermost.is_none()
-                        && (from.line, from.column) <= (at.line, at.column)
-                        && (at.line, at.column) <= (here.line, here.column)
-                    {
-                        innermost = Some((from, here));
+                    if before(&from) && reaches(&here) {
+                        return Some((from, here));
                     }
                 }
             }
         }
-        innermost
+        None
     }
 
-    /// Where the guides down this buffer's indentation go, one entry per line.
-    /// The block the cursor is inside is the active one, and it is the only
-    /// thing the cursor decides here — a guide is a fact about the text, so
-    /// the active one is the same line drawn with more weight and not a line
-    /// of a different kind.
-    pub fn guides(&self) -> Vec<Vec<Guide>> {
-        let lines = self.lines();
-        let unit = indent_unit(&lines, self.tab_width).chars().count().max(1);
-        let indents = indents(&lines);
-        let column = active_column(&indents, unit, self.line - 1);
-        let run = column.and_then(|column| block(&indents, column, self.line - 1));
-        indents
-            .iter()
-            .enumerate()
-            .map(|(index, indent)| {
-                (0..*indent)
+    /// Where the guides down this buffer's indentation go, one entry per line
+    /// of `lines` — none past the last one. The block the cursor is inside is the active
+    /// one, and it is the only thing the cursor decides here — a guide is a
+    /// fact about the text, so the active one is the same line drawn with more
+    /// weight and not a line of a different kind.
+    ///
+    /// Only the lines asked for, and only as much around them as a blank line
+    /// and the cursor's block reach: the editor asks for its window, and
+    /// working out every line's guides on every frame was a big file's frame
+    /// spent on lines nobody sees (#101).
+    pub fn guides(&self, lines: impl IntoIterator<Item = usize>) -> Vec<Vec<Guide>> {
+        let text: Vec<&str> = self.shown().split('\n').collect();
+        let unit = indent_unit(&text, self.tab_width).chars().count().max(1);
+        let indent = |index: usize| indent_at(&text, index);
+        let column = active_column(indent, unit, self.line - 1);
+        let run = column.and_then(|column| block(indent, column, self.line - 1));
+        lines
+            .into_iter()
+            .map(|number| {
+                let index = number - 1;
+                (0..indent(index).unwrap_or(0))
                     .step_by(unit)
                     .map(|at| Guide {
                         column: at,
@@ -1583,17 +1607,18 @@ pub fn closes(open: char) -> Option<char> {
 /// Shallowest rather than first, and blank lines skipped, because
 /// carrying the indentation down *leaves whitespace-only lines behind* — one
 /// abandoned above would otherwise set the unit for everything below it.
-fn indent_unit(lines: &[String], fallback: usize) -> String {
+///
+/// Sliced rather than collected: the editor asks for this on every frame, and a
+/// string per line of a big file was an allocation per line per frame.
+fn indent_unit(lines: &[impl AsRef<str>], fallback: usize) -> String {
     lines
         .iter()
+        .map(AsRef::as_ref)
         .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            line.chars()
-                .take_while(|c| c.is_whitespace())
-                .collect::<String>()
-        })
+        .map(|line| &line[..line.len() - line.trim_start().len()])
         .filter(|indent| !indent.is_empty())
-        .min_by_key(String::len)
+        .min_by_key(|indent| indent.len())
+        .map(str::to_string)
         // `editor.tab_width` only where the file holds no indentation to copy.
         // The first block opened in it is then the evidence every later one
         // reads. A four written in here instead was the second indent site
@@ -1634,47 +1659,47 @@ pub struct Guide {
     pub active: bool,
 }
 
-/// Each line's indentation in characters. A whitespace-only line has none of
-/// its own, so it takes the shallower of its neighbours' — which carries a
-/// guide unbroken through the blank line inside a block without drawing one
-/// past the end of it.
-fn indents(lines: &[String]) -> Vec<usize> {
-    let own: Vec<Option<usize>> = lines
-        .iter()
-        .map(|line| {
-            (!line.trim().is_empty())
-                .then(|| line.chars().take_while(|c| c.is_whitespace()).count())
-        })
-        .collect();
-    (0..own.len())
-        .map(|index| match own[index] {
-            Some(indent) => indent,
-            None => {
-                let above = own[..index].iter().rev().flatten().next().copied();
-                let below = own[index + 1..].iter().flatten().next().copied();
-                above.unwrap_or(0).min(below.unwrap_or(0))
-            }
-        })
-        .collect()
+/// One line's indentation in characters, or nothing past the last line. A
+/// whitespace-only line has none of its own, so it takes the shallower of its
+/// neighbours' — which carries a guide unbroken through the blank line inside
+/// a block without drawing one past the end of it.
+fn indent_at(lines: &[&str], index: usize) -> Option<usize> {
+    let own = |line: &&str| {
+        (!line.trim().is_empty()).then(|| line.chars().take_while(|c| c.is_whitespace()).count())
+    };
+    let line = lines.get(index)?;
+    Some(own(line).unwrap_or_else(|| {
+        let above = lines[..index].iter().rev().find_map(own);
+        let below = lines[index + 1..].iter().find_map(own);
+        above.unwrap_or(0).min(below.unwrap_or(0))
+    }))
 }
 
 /// Which guide the cursor's block draws, or nothing where the cursor is in no
 /// block at all. A line that opens a deeper one counts as inside what it
 /// opens: the cursor on `if x {` is in the body it is about to hold, which is
 /// where a reader would say it is.
-fn active_column(indents: &[usize], unit: usize, line: usize) -> Option<usize> {
-    let indent = *indents.get(line)?;
-    if indents.get(line + 1).is_some_and(|next| *next > indent) {
-        return Some(indent);
+fn active_column(
+    indent: impl Fn(usize) -> Option<usize>,
+    unit: usize,
+    line: usize,
+) -> Option<usize> {
+    let here = indent(line)?;
+    if indent(line + 1).is_some_and(|next| next > here) {
+        return Some(here);
     }
-    indent.checked_sub(unit)
+    here.checked_sub(unit)
 }
 
 /// The run of lines the guide at `column` is drawn on around the cursor, so a
 /// block is marked over its whole length rather than on the one line the
 /// cursor sits on.
-fn block(indents: &[usize], column: usize, line: usize) -> Option<(usize, usize)> {
-    let deep = |index: usize| indents.get(index).is_some_and(|indent| *indent > column);
+fn block(
+    indent: impl Fn(usize) -> Option<usize>,
+    column: usize,
+    line: usize,
+) -> Option<(usize, usize)> {
+    let deep = |index: usize| indent(index).is_some_and(|indent| indent > column);
     let mut from = if deep(line) { line } else { line + 1 };
     if !deep(from) {
         return None;

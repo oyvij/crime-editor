@@ -13,6 +13,7 @@
 use crate::editor::Buffer;
 use crate::{Place, State};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::{Bound, RangeBounds};
 
 /// A foldable block: the line that opens it and the last line it covers, both
 /// 1-based. The opening line stays on screen while the block is folded — it is
@@ -42,13 +43,7 @@ pub enum Toggle {
 /// because a fold that swallowed the gap before the next function would hide a
 /// line nobody thinks of as part of this one.
 pub fn blocks(source: &str) -> Vec<Block> {
-    let indents: Vec<Option<usize>> = source
-        .split('\n')
-        .map(|line| {
-            (!line.trim().is_empty())
-                .then(|| line.chars().take_while(|c| c.is_whitespace()).count())
-        })
-        .collect();
+    let indents: Vec<Option<usize>> = source.split('\n').map(indent).collect();
     let mut blocks = Vec::new();
     for (index, indent) in indents.iter().enumerate() {
         let Some(indent) = indent else { continue };
@@ -68,6 +63,12 @@ pub fn blocks(source: &str) -> Vec<Block> {
         }
     }
     blocks
+}
+
+/// A line's indentation in characters, or nothing for a line with nothing on
+/// it: a blank line opens no block and ends none.
+fn indent(line: &str) -> Option<usize> {
+    (!line.trim().is_empty()).then(|| line.chars().take_while(|c| c.is_whitespace()).count())
 }
 
 /// `:toggle` — the block the cursor is in, folded or opened — and `:toggle!`,
@@ -123,23 +124,38 @@ pub fn hidden(state: &State) -> BTreeSet<usize> {
         .collect()
 }
 
-/// The toggle each line that opens a block carries, keyed by that line. A line
-/// that opens nothing carries none: an affordance on every line is an
-/// affordance nobody reads.
-pub fn toggles(state: &State) -> BTreeMap<usize, Toggle> {
+/// The toggle each line in `lines` that opens a block carries, keyed by that
+/// line. A line that opens nothing carries none: an affordance on every line is
+/// an affordance nobody reads.
+///
+/// Read off the lines themselves rather than off [`blocks`]: a line opens a
+/// block exactly when the first line under it with anything on it is indented
+/// deeper, so the editor's window is answered without laying out every block
+/// in the file on every frame (#101).
+pub fn toggles(state: &State, lines: impl RangeBounds<usize>) -> BTreeMap<usize, Toggle> {
+    let mut toggles = BTreeMap::new();
     let Some(buffer) = folding(state) else {
-        return BTreeMap::new();
+        return toggles;
     };
-    blocks(buffer.shown())
-        .iter()
-        .map(|block| {
-            let toggle = match buffer.folded.contains(&block.from) {
+    let from = (lines.start_bound().cloned(), Bound::Unbounded);
+    let mut opening: Option<(usize, usize)> = None;
+    for (number, line) in crate::lines_within(buffer.shown(), from) {
+        let Some(depth) = indent(line) else {
+            continue;
+        };
+        if let Some((opener, _)) = opening.take().filter(|(_, above)| depth > *above) {
+            let toggle = match buffer.folded.contains(&opener) {
                 true => Toggle::Folded,
                 false => Toggle::Open,
             };
-            (block.from, toggle)
-        })
-        .collect()
+            toggles.insert(opener, toggle);
+        }
+        if !lines.contains(&number) {
+            break;
+        }
+        opening = Some((number, depth));
+    }
+    toggles
 }
 
 /// The buffer whose folds are showing, or nothing.

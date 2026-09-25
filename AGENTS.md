@@ -252,7 +252,14 @@ its modes — comes back in as an `Event` or is answered as data the library dec
   `Drafts` hides this — a `&mut` updates as the batch decodes — so it only bites the input the core
   owns.
 - **Never parse per frame.** The edge caches the current buffer's tokens against `Buffer::revision`,
-  which is bumped by every content change and nothing else.
+  which is bumped by every content change and nothing else. The parse itself runs on a thread, after
+  an edit as much as on opening: until it lands, the last parse is carried onto the new text
+  (`highlight::carried`), because a re-parse of a big file on the loop held a keystroke (#101).
+- **Draw only the rows on screen.** The editor settles which lines it shows (the scroll offset, the
+  pane's height and the folds, through `story::rows`) before building anything, then builds and
+  marks only those. An analysis that needs the whole file is worked out off the loop once per
+  revision and told, the way `State::traced` is, never once per frame. Built whole and scrolled, a
+  frame of a 600 KB file cost 90 ms (#101).
 - **Never type at a pty the instant you spawn it.** A CLI that has not printed its prompt yet drops
   what you send, so the edge reports when the child is ready (`Event::AiSpoke`) and the core holds
   what is queued until then. Ready is not its first byte: a CLI opens with cursor housekeeping and

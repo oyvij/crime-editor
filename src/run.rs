@@ -73,10 +73,13 @@ pub fn marks(state: &State) -> BTreeMap<usize, Mark> {
     else {
         return BTreeMap::new();
     };
-    found(&state.runs, path, buffer.shown())
+    marks_in(&state.runs, path, buffer.shown())
 }
 
-fn found(runs: &BTreeMap<String, Run>, path: &Path, text: &str) -> BTreeMap<usize, Mark> {
+/// [`marks`] handed its pieces rather than the state, for the edge's parse
+/// thread: a syntax tree of a big file is a parse the main loop does not wait
+/// on (#101).
+pub fn marks_in(runs: &BTreeMap<String, Run>, path: &Path, text: &str) -> BTreeMap<usize, Mark> {
     let mut marks = BTreeMap::new();
     let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
         return marks;
@@ -294,7 +297,7 @@ mod tests {
     }
 
     fn lines(path: &str, text: &str) -> Vec<(usize, String, Option<String>)> {
-        found(&shipped(), &PathBuf::from(path), text)
+        marks_in(&shipped(), &PathBuf::from(path), text)
             .into_iter()
             .map(|(line, mark)| (line, mark.row, mark.captures.get("name").cloned()))
             .collect()
@@ -340,7 +343,7 @@ mod tests {
     #[test]
     fn java_marks_main_and_tests_with_their_class() {
         let text = "class Orders {\n  public static void main(String[] args) {}\n  @Test\n  void adds() {}\n  void helper() {}\n}\n";
-        let marks = found(&shipped(), &PathBuf::from("src/Orders.java"), text);
+        let marks = marks_in(&shipped(), &PathBuf::from("src/Orders.java"), text);
         assert_eq!(marks.keys().copied().collect::<Vec<_>>(), vec![2, 4]);
         assert_eq!(marks[&2].row, "java_main");
         assert_eq!(marks[&4].row, "java_test");

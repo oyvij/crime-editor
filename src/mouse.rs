@@ -1529,7 +1529,10 @@ fn fold_toggle_at(state: &State, panes: &Layout, input: Input) -> bool {
         return false;
     }
     let at = place_in(state, panes, Pane::Editor, (input.column, input.row));
-    let Some(toggle) = crate::fold::toggles(state).get(&at.line).copied() else {
+    let Some(toggle) = crate::fold::toggles(state, at.line..=at.line)
+        .get(&at.line)
+        .copied()
+    else {
         return false;
     };
     let pad = (panes.editor.x + 1 + layout::TOGGLE_COLUMN..=panes.editor.x + layout::GUTTER)

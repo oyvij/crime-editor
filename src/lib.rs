@@ -44,6 +44,7 @@ use editor::Buffer;
 use review::{Comment, GitFile};
 use search::Results;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::{Bound, RangeBounds};
 use std::path::{Path, PathBuf};
 use tree::Entry;
 use tree_actions::{Action, Target};
@@ -1883,6 +1884,15 @@ pub struct State {
     /// `update` clones the whole `State` per event, so owning it cost a tree
     /// step milliseconds of copying (#86).
     pub authorship: BTreeMap<PathBuf, std::sync::Arc<[authorship::Authored]>>,
+    /// The current buffer traced back through its commit — which committed
+    /// line each of its lines came from ([`authorship::traced`]) — keyed by
+    /// the buffer it is about. Both the Change bars and the Authorship read it.
+    /// Told by the edge, which works it out off the main loop once per revision
+    /// and once per commit: it is a diff of the whole file, and worked out on
+    /// every frame it was most of what a big file's frame cost (#101). Until
+    /// the answer for a new revision lands it is the one before, so a bar is a
+    /// keystroke late rather than a keystroke held.
+    pub traced: Option<(PathBuf, std::sync::Arc<[Option<usize>]>)>,
     pub comments: Vec<Comment>,
     pub reviews: BTreeSet<u32>,
     pub retention_limit: usize,
@@ -2585,6 +2595,7 @@ impl Default for State {
             walking: None,
             file_hunks: std::sync::Arc::default(),
             committed: BTreeMap::new(),
+            traced: None,
             authorship: BTreeMap::new(),
             story_sets: Vec::new(),
             predictions_put: BTreeSet::new(),
@@ -5028,7 +5039,7 @@ fn on_step_match(state: &State, mut next: State, event: Event, wheeled: bool) ->
         // "there are no more" when there are. With nothing found the cursor
         // stays where it is: there is nowhere to go.
         Event::StepMatch(direction) => {
-            let places = matches(state);
+            let places = matches(state, ..);
             let Some(origin) = cursor_place(state) else {
                 return Ok((next, vec![]));
             };
@@ -10068,8 +10079,9 @@ pub fn current_buffer(state: &State) -> Option<&Buffer> {
 ///
 /// Worked out on the spot for the reason [`matches`] is, and empty while a
 /// Preview is up: rendered rows are not source, and a source column reported
-/// over them names a place that is not on screen.
-pub fn word_occurrences(state: &State) -> Vec<Place> {
+/// over them names a place that is not on screen. Only in `lines`, for the
+/// reason [`lines_within`] gives.
+pub fn word_occurrences(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
     if previewing(state) {
         return Vec::new();
     }
@@ -10085,7 +10097,7 @@ pub fn word_occurrences(state: &State) -> Vec<Place> {
     };
     let part = |c: char| c.is_alphanumeric() || c == '_';
     let mut places = Vec::new();
-    for (index, line) in buffer.shown().split('\n').enumerate() {
+    for (number, line) in lines_within(buffer.shown(), lines) {
         for (at, _) in line.match_indices(&word) {
             if line[..at].chars().next_back().is_some_and(part)
                 || line[at + word.len()..].chars().next().is_some_and(part)
@@ -10093,12 +10105,33 @@ pub fn word_occurrences(state: &State) -> Vec<Place> {
                 continue;
             }
             places.push(Place {
-                line: index + 1,
+                line: number,
                 column: line[..at].chars().count() + 1,
             });
         }
     }
     places
+}
+
+/// The lines of `text` a range of 1-based line numbers covers, each with its
+/// number. The editor draws a window of the file, and marking the lines it
+/// does not draw was most of what a frame of a big file cost (#101) — so what
+/// the renderer asks for is found in its window, and what steps through the
+/// whole file asks for all of it.
+pub(crate) fn lines_within(
+    text: &str,
+    lines: impl RangeBounds<usize>,
+) -> impl Iterator<Item = (usize, &str)> {
+    let first = match lines.start_bound() {
+        Bound::Included(first) => *first,
+        Bound::Excluded(first) => first + 1,
+        Bound::Unbounded => 1,
+    };
+    text.split('\n')
+        .enumerate()
+        .skip(first.saturating_sub(1))
+        .map(|(index, line)| (index + 1, line))
+        .take_while(move |(number, _)| lines.contains(number))
 }
 
 /// Every match of the in-file query in the current buffer, in reading order —
@@ -10119,7 +10152,10 @@ pub fn word_occurrences(state: &State) -> Vec<Place> {
 /// Preview calls this every frame to know what to paint, and `preview_rows`
 /// is not free — a mermaid pass on a query nobody typed is wasted work
 /// `AGENTS.md`'s "never parse per frame" is aimed straight at.
-pub fn matches(state: &State) -> Vec<Place> {
+///
+/// Only in `lines` — rows, while previewing — for the reason [`lines_within`]
+/// gives: `n` and `N` ask for the whole file, the renderer for its window.
+pub fn matches(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
     if state.find_query.is_empty() {
         return Vec::new();
     }
@@ -10127,6 +10163,7 @@ pub fn matches(state: &State) -> Vec<Place> {
         return buffer_rows(state)
             .iter()
             .enumerate()
+            .filter(|(index, _)| lines.contains(&(index + 1)))
             .flat_map(|(index, row)| {
                 search::occurrences(&state.find_query, &row.text())
                     .into_iter()
@@ -10144,18 +10181,31 @@ pub fn matches(state: &State) -> Vec<Place> {
     else {
         return Vec::new();
     };
-    buffer
-        .shown()
-        .split('\n')
-        .enumerate()
-        .flat_map(|(index, line)| {
+    lines_within(buffer.shown(), lines)
+        .flat_map(|(number, line)| {
             search::occurrences(&state.find_query, line)
                 .into_iter()
                 .map(move |column| Place {
-                    line: index + 1,
+                    line: number,
                     column: column as usize,
                 })
         })
+        .collect()
+}
+
+/// Which lines of the current buffer the last commit does not hold, 1-based:
+/// the lines the gutter bars. Empty for a file the commit has no copy of, so
+/// an untracked file is not a bar down every line.
+pub fn changed_lines(state: &State) -> Vec<usize> {
+    // The lines the one diff of the two sides has no commit for — the same
+    // derivation the border's Authorship indexes through, so the gutter and the
+    // border cannot disagree about which lines the commit holds.
+    authorship::traced_lines(state)
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .filter(|(_, at)| at.is_none())
+        .map(|(index, _)| index + 1)
         .collect()
 }
 
@@ -10168,34 +10218,9 @@ pub fn matches(state: &State) -> Vec<Place> {
 /// pty's or a Preview's pick is characters read off a screen with no buffer to
 /// look through, which is what [`Selection::buffer_span`] answering nothing
 /// already says.
-/// Which lines of the current buffer the last commit does not hold, 1-based:
-/// the lines the gutter bars. Empty for a file the commit has no copy of, so
-/// an untracked file is not a bar down every line.
-pub fn changed_lines(state: &State) -> Vec<usize> {
-    let Some((path, buffer)) = state
-        .current_buffer
-        .as_ref()
-        .and_then(|path| Some((path, state.buffers.get(path)?)))
-    else {
-        return Vec::new();
-    };
-    // The lines the one diff of the two sides has no commit for — the same
-    // derivation the border's Authorship indexes through, so the gutter and the
-    // border cannot disagree about which lines the commit holds. Nothing at all
-    // for a file the commit has no copy of: that is a bar down every line,
-    // which is the one thing R37.1 says a mark is not.
-    match state.committed.get(path) {
-        Some(Some(committed)) => authorship::traced(committed, buffer.shown())
-            .into_iter()
-            .enumerate()
-            .filter(|(_, at)| at.is_none())
-            .map(|(index, _)| index + 1)
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-pub fn echoes(state: &State) -> Vec<Place> {
+///
+/// Only in `lines`, for the reason [`lines_within`] gives.
+pub fn echoes(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
     let Some((from, to)) = state.selection.as_ref().and_then(Selection::buffer_span) else {
         return Vec::new();
     };
@@ -10208,13 +10233,10 @@ pub fn echoes(state: &State) -> Vec<Place> {
     let Some(buffer) = current_buffer(state) else {
         return Vec::new();
     };
-    buffer
-        .shown()
-        .split('\n')
-        .enumerate()
-        .flat_map(|(index, line)| {
+    lines_within(buffer.shown(), lines)
+        .flat_map(|(number, line)| {
             line.match_indices(&word).map(move |(at, _)| Place {
-                line: index + 1,
+                line: number,
                 column: line[..at].chars().count() + 1,
             })
         })
@@ -10225,7 +10247,7 @@ pub fn echoes(state: &State) -> Vec<Place> {
 /// The match closest to a place: the first at or after it, wrapping to the top
 /// of the file so the last match is not mistaken for there being no more.
 fn closest_match(state: &State, from: Place) -> Option<Place> {
-    let places = matches(state);
+    let places = matches(state, ..);
     places
         .iter()
         .find(|at| (at.line, at.column) >= (from.line, from.column))
@@ -12862,10 +12884,10 @@ mod tests {
     fn matches_searches_rendered_rows_while_previewing() {
         let mut state = previewing_readme("## Install\n");
         state.find_query = "Install".to_string();
-        assert_eq!(matches(&state), vec![Place { line: 1, column: 1 }]);
+        assert_eq!(matches(&state, ..), vec![Place { line: 1, column: 1 }]);
 
         state.find_query = "##".to_string();
-        assert!(matches(&state).is_empty(), "a consumed marker matched");
+        assert!(matches(&state, ..).is_empty(), "a consumed marker matched");
     }
 
     /// The same query against the same content answers differently once the
@@ -12877,7 +12899,7 @@ mod tests {
         let path = state.current_buffer.clone().unwrap();
         state.buffers.get_mut(&path).unwrap().previewing = false;
         state.find_query = "##".to_string();
-        assert_eq!(matches(&state), vec![Place { line: 1, column: 1 }]);
+        assert_eq!(matches(&state, ..), vec![Place { line: 1, column: 1 }]);
     }
 
     /// `n`/`N` step between preview matches by row: the cursor lands on

@@ -593,16 +593,35 @@ struct Edge {
     area: ratatui::layout::Rect,
     pointer: mouse::Pointer,
     cursor_style: &'static str,
-    /// Parsed tokens for the current buffer, kept until it changes. Re-parsing
-    /// a whole file every frame is what made a big file feel heavy.
+    /// Tokens for the current buffer's text, kept until it changes. Re-parsing
+    /// a whole file every frame is what made a big file feel heavy. The text
+    /// they are for is the key; they are a parse of it once one has landed, and
+    /// the last parse carried onto it until then (`highlight::carried`).
     highlighted: (PathBuf, u64, Vec<Vec<varde::highlight::Token>>),
-    /// Where a file's first parse puts its tokens, off the main loop: syntect
-    /// over a ten-thousand-line file is most of a second, and a restored
-    /// workspace asks for one before the first key is read (#83).
-    highlit: Sender<(PathBuf, u64, Vec<Vec<varde::highlight::Token>>)>,
+    /// Where every parse puts its tokens and Run marks, off the main loop:
+    /// syntect over a ten-thousand-line file is most of a second, and a
+    /// restored workspace asks for one before the first key is read (#83),
+    /// and a keystroke in that file asks again (#101).
+    highlit: Sender<Parsed>,
+    /// The parse in flight, if one is — one at a time (ADR 0023): a key
+    /// pressed while a big file parses asks for the next parse once this one
+    /// lands, rather than a thread per keystroke each most of a second long.
+    parsing: Option<std::thread::JoinHandle<()>>,
+    /// The text the last parse was asked of.
+    parse_asked: (PathBuf, u64),
     /// The lines a Run mark stands on, found with the tokens and for their
     /// reason: a syntax tree is a parse too.
     run_marks: Vec<usize>,
+    /// The trace in flight for the core (`State::traced`), one at a time for
+    /// the reason `parsing` is.
+    tracing: Option<std::thread::JoinHandle<()>>,
+    /// What the last trace was asked of: the buffer, its revision and what its
+    /// commit holds, since a commit that moved changes the answer as surely as
+    /// an edit does.
+    trace_asked: (PathBuf, u64, Option<String>),
+    /// Where a trace puts its answer, off the main loop for the reason
+    /// `highlit` is: a diff of a big file is milliseconds (#101).
+    traced: Sender<(PathBuf, Vec<Option<usize>>)>,
     /// The new and old sides of the diff under review, each parsed whole when
     /// the diff was read. No key: a diff is only ever on screen because a
     /// `ReadDiff` put it there, and that is the one place either side changes.
@@ -849,6 +868,7 @@ fn run(
     let (released_tx, released_rx) = channel();
     let (replaced_tx, replaced_rx) = channel();
     let (highlit_tx, highlit_rx) = channel();
+    let (traced_tx, traced_rx) = channel();
     let (blamed_tx, blamed_rx) = channel();
     let (polled_tx, polled_rx) = channel();
     let mut edge = Edge {
@@ -876,7 +896,12 @@ fn run(
         cursor_style: "",
         highlighted: (PathBuf::new(), u64::MAX, Vec::new()),
         highlit: highlit_tx,
+        parsing: None,
+        parse_asked: (PathBuf::new(), u64::MAX),
         run_marks: Vec::new(),
+        tracing: None,
+        trace_asked: (PathBuf::new(), u64::MAX, None),
+        traced: traced_tx,
         diff_sides: (Vec::new(), Vec::new()),
         previewed: (PathBuf::new(), u64::MAX, 0, Vec::new()),
         faint: ui::faint(palette),
@@ -1003,6 +1028,7 @@ fn run(
         );
         set_cursor_style(&state, &mut edge);
         dirty |= cache_highlight(&state, &mut edge, &highlit_rx);
+        dirty |= tell_traced(&mut state, &mut edge, &traced_rx);
         cache_preview(&state, &mut edge);
 
         if !dirty {
@@ -1801,30 +1827,46 @@ fn set_cursor_style(state: &State, edge: &mut Edge) {
     };
 }
 
-/// Parse once per edit, not once per frame.
+/// What a parse answers with: the file, its tokens and the lines its Run marks
+/// stand on.
+type Parsed = (PathBuf, Vec<Vec<varde::highlight::Token>>, Vec<usize>);
+
+/// Parse once per edit, not once per frame, and never on the main loop.
 ///
-/// A file the editor has just switched to is drawn plain and parsed off the
-/// main loop, so opening one — or reopening a big one at startup — never holds
-/// a key (#83). An edit to the file on screen still parses here: the tokens
-/// carry the text they colour, so drawing the last parse would show the text
-/// as it was before the keystroke. An answer for a revision no longer on
-/// screen is dropped.
-fn cache_highlight(
-    state: &State,
-    edge: &mut Edge,
-    highlit: &Receiver<(PathBuf, u64, Vec<Vec<varde::highlight::Token>>)>,
-) -> bool {
-    let mut arrived = false;
-    while let Ok((path, revision, tokens)) = highlit.try_recv() {
-        if edge.highlighted.0 == path && edge.highlighted.1 == revision {
-            edge.highlighted.2 = tokens;
-            arrived = true;
-        }
-    }
+/// A file the editor has just switched to is drawn plain and an edit to the
+/// one on screen is drawn with the last parse carried onto the new text, while
+/// the parse runs on a thread — so opening a big file, or typing in one, never
+/// holds a key (#83, #101). A parse that lands for a text since edited is
+/// carried onto it too, and the text as it is now asked for next.
+fn cache_highlight(state: &State, edge: &mut Edge, highlit: &Receiver<Parsed>) -> bool {
     let current = state
         .current_buffer
         .as_ref()
         .and_then(|path| state.buffers.get(path).map(|buffer| (path, buffer)));
+    // Asked before the channel is read, for the reason the git poll asks it: a
+    // parse sends before it ends, so one that has ended with nothing waiting
+    // died without answering.
+    let ended = edge
+        .parsing
+        .as_ref()
+        .is_some_and(|parse| parse.is_finished());
+    let mut arrived = false;
+    while let Ok((path, tokens, marks)) = highlit.try_recv() {
+        edge.parsing = None;
+        let Some((_, buffer)) = current.filter(|(current, _)| **current == path) else {
+            continue;
+        };
+        edge.highlighted = (
+            path,
+            buffer.revision(),
+            varde::highlight::carried(tokens, buffer.shown()),
+        );
+        edge.run_marks = marks;
+        arrived = true;
+    }
+    if ended {
+        edge.parsing = None;
+    }
     let Some((path, buffer)) = current else {
         if !edge.highlighted.2.is_empty() {
             edge.highlighted = (PathBuf::new(), u64::MAX, Vec::new());
@@ -1832,26 +1874,93 @@ fn cache_highlight(
         }
         return arrived;
     };
-    if edge.highlighted.0 == *path && edge.highlighted.1 == buffer.revision() {
-        return arrived;
+    if (&edge.highlighted.0, edge.highlighted.1) != (path, buffer.revision()) {
+        let tokens = match edge.highlighted.0 == *path {
+            true => {
+                varde::highlight::carried(std::mem::take(&mut edge.highlighted.2), buffer.shown())
+            }
+            false => {
+                edge.run_marks.clear();
+                varde::highlight::plain(buffer.shown())
+            }
+        };
+        edge.highlighted = (path.clone(), buffer.revision(), tokens);
     }
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let tokens = if edge.highlighted.0 == *path {
-        varde::highlight::highlight(&name, buffer.shown())
-    } else {
-        let (name, text, answer) = (
-            name.into_owned(),
+    let asked = (path.clone(), buffer.revision());
+    if edge.parsing.is_none() && edge.parse_asked != asked {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let (text, runs, answer) = (
             buffer.shown().to_string(),
+            state.runs.clone(),
             edge.highlit.clone(),
         );
-        let (path, revision) = (path.clone(), buffer.revision());
-        std::thread::spawn(move || {
-            let _ = answer.send((path, revision, varde::highlight::highlight(&name, &text)));
-        });
-        varde::highlight::plain(buffer.shown())
+        let path = path.clone();
+        edge.parsing = Some(std::thread::spawn(move || {
+            let tokens = varde::highlight::highlight(&name, &text);
+            let marks = varde::run::marks_in(&runs, &path, &text)
+                .into_keys()
+                .collect();
+            let _ = answer.send((path, tokens, marks));
+        }));
+        edge.parse_asked = asked;
+    }
+    arrived
+}
+
+/// Tell the core the current buffer traced through its commit
+/// (`State::traced`), worked out on a thread once per revision and once per
+/// commit. An answer for a text or a commit since replaced is still this
+/// file's, and told until the one after it lands, for the reason a parse is
+/// carried: a bar a keystroke late beats a key held.
+fn tell_traced(
+    state: &mut State,
+    edge: &mut Edge,
+    traced: &Receiver<(PathBuf, Vec<Option<usize>>)>,
+) -> bool {
+    let ended = edge
+        .tracing
+        .as_ref()
+        .is_some_and(|trace| trace.is_finished());
+    let mut arrived = false;
+    while let Ok((path, lines)) = traced.try_recv() {
+        edge.tracing = None;
+        if state.current_buffer.as_ref() == Some(&path) {
+            state.traced = Some((path, lines.into()));
+            arrived = true;
+        }
+    }
+    if ended {
+        edge.tracing = None;
+    }
+    let Some((path, buffer)) = state
+        .current_buffer
+        .as_ref()
+        .and_then(|path| state.buffers.get(path).map(|buffer| (path, buffer)))
+    else {
+        return arrived;
     };
-    edge.highlighted = (path.clone(), buffer.revision(), tokens);
-    edge.run_marks = varde::run::marks(state).into_keys().collect();
+    let committed = state.committed.get(path).and_then(Option::as_deref);
+    let (asked, revision, against) = &edge.trace_asked;
+    if edge.tracing.is_some()
+        || (asked, *revision, against.as_deref()) == (path, buffer.revision(), committed)
+    {
+        return arrived;
+    }
+    let (committed, text, answer) = (
+        committed.map(str::to_string),
+        buffer.shown().to_string(),
+        edge.traced.clone(),
+    );
+    edge.trace_asked = (path.clone(), buffer.revision(), committed.clone());
+    let path = path.clone();
+    edge.tracing = Some(std::thread::spawn(move || {
+        let lines = varde::authorship::traced(committed.as_deref(), &text);
+        let _ = answer.send((path, lines));
+    }));
     arrived
 }
 

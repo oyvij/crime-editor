@@ -97,16 +97,59 @@ pub fn highlight(name: &str, source: &str) -> Vec<Vec<Token>> {
 }
 
 pub fn plain(source: &str) -> Vec<Vec<Token>> {
-    source
-        .split('\n')
-        .map(|line| match line.is_empty() {
-            true => Vec::new(),
-            false => vec![Token {
-                text: line.to_string(),
-                kind: Kind::Plain,
-            }],
-        })
-        .collect()
+    source.split('\n').map(plain_line).collect()
+}
+
+fn plain_line(line: &str) -> Vec<Token> {
+    match line.is_empty() {
+        true => Vec::new(),
+        false => vec![Token {
+            text: line.to_string(),
+            kind: Kind::Plain,
+        }],
+    }
+}
+
+/// Tokens for `source` out of the tokens of an earlier text of the same file,
+/// for as long as the parse of `source` itself is running off the main loop
+/// (#101). Every line the edit left alone keeps its colours — matched from the
+/// top and from the bottom, which is where an edit leaves lines alone — and the
+/// lines between are plain. The tokens carry the text they colour, so the old
+/// ones drawn as they were would show the file as it was before the key.
+///
+/// Owned, and cut rather than copied: it runs on the main loop once per edit,
+/// and a copy of every token of a big file would be the cost being moved off
+/// it.
+pub fn carried(mut tokens: Vec<Vec<Token>>, source: &str) -> Vec<Vec<Token>> {
+    let lines: Vec<&str> = source.split('\n').collect();
+    let holds = |tokens: &[Token], line: &str| {
+        let mut rest = line;
+        tokens
+            .iter()
+            .all(|token| match rest.strip_prefix(token.text.as_str()) {
+                Some(after) => {
+                    rest = after;
+                    true
+                }
+                None => false,
+            })
+            && rest.is_empty()
+    };
+    let both = tokens.len().min(lines.len());
+    let above = (0..both)
+        .take_while(|&index| holds(&tokens[index], lines[index]))
+        .count();
+    let below = (1..=both - above)
+        .take_while(|&back| holds(&tokens[tokens.len() - back], lines[lines.len() - back]))
+        .count();
+    let end = tokens.len() - below;
+    tokens.splice(
+        above..end,
+        lines[above..lines.len() - below]
+            .iter()
+            .map(|line| plain_line(line)),
+    );
+    tokens
 }
 
 /// Adjacent text of the same kind is one token, so a quoted string arrives
@@ -203,7 +246,55 @@ fn scope_kind(name: &str) -> Kind {
 
 #[cfg(test)]
 mod tests {
-    use super::{highlight, scope_kind, Kind};
+    use super::{carried, highlight, plain, scope_kind, Kind, Token};
+
+    /// #101: what an edit is drawn in while its parse runs on a thread. The
+    /// lines it left alone keep their colours, counted from the top and from
+    /// the bottom, and only what it changed is plain until the parse lands.
+    #[test]
+    fn an_edit_keeps_the_colours_of_every_line_it_left_alone() {
+        let before = highlight("main.rs", "fn a() {}\nlet x = 1;\nfn b() {}");
+        let after = carried(
+            before.clone(),
+            "fn a() {}\nlet x = 12;\nlet y = 2;\nfn b() {}",
+        );
+        assert_eq!(after[0], before[0]);
+        assert_eq!(after[1..3], plain("let x = 12;\nlet y = 2;")[..]);
+        assert_eq!(after[3], before[2]);
+    }
+
+    /// Whatever was carried, the text drawn is the text now: tokens carry the
+    /// text they colour, so a line matched wrongly would draw what the file
+    /// held before the key. Lines removed, lines repeated and an emptied file
+    /// are where counting from both ends overlaps.
+    #[test]
+    fn carried_tokens_hold_the_text_as_it_is_now() {
+        let text = |tokens: &[Vec<Token>]| {
+            tokens
+                .iter()
+                .map(|line| {
+                    line.iter()
+                        .map(|token| token.text.as_str())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        for (before, after) in [
+            ("a\nb\nc", "a\nc"),
+            ("a\na\na", "a\na"),
+            ("a\na", "a\na\na"),
+            ("fn a() {}\n", ""),
+            ("", "fn a() {}"),
+            ("x", "x"),
+        ] {
+            assert_eq!(
+                text(&carried(highlight("main.rs", before), after)),
+                after,
+                "{before:?} to {after:?}"
+            );
+        }
+    }
     use syntect::easy::ScopeRegionIterator;
     use syntect::parsing::{ParseState, ScopeStack};
 
