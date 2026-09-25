@@ -343,7 +343,7 @@ impl Buffer {
         self.clamp();
     }
 
-    fn lines(&self) -> Vec<String> {
+    pub(crate) fn lines(&self) -> Vec<String> {
         self.shown().split('\n').map(str::to_string).collect()
     }
 

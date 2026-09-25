@@ -255,7 +255,7 @@ pub const CHORDS: [(&str, &str, &[View]); 4] = [
 /// The chords a Debug session answers, offered only while one exists for the
 /// reason [`DEBUG_KEYS`] are listed only while one does: with no session they
 /// do nothing, and a hint offering them would teach keys that are not there.
-pub const DEBUG_CHORDS: [(&str, &str, &[View]); 8] = [
+pub const DEBUG_CHORDS: [(&str, &str, &[View]); 9] = [
     ("␣n", "step over", &[View::Edit]),
     ("␣i", "step into", &[View::Edit]),
     ("␣o", "step out", &[View::Edit]),
@@ -267,6 +267,7 @@ pub const DEBUG_CHORDS: [(&str, &str, &[View]); 8] = [
     // what the chord opens, and `chord_rows` reads the hint's letter off the
     // token spelled with the Space glyph.
     ("␣e C-Enter", "evaluate", &[View::Edit]),
+    ("␣a", "ask the AI about the pause", &[View::Edit]),
 ];
 
 /// The chords the Evaluator's window answers, offered only while one is open
@@ -533,6 +534,7 @@ pub fn chord(state: &State, key: char) -> Option<Event> {
         // Hiding the Program output and showing it again are one gesture, so
         // one letter: what pressing it does is whichever the reader can see.
         'h' if state.debug.is_some() => Some(Event::ToggleOutput),
+        'a' if state.debug.is_some() => Some(Event::AskAboutPause),
         's' if state.debug.is_some() => Some(Event::ShowGroup(match state.strip {
             crate::layout::Group::Shells => crate::layout::Group::Debug,
             crate::layout::Group::Debug => crate::layout::Group::Shells,

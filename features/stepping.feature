@@ -156,14 +156,14 @@ Feature: Stepping and the Transport
         | o |
         | c |
         | q |
-        | r |
+        | s |
+        | h |
+        | e |
+        | a |
         | b |
         | B |
         | x |
-        | e |
-        | a |
-        | s |
-        | h |
+        | r |
 
     Scenario: Clicking a Chord hint entry does what its key does
       Given a Debug session is Paused at "src/main.rs" line 3 on thread 1

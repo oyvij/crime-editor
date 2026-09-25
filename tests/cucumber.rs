@@ -3605,6 +3605,90 @@ fn prompt_submitted(world: &mut VardeWorld) {
     assert!(prompt.ends_with('\r'), "not submitted: {prompt:?}");
 }
 
+#[then(expr = "the prompt was not submitted to the AI")]
+fn prompt_not_submitted(world: &mut VardeWorld) {
+    let sent = ai_sends(world);
+    assert!(!sent.is_empty(), "nothing reached the AI");
+    assert!(
+        sent.iter().all(|prompt| !prompt.contains('\r')),
+        "submitted: {sent:?}"
+    );
+}
+
+/// The one thing the AI's prompt was handed, with the paste markers taken off.
+fn pasted(world: &VardeWorld) -> String {
+    let sent = ai_sends(world);
+    let [prompt] = sent.as_slice() else {
+        panic!("expected one send, got {sent:?}")
+    };
+    prompt.replace("\x1b[200~", "").replace("\x1b[201~", "")
+}
+
+#[then(expr = "the AI pane's prompt holds a Pause snapshot")]
+fn prompt_holds_snapshot(world: &mut VardeWorld) {
+    let snapshot = varde::debug::snapshot(&world.state).expect("still Paused");
+    assert_eq!(pasted(world), snapshot);
+}
+
+#[then(expr = "the AI program received the Pause snapshot as a bracketed paste")]
+fn snapshot_bracketed(world: &mut VardeWorld) {
+    let sent = ai_sends(world);
+    let [prompt] = sent.as_slice() else {
+        panic!("expected one send, got {sent:?}")
+    };
+    assert!(prompt.starts_with("\x1b[200~"), "{prompt:?}");
+    assert!(prompt.ends_with("\x1b[201~"), "{prompt:?}");
+}
+
+/// The quoted source is every line carrying the gutter's bar, each ending in
+/// the text the buffer holds on that line.
+#[then(
+    expr = "the Pause snapshot holds {string} lines {int} to {int} with line {int} marked as the Paused line"
+)]
+fn snapshot_holds_lines(
+    world: &mut VardeWorld,
+    file: String,
+    from: usize,
+    to: usize,
+    marked: usize,
+) {
+    let text = pasted(world);
+    let source = world.state.buffers[&abs(world, &file)].disk.clone();
+    let source: Vec<&str> = source.lines().collect();
+    let quoted: Vec<&str> = text.lines().filter(|line| line.contains(" | ")).collect();
+    assert_eq!(quoted.len(), to + 1 - from, "{text}");
+    for (line, number) in quoted.into_iter().zip(from..=to) {
+        assert!(line.ends_with(source[number - 1]), "{number}: {line}");
+        assert!(line.contains(&number.to_string()), "{number}: {line}");
+        assert_eq!(line.starts_with('\u{2192}'), number == marked, "{line}");
+    }
+}
+
+#[then(expr = "the Pause snapshot names the Frames {string} and {string}")]
+fn snapshot_names_frames(world: &mut VardeWorld, inner: String, outer: String) {
+    let text = pasted(world);
+    let frames = &text[text.find("Frames:").expect("a Frames section")..];
+    let at = |name: &str| {
+        frames
+            .find(name)
+            .unwrap_or_else(|| panic!("{name}: {text}"))
+    };
+    assert!(at(&inner) < at(&outer), "{text}");
+}
+
+#[then(expr = "the Pause snapshot holds the Variable {string} with the value {string}")]
+#[then(expr = "the AI pane's prompt holds the Variable {string} with the value {string}")]
+fn snapshot_holds_variable(world: &mut VardeWorld, name: String, value: String) {
+    let text = pasted(world);
+    assert!(text.contains(&format!("{name} = {value}")), "{text}");
+}
+
+#[then(expr = "the Pause snapshot holds the exception {string}")]
+fn snapshot_holds_exception(world: &mut VardeWorld, exception: String) {
+    let text = pasted(world);
+    assert!(text.contains(&exception), "{text}");
+}
+
 #[then(expr = "no prompt was sent to the AI")]
 fn no_prompt(world: &mut VardeWorld) {
     assert!(ai_sends(world).is_empty(), "{:?}", world.keys_sent);
@@ -4838,9 +4922,16 @@ fn click_breakpoint_row_chip(world: &mut VardeWorld, chip: String, file: String,
 /// A Chip on the Transport along the top border of the Corner's occupant or of
 /// the Variables, found by the hit-test that answers a click there — never
 /// driven as an event, so a Chip nobody could reach with a pointer fails here.
+/// The focused Variables row's when no Transport offers the name: `ask-ai` is
+/// on both, and the row's is asked for as "the row's".
+#[given(expr = "I click the {string} Chip")]
 #[when(expr = "I click the {string} Chip")]
 fn click_chip(world: &mut VardeWorld, chip: String) {
-    if row_chip(world, &chip).is_some() {
+    let on_transport = varde::debug::transport(&world.state)
+        .into_iter()
+        .chain(varde::debug::strip_transport(&world.state))
+        .any(|offered| offered.name == chip);
+    if !on_transport && row_chip(world, &chip).is_some() {
         return click_variables_row_chip(world, &chip);
     }
     let (area, chips) = match varde::debug::transport(&world.state)
@@ -15311,6 +15402,11 @@ fn variables_show(world: &mut VardeWorld, name: String) {
     plant_member(world, json!({ "name": name, "value": "3" }));
 }
 
+#[given(expr = "the Variables show {string} with the value {string}")]
+fn variables_show_value(world: &mut VardeWorld, name: String, value: String) {
+    plant_member(world, json!({ "name": name, "value": value }));
+}
+
 #[then(expr = "the Variables show {string}")]
 fn variables_should_show(world: &mut VardeWorld, name: String) {
     variable_row(world, &name);
@@ -15539,6 +15635,9 @@ fn adapter_sent_for_frame(world: &mut VardeWorld, command: String, name: String)
     );
 }
 
+#[given(
+    expr = "the Debug adapter sends the {string} event for thread {int} at {string} line {int} with reason {string} and the text {string}"
+)]
 #[when(
     expr = "the Debug adapter sends the {string} event for thread {int} at {string} line {int} with reason {string} and the text {string}"
 )]
@@ -15988,13 +16087,11 @@ fn chip_names_the_keys(world: &mut VardeWorld, name: String, step: &Step) {
 /// Variables' Transport, the Breakpoint list's, or on the row the keyboard is
 /// on, since all are Chips and a scenario names one by what pressing it does.
 fn chip(world: &VardeWorld, name: &str) -> varde::Chip {
-    row_chip(world, name)
-        .or_else(|| {
-            varde::debug::strip_transport(&world.state)
-                .into_iter()
-                .chain(varde::debug::transport(&world.state))
-                .find(|offered| offered.name == name)
-        })
+    varde::debug::strip_transport(&world.state)
+        .into_iter()
+        .chain(varde::debug::transport(&world.state))
+        .find(|offered| offered.name == name)
+        .or_else(|| row_chip(world, name))
         .unwrap_or_else(|| panic!("no {name:?} Chip"))
 }
 
@@ -16003,6 +16100,11 @@ fn row_chip(world: &VardeWorld, name: &str) -> Option<varde::Chip> {
     varde::debug::row_chips(&world.state, world.state.variables_selection)
         .into_iter()
         .find(|offered| offered.name == name)
+}
+
+#[when(expr = "I click the row's {string} Chip")]
+fn click_the_rows_chip(world: &mut VardeWorld, name: String) {
+    click_variables_row_chip(world, &name);
 }
 
 /// Through the hit-test, on the row's own line and at the columns `ui` draws

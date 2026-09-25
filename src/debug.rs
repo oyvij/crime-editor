@@ -416,12 +416,14 @@ pub fn strip_transport(state: &crate::State) -> Vec<crate::Chip> {
             // a Chip that lies. What it is for is the session that ended,
             // below.
             restart(true),
-            // Ask-AI names no key and does nothing yet: `\u{2423}a` is issue
-            // #70's to bind, and a Chip teaching a key nobody bound is the
-            // cheatsheet contract broken from the other end. Dimmed until
-            // then, because a dimmed Chip does nothing and that is exactly
-            // what it does.
-            chip(ASK_AI, "ask-ai", "\u{2736}", "", Hue::Plain, true),
+            chip(
+                ASK_AI,
+                "ask-ai",
+                "\u{2736}",
+                "\u{2423}a",
+                Hue::Plain,
+                stepping,
+            ),
             // Counting the other Paused threads, dimmed at none. No key of
             // its own: Enter on a flagged thread in the Frames is the
             // keyboard's way there, and it reaches every one, not only the
@@ -2508,7 +2510,14 @@ pub fn row_chips(state: &State, index: usize) -> Vec<crate::Chip> {
             Hue::Plain,
             nothing_to_watch,
         ),
-        chip(ROW_ASK_AI, "ask-ai", "\u{2736}", "", Hue::Plain, true),
+        chip(
+            ROW_ASK_AI,
+            "ask-ai",
+            "\u{2736}",
+            "",
+            Hue::Plain,
+            nothing_to_watch || paused_line(state).is_none(),
+        ),
     ]
 }
 
@@ -3549,6 +3558,48 @@ fn ran_asked<'a>(next: &'a mut State, arguments: &Value, seq: i64) -> Option<&'a
         return None;
     }
     in_flight(next).filter(|ran| ran.answer == Ran::Running(seq))
+}
+
+/// What asking the AI about the pause pastes: where it stopped, with two lines
+/// either side when the editor holds the file, the Frames, and the Variables
+/// exactly as drawn — so a row left closed costs the adapter no request, and
+/// the exception comes first as it does on screen. `None` unless Paused.
+pub fn snapshot(state: &State) -> Option<String> {
+    let (file, line, _) = paused_line(state)?;
+    let pause = showing(state)?;
+    let mark = |here: bool| if here { '\u{2192}' } else { ' ' };
+    let mut text = format!(
+        "My program is Paused at {}:{line}.\n",
+        crate::relative(state, file)
+    );
+    if let Some(buffer) = state.buffers.get(file) {
+        let lines = buffer.lines();
+        text.push('\n');
+        for number in line.saturating_sub(2).max(1)..=(line + 2).min(lines.len()) {
+            text.push_str(&format!(
+                "{} {number:>4} | {}\n",
+                mark(number == line),
+                lines[number - 1]
+            ));
+        }
+    }
+    text.push_str("\nFrames:\n");
+    for (index, frame) in pause.frames.iter().enumerate() {
+        let at = frame.file.as_deref().map_or(String::new(), |file| {
+            format!("  {}:{}", crate::relative(state, file), frame.line)
+        });
+        text.push_str(&format!(
+            "{} {}{at}\n",
+            mark(index == pause.chosen),
+            frame.name
+        ));
+    }
+    text.push_str("\nVariables:\n");
+    for row in variables(state) {
+        let indent = "  ".repeat(row.depth + 1);
+        text.push_str(&format!("{indent}{} = {}\n", row.name, row.value));
+    }
+    Some(text)
 }
 
 /// Where the program is paused, as the chosen Frame names it, and why.
@@ -5411,5 +5462,34 @@ mod tests {
             state.debug.map(|session| session.phase),
             Some(Phase::Stopping)
         );
+    }
+
+    /// The source a snapshot quotes is the Paused line and two on either side,
+    /// cut short at the file's ends rather than padded, and none at all for a
+    /// file the editor has not read — `src/` reads no files, so it names the
+    /// place instead of guessing at its text.
+    #[test]
+    fn a_snapshot_quotes_what_the_file_has_around_the_paused_line() {
+        let mut state = paused(State {
+            root: PathBuf::from("/w"),
+            ..State::default()
+        });
+        let unread = snapshot(&state).expect("Paused");
+        assert!(unread.contains("one.rs:1"), "{unread}");
+        assert!(!unread.contains(" | "), "no source: {unread}");
+        state.buffers.insert(
+            PathBuf::from("/w/one.rs"),
+            crate::editor::Buffer::open("first\nsecond\nthird\nfourth", false, 4),
+        );
+        let quoted = snapshot(&state).expect("Paused");
+        let marked: Vec<&str> = quoted
+            .lines()
+            .filter(|line| line.contains('\u{2192}'))
+            .collect();
+        assert_eq!(marked.len(), 2, "{quoted}");
+        assert!(marked[0].ends_with("first"), "{quoted}");
+        assert!(marked[1].contains("main"), "the chosen Frame: {quoted}");
+        assert!(quoted.contains("third"), "{quoted}");
+        assert!(!quoted.contains("fourth"), "{quoted}");
     }
 }

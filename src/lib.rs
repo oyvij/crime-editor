@@ -1148,6 +1148,9 @@ pub enum Event {
     MoveLaunchRow(Direction),
     /// F9: continue while Paused, pause while Running.
     DebugResume,
+    /// `\u{2423}a` and the Transport's ask-ai Chip: paste a Pause snapshot
+    /// into the AI's prompt.
+    AskAboutPause,
     /// F8, F7 and Shift+F8, and the chords that alias them: one step of the
     /// inspected thread.
     DebugStep(debug::Step),
@@ -2006,11 +2009,11 @@ pub struct State {
     pub terminal_paste: keys::Paste,
     pub ai_paste: keys::Paste,
     /// Whether the AI's child has printed anything. Until it has, it drops
-    /// what it is sent, so a confirmed review or authoring prompt waits in
+    /// what it is sent, so whatever is handed to it waits in
     /// `pending_prompt` — the same queue, since only one thing is ever
     /// waiting to reach the one AI pane.
     pub ai_spoken: bool,
-    pub pending_prompt: Option<String>,
+    pub pending_prompt: Option<(String, Enter)>,
     pub selection: Option<Selection>,
     /// The other places the next-occurrence gesture has taken, each the start
     /// of a run as long as the one `selection` holds — the second cursor and
@@ -6472,7 +6475,7 @@ fn on_resolve(_state: &State, mut next: State, event: Event, wheeled: bool) -> A
                             editor::merge_prompt(&name, &buffer.disk, buffer.shown())
                         });
                     match asked {
-                        Some(prompt) => queue_for_ai(&mut next, prompt),
+                        Some(prompt) => queue_for_ai(&mut next, Enter::Pressed, prompt),
                         None => vec![],
                     }
                 }
@@ -6654,7 +6657,7 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
 }
 
 /// DapReceived, DapStarted, DapGone, DapPortAnswers, StartLaunch, MoveLaunchRow, DebugResume,
-/// DebugStep, DebugStop, DebugRestart, LeaveStepping
+/// DebugStep, DebugStop, DebugRestart, LeaveStepping, AskAboutPause
 fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::DapReceived { json, from } => debug::received(&mut next, &json, from),
@@ -6675,6 +6678,12 @@ fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answ
             debug::start(&mut next, &name)
         }
         Event::DebugResume => debug::resume(&mut next),
+        // Nothing while Running, where the Chip is dimmed: a snapshot of the
+        // last pause is a snapshot of a program that has moved on.
+        Event::AskAboutPause => match debug::snapshot(state) {
+            Some(snapshot) => queue_for_ai(&mut next, Enter::Withheld, snapshot),
+            None => vec![],
+        },
         Event::DebugStep(step) => debug::step(&mut next, step),
         Event::DebugStop => debug::stop(&mut next),
         Event::DebugRestart => debug::restart(&mut next),
@@ -7124,9 +7133,9 @@ fn on_ai_spoke(state: &State, mut next: State, event: Event, wheeled: bool) -> A
         Event::AiSpoke => {
             next.ai_spoken = true;
             match next.pending_prompt.take() {
-                Some(prompt) => vec![Effect::SendKeys {
+                Some((prompt, enter)) => vec![Effect::SendKeys {
                     pane: Pane::Ai,
-                    bytes: injection(&prompt, state.ai_paste),
+                    bytes: injection(&prompt, state.ai_paste, enter),
                 }],
                 None => vec![],
             }
@@ -7669,7 +7678,7 @@ fn on_drag_row(state: &State, mut next: State, event: Event, wheeled: bool) -> A
                             attempt: attempt + 1,
                             problems,
                         };
-                        queue_for_ai(&mut next, prompt)
+                        queue_for_ai(&mut next, Enter::Pressed, prompt)
                     }
                     _ => {
                         next.story_set = story::Set::Refused {
@@ -7753,6 +7762,7 @@ fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool
                 ];
                 effects.extend(queue_for_ai(
                     &mut next,
+                    Enter::Pressed,
                     story::prompt(&spelling, &out, &context),
                 ));
                 effects
@@ -8115,10 +8125,9 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         // The Variables' Transport, each Chip straight through to the event
         // its key already had, for the reason the Reading's are: a click and
         // the key are one gesture, so they are one event and not two paths
-        // that can drift. `ask-ai` has a Chip and no arm yet — its action is
-        // issue #70, and a name from nowhere does nothing rather than
-        // guessing. `next-thread` has no key, so it is no event either.
+        // that can drift. `next-thread` has no key, so it is no event either.
         Event::PaneAction(debug::RESUME) => return Ok(update(state, Event::DebugResume)),
+        Event::PaneAction(debug::ASK_AI) => return Ok(update(state, Event::AskAboutPause)),
         Event::PaneAction(debug::NEXT_THREAD) => debug::next_thread(&mut next),
         Event::PaneAction(debug::STEP_OVER) => {
             return Ok(update(state, Event::DebugStep(debug::Step::Over)));
@@ -8139,10 +8148,7 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         }
         // Read off the Chip, as the set-value box is: dimmed, it does nothing.
         Event::PaneAction(debug::EXCEPTION_CLASS) => {
-            let offered = debug::transport(state)
-                .iter()
-                .any(|chip| chip.action == debug::EXCEPTION_CLASS && chip.tone != Tone::Dimmed);
-            if offered {
+            if offers(&debug::transport(state), debug::EXCEPTION_CLASS) {
                 next.modal = Modal::ExceptionClass;
             }
             vec![]
@@ -8760,7 +8766,9 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
         // spoken. One prompt and nothing else: no Iteration, no tests, no Gate,
         // and nothing committed. The gated loop is `refactor_loop.feature`.
         Event::RowAction(risk::REFACTOR) => match risk::selected(state) {
-            Some(function) => queue_for_ai(&mut next, risk::refactor_prompt(function)),
+            Some(function) => {
+                queue_for_ai(&mut next, Enter::Pressed, risk::refactor_prompt(function))
+            }
             None => vec![],
         },
 
@@ -8771,25 +8779,36 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
         Event::RowAction(history::GO_TO) => return Ok(history::go(state, next)),
         // The Variables' row Chips, each straight through to what its key
         // does, for the reason the Transport's are one event: a click and a
-        // key are one gesture. `evaluate` and `ask-ai` are dimmed — issues
-        // #60 and #70 — and a dimmed Chip does nothing, so neither has an arm
-        // and a name from nowhere does nothing rather than guessing.
+        // key are one gesture.
         Event::RowAction(debug::SET_VALUE) => {
             // Read off the Chip itself rather than re-deciding: a dimmed Chip
             // does nothing, and a box that opened over an adapter that will
             // not take the value is a box that refuses at Enter.
-            let settable = debug::row_chips(state, state.variables_selection)
-                .iter()
-                .any(|chip| chip.action == debug::SET_VALUE && chip.tone != Tone::Dimmed);
-            if settable {
+            if offers(
+                &debug::row_chips(state, state.variables_selection),
+                debug::SET_VALUE,
+            ) {
                 next.modal = Modal::SetValue;
             }
             vec![]
         }
-        // Dimmed, so it does nothing — asking the AI about one value is #70.
-        // An arm rather than a fall-through, because `Event::RowAction` has no
-        // catch-all: every name it carries is one some pane offers.
-        Event::RowAction(debug::ROW_ASK_AI) => vec![],
+        // One value, by the path the Evaluator would take to it, and left
+        // unsubmitted for the reason the whole snapshot is. Read off the Chip,
+        // as set-value is: dimmed, it does nothing.
+        Event::RowAction(debug::ROW_ASK_AI) => {
+            let offered = offers(
+                &debug::row_chips(state, state.variables_selection),
+                debug::ROW_ASK_AI,
+            );
+            match debug::row(state).filter(|_| offered) {
+                Some(row) => queue_for_ai(
+                    &mut next,
+                    Enter::Withheld,
+                    format!("In my Paused program, {} = {}", row.expression, row.value),
+                ),
+                None => vec![],
+            }
+        }
         // The row's evaluate Chip and the Hover's each open the Evaluator on
         // their own expression, which is why they are two names rather than
         // one: the row's is the path to a member and the Hover's is what the
@@ -8958,15 +8977,40 @@ fn walking_position(state: &State) -> (Option<String>, Option<u32>) {
     }
 }
 
-/// Ctrl+U clears the line the CLI is showing — readline's convention, and
-/// best-effort by nature, which is why submitting confirms first. The review
-/// then goes in as one paste, so its line breaks survive and the Enter riding
-/// along is not read as a submit at every newline.
-fn injection(prompt: &str, paste: keys::Paste) -> Vec<u8> {
-    let mut bytes = b"\x15".to_vec();
-    bytes.extend(paste_bytes(prompt, paste));
-    bytes.push(b'\r');
-    bytes
+/// Pressed, Ctrl+U clears the line the CLI is showing — readline's convention,
+/// and best-effort by nature, which is why submitting confirms first. The
+/// prompt then goes in as one paste, so its line breaks survive and the Enter
+/// riding along is not read as a submit at every newline. Withheld, the paste
+/// is all that is sent.
+fn injection(prompt: &str, paste: keys::Paste, enter: Enter) -> Vec<u8> {
+    match enter {
+        Enter::Pressed => {
+            let mut bytes = b"\x15".to_vec();
+            bytes.extend(paste_bytes(prompt, paste));
+            bytes.push(b'\r');
+            bytes
+        }
+        // Nor is the line cleared first: what the user had begun typing is
+        // theirs, and the paste lands after it.
+        Enter::Withheld => paste_bytes(prompt, paste),
+    }
+}
+
+/// Whether a prompt handed to the AI is submitted, or left in its prompt for
+/// the user to send. A Pause snapshot is left: variable values can be real
+/// customer data, so whether they leave the machine is the user's Enter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Enter {
+    Pressed,
+    Withheld,
+}
+
+/// Whether `chips` offer `action` undimmed. An action is read off its Chip
+/// rather than decided a second time: a dimmed Chip does nothing.
+fn offers(chips: &[Chip], action: &str) -> bool {
+    chips
+        .iter()
+        .any(|chip| chip.action == action && chip.tone != Tone::Dimmed)
 }
 
 /// Marked as a paste when the child asked to be told a paste from typing. The
@@ -8981,11 +9025,11 @@ fn paste_bytes(text: &str, paste: keys::Paste) -> Vec<u8> {
     }
 }
 
-/// Queues a prompt for the AI pane, starting a session first when none is
-/// running. Shared by a submitted review and a confirmed story (ADR 0006):
-/// both hand off through the same pane, so both wait behind the same
+/// Queues a prompt for the AI pane, submitted or left for the user to send,
+/// starting a session first when none is running. Every hand-off goes through
+/// the one pane (ADR 0006), so all of them wait behind the same
 /// `pending_prompt` for `AiSpoke` when the CLI has not printed anything yet.
-pub(crate) fn queue_for_ai(next: &mut State, prompt: String) -> Vec<Effect> {
+pub(crate) fn queue_for_ai(next: &mut State, enter: Enter, prompt: String) -> Vec<Effect> {
     let mut effects = Vec::new();
     if !next.ai_running {
         effects.push(Effect::SpawnAi {
@@ -8996,10 +9040,10 @@ pub(crate) fn queue_for_ai(next: &mut State, prompt: String) -> Vec<Effect> {
     if next.ai_spoken {
         effects.push(Effect::SendKeys {
             pane: Pane::Ai,
-            bytes: injection(&prompt, next.ai_paste),
+            bytes: injection(&prompt, next.ai_paste, enter),
         });
     } else {
-        next.pending_prompt = Some(prompt);
+        next.pending_prompt = Some((prompt, enter));
     }
     effects
 }
@@ -9043,7 +9087,11 @@ fn submit(next: &mut State) -> Vec<Effect> {
         path: dir.join(&file),
         contents: review::artifact(&comments, verdict),
     }];
-    effects.extend(queue_for_ai(next, review::prompt(&comments, &named)));
+    effects.extend(queue_for_ai(
+        next,
+        Enter::Pressed,
+        review::prompt(&comments, &named),
+    ));
 
     next.reviews.insert(number);
     while next.reviews.len() > next.retention_limit {
@@ -11712,20 +11760,30 @@ mod tests {
     /// cannot be told a paste from typing gets the text bare — the same contract
     /// as an ordinary paste — so its newlines are its own to interpret.
     #[test]
-    fn the_review_injection_clears_pastes_and_submits_in_one_write() {
+    fn an_injection_is_one_write_and_only_a_pressed_one_clears_and_submits() {
         assert_eq!(
-            injection("one\ntwo", keys::Paste::Bracketed),
+            injection("one\ntwo", keys::Paste::Bracketed, Enter::Pressed),
             b"\x15\x1b[200~one\ntwo\x1b[201~\r".to_vec()
         );
         assert_eq!(
-            injection("one\ntwo", keys::Paste::Bare),
+            injection("one\ntwo", keys::Paste::Bare, Enter::Pressed),
             b"\x15one\ntwo\r".to_vec()
         );
         // A review quoting a filename that carries the end marker cannot close
         // its own bracketing and hand the rest to the child as keys.
         assert_eq!(
-            injection("safe\x1b[201~rm -rf /", keys::Paste::Bracketed),
+            injection(
+                "safe\x1b[201~rm -rf /",
+                keys::Paste::Bracketed,
+                Enter::Pressed
+            ),
             b"\x15\x1b[200~saferm -rf /\x1b[201~\r".to_vec()
+        );
+        // Withheld, the paste is all of it: nothing the user had typed is
+        // cleared, and nothing is sent on their behalf.
+        assert_eq!(
+            injection("one\ntwo", keys::Paste::Bracketed, Enter::Withheld),
+            b"\x1b[200~one\ntwo\x1b[201~".to_vec()
         );
     }
 
