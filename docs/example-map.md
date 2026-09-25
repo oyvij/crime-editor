@@ -3389,8 +3389,10 @@ opens like the Variables. Each run replaces it. The adapter's errors are shown a
 Snippet says so and can be cancelled where the adapter supports `cancel`. The `run` Chip is dimmed
 while Running, and Enter then sends nothing.
 **R49.5** Snippets that were run persist per project. `Up` and `Down` recall them only while the
-Snippet is empty, and otherwise move the cursor as always. The session ending closes the Evaluator
-and keeps its Snippet in the history. Copying is the ordinary Selection.
+Snippet is empty, and otherwise move the cursor as always. `Escape` in normal mode, once nothing
+is left for it to cancel, `:q` and the `close` Chip close the Evaluator — `:q` never the file behind
+it — and so
+does the session ending; each keeps its Snippet in the history. Copying is the ordinary Selection.
 
 ### F50 — Asking the AI about a Paused program
 

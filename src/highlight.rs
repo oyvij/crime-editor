@@ -96,7 +96,7 @@ pub fn highlight(name: &str, source: &str) -> Vec<Vec<Token>> {
     lines
 }
 
-fn plain(source: &str) -> Vec<Vec<Token>> {
+pub fn plain(source: &str) -> Vec<Vec<Token>> {
     source
         .split('\n')
         .map(|line| match line.is_empty() {

@@ -238,7 +238,7 @@ Feature: The Evaluator
       When I press "Enter"
       Then the Debug adapter was sent no "evaluate" request
 
-  Rule: Snippets are recalled per project, and the Evaluator closes with the session
+  Rule: Snippets are recalled per project, and the Evaluator closes on Escape, :q, its Close Chip and with the session
 
     Scenario: Up on an empty Snippet recalls the last one run
       Given the project ".varde/state.json" records the Snippets:
@@ -287,6 +287,34 @@ Feature: The Evaluator
       When the Debug adapter sends the event "terminated"
       Then the Evaluator is not open
       And the project ".varde/state.json" records the Snippet "count * 3"
+
+    Scenario: Escape in normal mode closes the Evaluator, keeping its Snippet
+      Given the Evaluator is open holding "count * 3"
+      And the Evaluator has focus
+      When I press "Escape"
+      Then the Evaluator is not open
+      And the editor pane has focus
+      And the project ".varde/state.json" records the Snippet "count * 3"
+
+    Scenario: Escape while inserting only leaves insert mode
+      Given the Evaluator is open holding "count * 3"
+      And the Evaluator has focus
+      And I press "i"
+      When I press "Escape"
+      Then the Evaluator is open holding "count * 3"
+
+    Scenario: The Close Chip closes the Evaluator, keeping its Snippet
+      Given the Evaluator is open holding "count * 3"
+      When I click the Evaluator's "close" Chip
+      Then the Evaluator is not open
+      And the project ".varde/state.json" records the Snippet "count * 3"
+
+    Scenario: :q closes the Evaluator and not the file behind it
+      Given the Evaluator is open holding "count * 3"
+      And the Evaluator has focus
+      When I run ":q"
+      Then the Evaluator is not open
+      And the current buffer is "src/main.rs"
 
     Scenario: A working Snippet is copied with the ordinary Selection
       Given the Evaluator is open holding "orders.len()"
