@@ -13,7 +13,7 @@
 //! the wrong pane, a modal not claiming what belonged to it, or a modifier
 //! discarded on the way in.
 
-use crate::{tree, Direction, Event, Modal, Pane, Resolution, Selection, State, Tap, View};
+use crate::{debug, tree, Direction, Event, Modal, Pane, Resolution, Selection, State, Tap, View};
 use terminput::{
     Encoding, Event as Input, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
 };
@@ -72,7 +72,7 @@ pub struct Drafts {
 /// surface does not. It lives
 /// here rather than in the renderer so a test can hold it to the bindings
 /// above; `ui` only draws it, filtered to the view on screen.
-pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
+pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
     ("i a o O x", "edit", &[View::Edit]),
     ("w b e", "word", &[View::Edit]),
     ("gg G", "file ends", &[View::Edit]),
@@ -127,7 +127,9 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
     ),
     ("* gr", "project", &[View::Edit]),
     ("u", "undo", &[View::Edit]),
-    ("K", "what is this", &[View::Edit]),
+    // The second `K` is on the row the first is on: it is the same question
+    // read further, and a key nobody can discover is a key nobody uses.
+    ("K K", "what is this / read it", &[View::Edit]),
     ("gd", "definition", &[View::Edit]),
     // The fifteenth and sixteenth Edit rows, which is the last two a 26-row
     // terminal has room for, and the two on this table Varde says nowhere else.
@@ -192,6 +194,11 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
     ),
     (":dim", "darker editor", &[View::Edit]),
     (":minimap", "mirror of the file", &[View::Edit]),
+    // The key alone where the chord cannot follow: a Space chord needs Edit
+    // view's buffer, so the read-only surfaces get a row naming only the
+    // spelling that works there — split by view for the reason
+    // `C-p C-n gp gn` is, and the chord's own row is in [`CHORDS`].
+    ("C-F5", "restart debugging", &[View::Review, View::Story]),
     // Said again where the reader is already looking, which is what puts them
     // here rather than above the fold: the palette draws `(f) Find`, and the
     // `buffer-diverged` and `unsaved-changes` notices name `D`, `:w`, `:e` and
@@ -223,6 +230,126 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 43] = [
     ),
 ];
 
+/// What a tapped Space can be followed by whatever else is going on — the
+/// chords that need no Debug session. With [`DEBUG_CHORDS`] it is the one list
+/// both the Chord hint and the cheatsheet draw, so the two cannot disagree:
+/// every row spells its chord, and the hint reads the key off that spelling —
+/// beside which a row may name the other ways to the same thing. Space is
+/// shared — other features may claim other letters later.
+pub const CHORDS: [(&str, &str, &[View]); 4] = [
+    ("␣b", "breakpoint", &[View::Edit]),
+    // The Breakpoint key's shifted letter, as `D` is the list's `d`.
+    ("␣B", "breakpoint properties", &[View::Edit]),
+    // What a click on the line's ▶ offers, from the keyboard.
+    ("␣x", "run / debug this line", &[View::Edit]),
+    // Here rather than in [`DEBUG_CHORDS`] because it is the one debug chord
+    // that answers with no session: rerunning the last one is what it is for.
+    // Both spellings on one row, the way `C-p C-n gp gn` carries two: the key
+    // and the chord are one gesture, and a row apiece would say "restart"
+    // twice in a box that truncates from the bottom. [`chord_rows`] reads the
+    // hint's letter off the token spelled with the Space glyph, so a row may
+    // name the other ways to the same thing.
+    ("C-F5 ␣r", "restart debugging", &[View::Edit]),
+];
+
+/// The chords a Debug session answers, offered only while one exists for the
+/// reason [`DEBUG_KEYS`] are listed only while one does: with no session they
+/// do nothing, and a hint offering them would teach keys that are not there.
+pub const DEBUG_CHORDS: [(&str, &str, &[View]); 9] = [
+    ("␣n", "step over", &[View::Edit]),
+    ("␣i", "step into", &[View::Edit]),
+    ("␣o", "step out", &[View::Edit]),
+    ("␣c", "continue / pause", &[View::Edit]),
+    ("␣q", "stop debugging", &[View::Edit]),
+    ("␣s", "switch the Strip's group", &[View::Edit]),
+    ("␣h", "hide / show the Program output", &[View::Edit]),
+    // Both spellings on one row, the way restart carries two: Ctrl+Enter runs
+    // what the chord opens, and `chord_rows` reads the hint's letter off the
+    // token spelled with the Space glyph.
+    ("␣e C-Enter", "evaluate", &[View::Edit]),
+    ("␣a", "ask the AI about the pause", &[View::Edit]),
+];
+
+/// The chords the Evaluator's window answers, offered only while one is open
+/// for the reason the debug chords are offered only while a session exists: a
+/// hint offering a window that is not there teaches a key that does nothing.
+///
+/// Both open a mode, which is what makes moving and resizing a window
+/// reachable with no modifier at all — the rule every binding in Varde is
+/// held to, and the one a window dragged by Alt-arrow would quietly fail for
+/// whoever has not configured their terminal. What the letters do inside the
+/// mode is `h j k l` and the arrows, for the reason Stepping mode's letters
+/// are the chords' own: the gesture is the editor's.
+pub const EVALUATOR_CHORDS: [(&str, &str, &[View]); 2] = [
+    ("␣m", "move the Evaluator (hjkl)", &[View::Edit]),
+    ("␣z", "resize the Evaluator (hjkl)", &[View::Edit]),
+];
+
+/// The keys a Debug session reserves, listed while one exists and absent while
+/// none does — which is when the hosted panes have them back.
+pub const DEBUG_KEYS: [(&str, &str, &[View]); 6] = [
+    ("F9", "continue / pause", &[View::Edit]),
+    ("F8", "step over", &[View::Edit]),
+    ("F7", "step into", &[View::Edit]),
+    ("S-F8", "step out", &[View::Edit]),
+    ("C-F8", "toggle breakpoint", &[View::Edit]),
+    ("C-F2", "stop debugging", &[View::Edit]),
+];
+
+/// The chords on offer in `state`: the ones that need a Debug session, only
+/// while one exists. One answer, read by the Chord hint, by the cheatsheet and
+/// through them by the mouse's hit-test, so the three cannot disagree about
+/// what a waiting Space is waiting for.
+///
+/// The debug chords first, for the reason [`DEBUG_KEYS`] come first in the
+/// cheatsheet: while a session exists they are the keys being reached for.
+fn chords(
+    state: &State,
+) -> impl Iterator<Item = &'static (&'static str, &'static str, &'static [View])> {
+    let debug: &'static [(&str, &str, &[View])] = match state.debug {
+        Some(_) => &DEBUG_CHORDS,
+        None => &[],
+    };
+    let evaluator: &'static [(&str, &str, &[View])] = match arranging_offered(state) {
+        true => &EVALUATOR_CHORDS,
+        false => &[],
+    };
+    debug.iter().chain(evaluator.iter()).chain(CHORDS.iter())
+}
+
+/// The cheatsheet as drawn: the debug keys while a session exists — first,
+/// because while one does they are the keys being reached for — then
+/// [`CHEATSHEET`] and the chords.
+pub fn cheatsheet(
+    state: &State,
+) -> impl Iterator<Item = &'static (&'static str, &'static str, &'static [View])> {
+    let debug: &'static [(&str, &str, &[View])] = match state.debug {
+        Some(_) => &DEBUG_KEYS,
+        None => &[],
+    };
+    debug.iter().chain(CHEATSHEET.iter()).chain(chords(state))
+}
+
+/// The Chord hint as drawn, each row carrying the key it offers or nothing —
+/// the shape [`crate::palette_rows`] has, so the mouse hit-tests these same
+/// rows and a click is the keystroke.
+pub fn chord_rows(state: &State) -> Vec<(Option<char>, String)> {
+    let mut rows: Vec<(Option<char>, String)> = chords(state)
+        .filter_map(|(keys, what, _)| {
+            // The token spelled with the Space glyph, since a row may name the
+            // key that does the same thing beside its chord.
+            let key = keys
+                .split_whitespace()
+                .find_map(|token| token.strip_prefix('\u{2423}'))?
+                .chars()
+                .next()?;
+            Some((Some(key), format!("   ({key}) {what}")))
+        })
+        .collect();
+    rows.push((None, "   Esc  cancel".to_string()));
+    rows
+}
+
 /// The keys Tools answers and the word the box says for each — here,
 /// beside the router that answers them, for the reason [`CHEATSHEET`] is here:
 /// `ui` may only draw the contract, so a test can hold the two together. They
@@ -245,6 +372,10 @@ pub const TOOL_LIST_KEYS: [(&str, &str); 3] =
 /// is what a picker is for, and Escape is how every box in Varde is left — both
 /// reachable with no modifier (R31.11).
 pub const BRANCH_LIST_KEYS: [(&str, &str); 2] = [("Enter", "story this branch"), ("Esc", "close")];
+
+/// The keys the launch list answers and the word its box says for each, for
+/// the reason [`BRANCH_LIST_KEYS`] is here.
+pub const LAUNCH_LIST_KEYS: [(&str, &str); 2] = [("Enter", "start"), ("Esc", "close")];
 
 /// What the picker's box says about being typed into, here rather than in `ui`
 /// for the reason [`BRANCH_LIST_KEYS`] is: `ui` may only draw the contract, so
@@ -317,10 +448,153 @@ pub fn on_key_event(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: 
         return events;
     }
     let event = shifted(event);
-    if let Some(events) = claimed_everywhere(state, event) {
-        return events;
+    // Stepping mode, ahead of every arm below: the letters a chord just used
+    // act without their Space, and any other key leaves the mode and then does
+    // what it always does, so nobody is ever trapped in it. Leaving is an event
+    // of its own queued in front of the key's own, because only `update` may
+    // write the flag.
+    let leaving = match state.stepping {
+        false => None,
+        true => match stepping_key(event) {
+            Some(stepped) => return vec![stepped],
+            None => Some(Event::LeaveStepping),
+        },
+    };
+    // The Evaluator's arrange mode, on Stepping mode's own terms and for its
+    // reason: the letters act without their Space while somebody is placing
+    // the window, and any other key leaves the mode and then does what it
+    // always does.
+    let leaving_arrange = match state.arranging {
+        None => None,
+        Some(how) => match arranging_key(event, how) {
+            Some(arranged) => return vec![arranged],
+            None => Some(Event::LeaveArranging),
+        },
+    };
+    let mut events = match claimed_everywhere(state, event) {
+        Some(events) => events,
+        None => modal_key(state, drafts, event),
+    };
+    for leave in leaving_arrange.into_iter().chain(leaving) {
+        events.insert(0, leave);
     }
-    modal_key(state, drafts, event)
+    events
+}
+
+/// What a key does in Stepping mode, or nothing for one the mode does not
+/// claim — which is every key but the four [`stepping_letter`] names.
+///
+/// The `every_key` sweep cannot drive this mode, and the omission is a
+/// decision rather than an oversight: in Stepping mode *every* key answers,
+/// because a key the mode does not claim answers by leaving it, so a sweep
+/// driven here would hold all sixty-four modifier combinations of every code
+/// to a cheatsheet row. What the box promises about these four is their
+/// chords, `DEBUG_CHORDS`, which the sweep does hold; that they do the same
+/// thing without the Space is
+/// `stepping_mode_claims_its_letters_and_hands_every_other_key_back`.
+fn stepping_key(event: KeyEvent) -> Option<Event> {
+    if !event.modifiers.is_empty() {
+        return None;
+    }
+    stepping_letter(typed(event)?)
+}
+
+/// What a chord's second key does, given where the keyboard is: the one table
+/// the hint's rows are answered from, so the letters the Chord hint offers and
+/// the letters something happens for cannot part ways. Here rather than in
+/// `update` because it is a key being interpreted, and a key nobody bound
+/// answers with nothing.
+pub fn chord(state: &State, key: char) -> Option<Event> {
+    match key {
+        // The line the caret is on, since the chord is pressed while reading
+        // it. No buffer is line 0, which owns no Breakpoint.
+        'b' => Some(Event::ToggleBreakpoint(
+            crate::current_buffer(state).map_or(0, |buffer| buffer.line),
+        )),
+        'B' => Some(Event::EditBreakpoint(
+            crate::current_buffer(state).map_or(0, |buffer| buffer.line),
+        )),
+        'x' => Some(Event::OfferRun(
+            crate::current_buffer(state).map_or(0, |buffer| buffer.line),
+        )),
+        'q' => Some(Event::DebugStop),
+        'e' if state.debug.is_some() => Some(Event::OpenEvaluator),
+        // The two that open a mode rather than acting: the window is moved
+        // and resized a cell at a time, and a chord per cell is a chord too
+        // many — Stepping mode's reason, one window over.
+        'm' if arranging_offered(state) => {
+            Some(Event::ArrangeEvaluator(crate::debug::Arrange::Moving))
+        }
+        'z' if arranging_offered(state) => {
+            Some(Event::ArrangeEvaluator(crate::debug::Arrange::Sizing))
+        }
+        'r' => Some(Event::DebugRestart),
+        // The Group tab from the keyboard: whichever group the Strip is not
+        // showing, since there are two and the gesture is "the other one".
+        // Hiding the Program output and showing it again are one gesture, so
+        // one letter: what pressing it does is whichever the reader can see.
+        'h' if state.debug.is_some() => Some(Event::ToggleOutput),
+        'a' if state.debug.is_some() => Some(Event::AskAboutPause),
+        's' if state.debug.is_some() => Some(Event::ShowGroup(match state.strip {
+            crate::layout::Group::Shells => crate::layout::Group::Debug,
+            crate::layout::Group::Debug => crate::layout::Group::Shells,
+        })),
+        letter => stepping_letter(letter),
+    }
+}
+
+/// Whether the two chords that arrange the Evaluator's window are on offer:
+/// its window is up and the keyboard is in it. One answer for the hint, the
+/// cheatsheet and the router, for the reason the debug chords have one — a
+/// key the hint names and nothing answers is a key that lies. Not merely open:
+/// with the keyboard back in the editor the reader is editing the file, and
+/// `m` there is the motion it always was.
+fn arranging_offered(state: &State) -> bool {
+    state.evaluator.is_some() && state.focus == Pane::Evaluator
+}
+
+/// What a key does while the Evaluator's window is being arranged, or nothing
+/// for one the mode does not claim — which is what leaves it, exactly as
+/// Stepping mode is left, so nobody is ever trapped in a mode.
+///
+/// `h j k l` and the arrows beside them: moving a window and moving a caret
+/// are the same gesture, and every motion in Varde is reachable without a
+/// modifier. Resizing reads them the same way round — `l` widens and `j`
+/// heightens — because the edge being moved is the bottom right one.
+///
+/// The `every_key` sweep cannot drive this mode, and the omission is the
+/// decision [`stepping_key`] documents: every key answers here, because one
+/// the mode does not claim answers by leaving it. What the cheatsheet
+/// promises is the two chords that open it, [`EVALUATOR_CHORDS`], which the
+/// sweep does hold, and the letters are named in the row beside them.
+fn arranging_key(event: KeyEvent, how: crate::debug::Arrange) -> Option<Event> {
+    if !event.modifiers.is_empty() {
+        return None;
+    }
+    let direction = arrow(event.code).or_else(|| match typed(event) {
+        Some('h') => Some(Direction::Left),
+        Some('j') => Some(Direction::Down),
+        Some('k') => Some(Direction::Up),
+        Some('l') => Some(Direction::Right),
+        _ => None,
+    })?;
+    Some(match how {
+        crate::debug::Arrange::Moving => Event::MoveEvaluator(direction),
+        crate::debug::Arrange::Sizing => Event::ResizeEvaluator(direction),
+    })
+}
+
+/// The four letters Stepping mode is for, which are also four of the chords.
+/// `q` is not among them, though its chord is: stopping is not a step, and a
+/// session ended by a stray letter is one nothing can bring back.
+fn stepping_letter(key: char) -> Option<Event> {
+    match key {
+        'n' => Some(Event::DebugStep(crate::debug::Step::Over)),
+        'i' => Some(Event::DebugStep(crate::debug::Step::Into)),
+        'o' => Some(Event::DebugStep(crate::debug::Step::Out)),
+        'c' => Some(Event::DebugResume),
+        _ => None,
+    }
 }
 
 /// The keys claimed before the hosted-pane split, so they mean the same thing
@@ -349,8 +623,39 @@ fn reserved(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) -> 
     if event.modifiers.contains(KeyModifiers::CTRL) && event.code == KeyCode::Char(' ') {
         return Some(vec![Event::FallbackBinding]);
     }
+    // JetBrains' debugger keys, from every pane — a shell's included, since
+    // stepping happens in bursts from wherever the keyboard is. Reserved only
+    // while a session exists: with none, the child in a hosted pane gets them.
+    if state.debug.is_some() {
+        let ctrl = event.modifiers.contains(KeyModifiers::CTRL);
+        let shift = event.modifiers.contains(KeyModifiers::SHIFT);
+        let stepped = |step| Some(vec![Event::DebugStep(step)]);
+        match event.code {
+            KeyCode::F(9) if !ctrl => return Some(vec![Event::DebugResume]),
+            KeyCode::F(2) if ctrl => return Some(vec![Event::DebugStop]),
+            KeyCode::F(8) if ctrl => {
+                let line = crate::current_buffer(state).map_or(0, |buffer| buffer.line);
+                return Some(vec![Event::ToggleBreakpoint(line)]);
+            }
+            // Shift is a gesture of its own here, which is why `label` spells
+            // it: stepping out is the same key as stepping over, held.
+            KeyCode::F(8) if !ctrl && shift => return stepped(crate::debug::Step::Out),
+            KeyCode::F(8) if !ctrl => return stepped(crate::debug::Step::Over),
+            KeyCode::F(7) if !ctrl => return stepped(crate::debug::Step::Into),
+            _ => {}
+        }
+    }
     if child_owns_keys(state, drafts) {
-        return Some(to_child(state, event, at_ms));
+        let mut events = to_child(state, event, at_ms);
+        // A child owns its letters, so a key arriving here leaves Stepping
+        // mode rather than being claimed by it. The mode is only enterable
+        // from a pane Varde interprets, so this is the one way out of it once
+        // a click has put the keyboard in a shell — without it the mode, and
+        // the title saying so, would outlive every key that could end it.
+        if state.stepping {
+            events.insert(0, Event::LeaveStepping);
+        }
+        return Some(events);
     }
     None
 }
@@ -362,6 +667,12 @@ fn claimed_everywhere(state: &State, event: KeyEvent) -> Option<Vec<Event>> {
         match event.code {
             KeyCode::Char('q') => return Some(vec![Event::Quit]),
             KeyCode::Char('f') => return Some(vec![Event::OpenSearch]),
+            // The one debug key that answers with no session — rerunning the
+            // last one is what it is for. So it is claimed here rather than
+            // beside the reserved F-keys above, and a hosted pane's child
+            // keeps it whether or not a session exists, and every view
+            // answers it the way `C-q` and `C-f` above are answered anywhere.
+            KeyCode::F(5) => return Some(vec![Event::DebugRestart]),
             _ => {}
         }
     }
@@ -398,6 +709,18 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
                 _ => vec![],
             },
         },
+        // Tools' shape, with Enter as what the list is for.
+        Modal::Launches { row } => match event.code {
+            KeyCode::Esc => vec![Event::Cancel],
+            KeyCode::Up => vec![Event::MoveLaunchRow(Direction::Up)],
+            KeyCode::Down => vec![Event::MoveLaunchRow(Direction::Down)],
+            KeyCode::Enter => crate::debug::launches(state)
+                .get(*row)
+                .map(|name| Event::StartLaunch(name.to_string()))
+                .into_iter()
+                .collect(),
+            _ => vec![],
+        },
         // A list that is also typed into: four hundred branches is a modal
         // nobody can walk, so a letter narrows it rather than being swallowed.
         // The text is the modal's, not a draft's — unlike the tree's filter box,
@@ -418,8 +741,27 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
                 None => vec![],
             },
         },
+        // Every key takes the hint down; a letter is also the chord's second
+        // key, and one nobody bound does nothing else. Command on a letter is
+        // Command's gesture rather than the chord's, so it takes the hint down
+        // like any other key: `D-c` is copy everywhere else in Varde, and
+        // reading it as the `c` chord would continue a paused program because
+        // somebody reached for the clipboard.
+        Modal::Chord => {
+            match typed(event).filter(|_| !event.modifiers.contains(KeyModifiers::SUPER)) {
+                Some(c) => vec![Event::Key(c)],
+                None => vec![Event::Cancel],
+            }
+        }
         Modal::Comment => comment_picker(drafts, event),
-        Modal::NameBox { .. } => name_box(drafts, event),
+        // The same box, three uses: a file's name, a Variables row's new
+        // value and a new Watch. One routing arm because the typing is
+        // identical — Enter is where they part, and that is `update`'s to
+        // tell from the modal it is in.
+        Modal::NameBox { .. } | Modal::SetValue | Modal::NewWatch | Modal::ExceptionClass => {
+            name_box(drafts, event)
+        }
+        Modal::Breakpoint { field, draft, .. } => breakpoint_box(*field, draft, event),
         Modal::Candidates(_) => candidate_list(state, drafts, event),
         // Two keys, and everything else goes on to the buffer: typing at a tab
         // stop is ordinary typing, so this passes keys through for the same
@@ -441,7 +783,18 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
         | Modal::StepDetail
         | Modal::ConfirmStory { .. }
         | Modal::Prediction { .. }
-        | Modal::Restart => answered(&state.modal, event),
+        | Modal::Restart
+        | Modal::RunMark { .. } => answered(&state.modal, event),
+        // The keyboard in a Hover reads it and nothing else: a letter that
+        // reached the buffer would edit code the box is covering.
+        Modal::None if state.hover.as_ref().is_some_and(|hover| hover.focused) => {
+            match (event.code, typed(event)) {
+                (KeyCode::Esc, _) => vec![Event::Cancel],
+                (_, Some('j')) => vec![Event::ScrollHover(Direction::Down)],
+                (_, Some('k')) => vec![Event::ScrollHover(Direction::Up)],
+                _ => vec![],
+            }
+        }
         Modal::None => routed(state, drafts, event),
     }
 }
@@ -487,10 +840,17 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         Modal::ConfirmStory { .. } => yes_no(Event::ConfirmStory, event),
         Modal::Prediction { .. } => prediction_answer(event),
         Modal::Restart => yes_no(Event::Restart, event),
+        Modal::RunMark { .. } => run_mark_answer(event),
         Modal::None
         | Modal::NameBox { .. }
+        | Modal::SetValue
+        | Modal::NewWatch
+        | Modal::ExceptionClass
+        | Modal::Breakpoint { .. }
         | Modal::Palette
+        | Modal::Chord
         | Modal::Tools { .. }
+        | Modal::Launches { .. }
         | Modal::Branches { .. }
         | Modal::Comment
         | Modal::Candidates(_)
@@ -538,6 +898,18 @@ fn step_detail_answer(event: KeyEvent) -> Vec<Event> {
         KeyCode::Esc => vec![Event::Cancel],
         _ => match typed(event) {
             Some('D') => vec![Event::Key('D')],
+            _ => vec![],
+        },
+    }
+}
+
+/// The two Chips' keys, and Escape for neither.
+fn run_mark_answer(event: KeyEvent) -> Vec<Event> {
+    match event.code {
+        KeyCode::Esc => vec![Event::Cancel],
+        _ => match typed(event) {
+            Some('r') => vec![Event::ChooseRun(crate::run::RUN)],
+            Some('d') => vec![Event::ChooseRun(crate::run::DEBUG)],
             _ => vec![],
         },
     }
@@ -623,7 +995,18 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
             // With no session the AI pane is an input box asking which CLI to
             // start, so it is not hosting anything yet.
             Pane::Ai => state.ai_running,
-            Pane::Tree | Pane::Editor | Pane::Risk | Pane::Buffers | Pane::History => false,
+            // And with no program started the Debug group shows the Variables
+            // alone, so there is no child there to type at either.
+            Pane::Output => state.output_running,
+            Pane::Tree
+            | Pane::Editor
+            | Pane::Evaluator
+            | Pane::Risk
+            | Pane::Buffers
+            | Pane::History
+            | Pane::Breakpoints
+            | Pane::Frames
+            | Pane::Variables => false,
         }
 }
 
@@ -982,6 +1365,43 @@ fn comment_kind(key: char) -> Option<&'static str> {
     }
 }
 
+/// The Breakpoint box: Tab and the arrows walk its rows, Space flips the
+/// switch on the last one, and every other row is typed into. Its text is the
+/// core's rather than a `Drafts` field, because there are three of it.
+fn breakpoint_box(field: debug::Field, draft: &debug::Properties, event: KeyEvent) -> Vec<Event> {
+    let walk = |by: usize| {
+        let at = debug::FIELDS
+            .iter()
+            .position(|row| *row == field)
+            .unwrap_or(0);
+        debug::FIELDS[(at + by) % debug::FIELDS.len()]
+    };
+    let back = event.modifiers.contains(KeyModifiers::SHIFT);
+    match event.code {
+        KeyCode::Esc => vec![Event::Cancel],
+        KeyCode::Enter => vec![Event::ConfirmBreakpoint],
+        KeyCode::Tab if back => vec![Event::BreakpointField(walk(debug::FIELDS.len() - 1))],
+        KeyCode::Up => vec![Event::BreakpointField(walk(debug::FIELDS.len() - 1))],
+        KeyCode::Tab | KeyCode::Down => vec![Event::BreakpointField(walk(1))],
+        _ if field == debug::Field::Suspend => match typed(event) {
+            Some(' ') => vec![Event::SwitchSuspend],
+            _ => vec![],
+        },
+        KeyCode::Backspace => {
+            let mut text = debug::field_text(draft, field).to_string();
+            text.pop();
+            vec![Event::BreakpointDraft(text)]
+        }
+        _ => match typed(event) {
+            Some(c) => vec![Event::BreakpointDraft(format!(
+                "{}{c}",
+                debug::field_text(draft, field)
+            ))],
+            None => vec![],
+        },
+    }
+}
+
 fn name_box(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
     match event.code {
         KeyCode::Esc => {
@@ -1259,10 +1679,18 @@ fn collecting(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Option<Vec
 fn claims_colon(state: &State) -> bool {
     match state.focus {
         Pane::Tree => true,
-        Pane::Editor => !crate::editor_inserting(state),
+        // The Snippet is a buffer being typed into on the same terms, so the
+        // two answer alike — `editor_inserting` reads whichever of them the
+        // keyboard is in.
+        Pane::Editor | Pane::Evaluator => !crate::editor_inserting(state),
         // Varde's own panes, so the colon is Varde's.
-        Pane::Risk | Pane::Buffers | Pane::History => true,
-        Pane::Ai | Pane::Terminal => false,
+        Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Variables => true,
+        Pane::Ai | Pane::Terminal | Pane::Output => false,
     }
 }
 
@@ -1274,8 +1702,10 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
         return Some(vec![]);
     }
     Some(match (state.focus, shift) {
-        (Pane::Editor, false) => vec![Event::EditorArrow(direction)],
-        (Pane::Editor, true) => vec![Event::EditorExtend(direction)],
+        // The Snippet is edited with the editor's own gestures, so its arrows
+        // are the editor's arrows.
+        (Pane::Editor | Pane::Evaluator, false) => vec![Event::EditorArrow(direction)],
+        (Pane::Editor | Pane::Evaluator, true) => vec![Event::EditorExtend(direction)],
         (Pane::Tree, false) => list_arrow(direction),
         (Pane::Tree, true) => vec![],
         // The Risk list is a list, so the arrows do to it exactly what they do
@@ -1292,8 +1722,14 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
         // rows have one action, so Right steps into the icon the mouse clicks.
         (Pane::History, false) => list_arrow(direction),
         (Pane::History, true) => vec![],
+        // The fourth, and its rows have one action too. The Variables are a
+        // list as well, in the Strip rather than the corner: the arrows reach
+        // a tree the same way they reach a flat list, because what they move
+        // is the selection either way.
+        (Pane::Breakpoints | Pane::Frames | Pane::Variables, false) => list_arrow(direction),
+        (Pane::Breakpoints | Pane::Frames | Pane::Variables, true) => vec![],
         // A hosted pane's arrows went to its child; see below.
-        (Pane::Ai | Pane::Terminal, _) => vec![],
+        (Pane::Ai | Pane::Terminal | Pane::Output, _) => vec![],
     })
 }
 
@@ -1308,7 +1744,17 @@ fn list_arrow(direction: Direction) -> Vec<Event> {
 
 fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
     match state.focus {
-        Pane::Editor => editor_pane_key(event),
+        // Ctrl+Enter runs the Snippet wherever the terminal reports it: an
+        // alias for the normal-mode Enter and the Run Chip, never the only way
+        // there, so a terminal that swallows it costs nothing. In the
+        // Evaluator alone — everywhere else Enter means what it always meant,
+        // and a modifier no arm inspects is no gesture of its own.
+        Pane::Evaluator
+            if event.code == KeyCode::Enter && event.modifiers.contains(KeyModifiers::CTRL) =>
+        {
+            vec![Event::RunSnippet]
+        }
+        Pane::Editor | Pane::Evaluator => editor_pane_key(event),
         Pane::Tree => tree_pane_key(event),
         // The corner's panes answer Enter — go to the code behind the figure,
         // go to that buffer — and hand their letters to `update`, which is
@@ -1318,13 +1764,18 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         // where they differ. The panes' routing lives here rather than at the
         // edge for the reason every other pane's does: what a key means is a
         // decision, and `main.rs` has no test.
-        Pane::Risk | Pane::Buffers | Pane::History => list_pane_key(event),
+        Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Variables => list_pane_key(event),
         // A hosted pane never arrives here: with nothing of Varde's own
         // collecting, `child_owns_keys` sent the key to `to_child`, and with
         // something collecting one of the returns above took it. Every pane is
         // named rather than caught by a `_`, so a new one is a compiler
         // error rather than a pane whose keys go nowhere.
-        Pane::Ai | Pane::Terminal => vec![],
+        Pane::Ai | Pane::Terminal | Pane::Output => vec![],
     }
 }
 
@@ -1583,6 +2034,48 @@ mod tests {
             focus: pane,
             ..State::default()
         }
+    }
+
+    /// Tab and the arrows walk the Breakpoint box's rows and wrap; a key is
+    /// typed onto the row it is on, Space included — except on the switch,
+    /// where Space is the one key that does anything.
+    #[test]
+    fn the_breakpoint_box_types_into_its_rows_and_flips_its_switch() {
+        use crate::debug::{Field, Properties};
+        let draft = Properties {
+            condition: "a".to_string(),
+            ..Properties::default()
+        };
+        let key = |field, event| super::breakpoint_box(field, &draft, event);
+        let plain = KeyEvent::new;
+        assert_eq!(
+            key(Field::Condition, plain(KeyCode::Char(' '))),
+            vec![Event::BreakpointDraft("a ".to_string())]
+        );
+        assert_eq!(
+            key(Field::Condition, plain(KeyCode::Backspace)),
+            vec![Event::BreakpointDraft(String::new())]
+        );
+        assert_eq!(
+            key(Field::Suspend, plain(KeyCode::Char(' '))),
+            vec![Event::SwitchSuspend]
+        );
+        assert_eq!(key(Field::Suspend, plain(KeyCode::Char('x'))), vec![]);
+        assert_eq!(
+            key(Field::Suspend, plain(KeyCode::Tab)),
+            vec![Event::BreakpointField(Field::Condition)]
+        );
+        assert_eq!(
+            key(Field::Condition, plain(KeyCode::Up)),
+            vec![Event::BreakpointField(Field::Suspend)]
+        );
+        assert_eq!(
+            key(
+                Field::HitCount,
+                plain(KeyCode::Tab).modifiers(KeyModifiers::SHIFT)
+            ),
+            vec![Event::BreakpointField(Field::Condition)]
+        );
     }
 
     #[test]
@@ -1955,6 +2448,38 @@ mod tests {
         );
     }
 
+    /// With the keyboard in a Hover, `j`/`k` scroll it, Escape
+    /// leaves it, and every other key is swallowed rather than typed into the
+    /// code the box covers.
+    #[test]
+    fn the_keyboard_in_a_hover_scrolls_it_and_nothing_else() {
+        let state = State {
+            hover: Some(crate::lsp::Hover {
+                lines: Vec::new(),
+                from: 2,
+                asked: crate::lsp::Ask {
+                    path: std::path::PathBuf::from("/w/one.rs"),
+                    place: crate::Place { line: 1, column: 1 },
+                    revision: 0,
+                    about: crate::lsp::About::Hover,
+                },
+                first: 0,
+                focused: true,
+                value: None,
+            }),
+            ..editing()
+        };
+        let down = vec![Event::ScrollHover(Direction::Down)];
+        let up = vec![Event::ScrollHover(Direction::Up)];
+        assert_eq!(press(&state, plain('j')), down);
+        assert_eq!(press(&state, plain('k')), up);
+        assert_eq!(
+            press(&state, KeyEvent::new(KeyCode::Esc)),
+            vec![Event::Cancel]
+        );
+        assert!(press(&state, plain('x')).is_empty(), "x reached the buffer");
+    }
+
     // Shift is not a mode key: the editor extends, and no other pane Varde
     // interprets claims it. A hosted pane is not in here because its child gets
     // the arrow like any other key, which the sweep below holds it to.
@@ -2123,7 +2648,7 @@ mod tests {
                 !named(label)
                     // Claimed before the box and held by the cheatsheet where
                     // every view answers them.
-                    && !listed(label, View::Review)
+                    && !listed(&State::default(), label, View::Review)
                     && !omitted_in(label, View::Review)
             })
             .collect();
@@ -3330,6 +3855,9 @@ mod tests {
             KeyCode::Modifier(modifier, _) => format!("{modifier:?} alone"),
             KeyCode::Media(_) => "a media key".to_string(),
             KeyCode::Char(' ') if ctrl => "C-space".to_string(),
+            // The cheatsheet spells Space as the glyph its chords are written
+            // with, because a space cannot be a token of a row.
+            KeyCode::Char(' ') => "␣".to_string(),
             KeyCode::Char(c) if ctrl => format!("C-{c}"),
             KeyCode::Char(c @ ('c' | 'v')) if command => format!("D-{c}"),
             KeyCode::Char(c) if alt => format!("M-{c}"),
@@ -3342,6 +3870,14 @@ mod tests {
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
                 arrow_label(shift, alt, ctrl)
             }
+            // Ctrl is inspected on F2, which stops a Debug session, and on F8,
+            // which toggles a Breakpoint with it held. Shift is inspected on
+            // F8 and nowhere else — held, it steps out where the key alone
+            // steps over — so it is a gesture of its own there and a
+            // modifier no binding reads on
+            // every other function key, exactly as Command is on `c` and `v`.
+            KeyCode::F(number) if ctrl => format!("C-F{number}"),
+            KeyCode::F(8) if shift => "S-F8".to_string(),
             KeyCode::F(number) => format!("F{number}"),
             code => named_label(code),
         }
@@ -3440,6 +3976,10 @@ mod tests {
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
                 KeyModifiers::SHIFT | KeyModifiers::ALT
             }
+            // The modifiers [`label`] spells on a function key: Ctrl on any
+            // of them, Shift on F8 alone.
+            KeyCode::F(8) => KeyModifiers::CTRL | KeyModifiers::SHIFT,
+            KeyCode::F(_) => KeyModifiers::CTRL,
             _ => KeyModifiers::NONE,
         };
         event
@@ -3763,13 +4303,14 @@ mod tests {
     /// ever drive. Tab was one of them, listed in neither the cheatsheet nor the
     /// omissions and invisible to the sweep, which is the exact blind spot this
     /// test exists to close.
-    fn views() -> [(View, State); 5] {
+    fn views() -> [(View, State); 6] {
         [
             (View::Edit, editing()),
             (View::Edit, offering_candidates()),
             (View::Edit, filling_in_a_snippet(&editing())),
             (View::Review, reviewing()),
             (View::Story, story()),
+            (View::Edit, crate::debug::paused(editing())),
         ]
     }
 
@@ -3839,9 +4380,8 @@ mod tests {
 
     /// A binding is listed for a view if it appears in a left-hand column of a
     /// row naming that view.
-    fn listed(label: &str, view: View) -> bool {
-        super::CHEATSHEET
-            .iter()
+    fn listed(state: &State, label: &str, view: View) -> bool {
+        super::cheatsheet(state)
             .filter(|(_, _, views)| super::applies_to(views, view))
             .flat_map(|(keys, _, _)| keys.split_whitespace())
             .any(|token| names(token, label))
@@ -3866,7 +4406,7 @@ mod tests {
                 .into_iter()
                 .filter(|(_, sequence)| sequence_answers(&state, sequence))
                 .map(|(label, _)| label)
-                .filter(|label| !listed(label, view) && !omitted_in(label, view))
+                .filter(|label| !listed(&state, label, view) && !omitted_in(label, view))
                 .collect();
             // One gesture is one line: the sweep drives every modifier
             // combination, so an unlisted binding is found sixty-four times over.
@@ -4022,6 +4562,184 @@ mod tests {
         );
     }
 
+    /// The same contract for the launch list: what its box names answers,
+    /// and nothing else it answers goes unnamed.
+    #[test]
+    fn the_launch_list_answers_exactly_the_keys_its_box_names() {
+        let mut listing = State {
+            modal: crate::Modal::Launches { row: 0 },
+            ..editing()
+        };
+        listing.launches.insert(
+            "app".to_string(),
+            crate::startup::Launch {
+                adapter: "rust".to_string(),
+                request: "launch".to_string(),
+                args: serde_json::Map::new(),
+                reattach: true,
+            },
+        );
+        for (key, word) in super::LAUNCH_LIST_KEYS {
+            let event = every_key()
+                .into_iter()
+                .find(|event| label(*event) == key)
+                .unwrap_or_else(|| panic!("no key spells {key}"));
+            assert!(
+                answers(&listing, &[event]),
+                "the box offers {key} for {word} and the list does nothing with it"
+            );
+        }
+        let closed = State {
+            modal: crate::Modal::None,
+            ..listing.clone()
+        };
+        let mut unnamed: Vec<String> = every_key()
+            .into_iter()
+            .filter(|event| {
+                !on_key_event(&listing, &mut Drafts::default(), *event, 0).is_empty()
+                    && !answers(&closed, &[*event])
+            })
+            .map(label)
+            .filter(|label| {
+                !super::LAUNCH_LIST_KEYS.iter().any(|(key, _)| key == label)
+                    && !label.contains("arr")
+            })
+            .collect();
+        unnamed.sort();
+        unnamed.dedup();
+        assert!(
+            unnamed.is_empty(),
+            "the launch list answers keys its box does not name: {unnamed:?}"
+        );
+    }
+
+    /// The debug keys reach Varde from a shell only while a session exists;
+    /// with none the shell's child has them, as every key it is not denied.
+    /// Stepping is on this list for the reason F9 is: it happens in bursts
+    /// from wherever the keyboard is, and a key that works in one pane is a
+    /// key that fails the moment focus is elsewhere.
+    #[test]
+    fn the_debug_keys_are_reserved_only_while_a_session_exists() {
+        let shell = State {
+            focus: Pane::Terminal,
+            ..State::default()
+        };
+        let debugging = State {
+            focus: Pane::Terminal,
+            ..crate::debug::paused(State::default())
+        };
+        let shift = |code| KeyEvent::new(code).modifiers(KeyModifiers::SHIFT);
+        let claimed = [
+            (KeyEvent::new(KeyCode::F(9)), Event::DebugResume),
+            (
+                KeyEvent::new(KeyCode::F(2)).modifiers(KeyModifiers::CTRL),
+                Event::DebugStop,
+            ),
+            (
+                KeyEvent::new(KeyCode::F(8)),
+                Event::DebugStep(crate::debug::Step::Over),
+            ),
+            (
+                KeyEvent::new(KeyCode::F(7)),
+                Event::DebugStep(crate::debug::Step::Into),
+            ),
+            (
+                shift(KeyCode::F(8)),
+                Event::DebugStep(crate::debug::Step::Out),
+            ),
+        ];
+        let press = |state: &State, key| on_key_event(state, &mut Drafts::default(), key, 0);
+        for (key, event) in claimed {
+            assert_eq!(press(&debugging, key), vec![event], "{key:?}");
+            assert!(
+                matches!(press(&shell, key)[..], [Event::Bytes(_)]),
+                "{key:?} is withheld from the shell with no session"
+            );
+        }
+    }
+
+    /// Stepping mode: the letters act without their Space, and any other key
+    /// leaves the mode and is then routed as usual rather than swallowed —
+    /// which is what stops the mode from being somewhere anybody is trapped.
+    /// `q` is not one of the letters, so it leaves the mode like any other.
+    #[test]
+    fn stepping_mode_claims_its_letters_and_hands_every_other_key_back() {
+        let stepping = State {
+            stepping: true,
+            ..crate::debug::paused(editing())
+        };
+        let press = |key| on_key_event(&stepping, &mut Drafts::default(), key, 0);
+        for (key, event) in [
+            ('n', Event::DebugStep(crate::debug::Step::Over)),
+            ('i', Event::DebugStep(crate::debug::Step::Into)),
+            ('o', Event::DebugStep(crate::debug::Step::Out)),
+            ('c', Event::DebugResume),
+        ] {
+            assert_eq!(press(plain(key)), vec![event], "{key}");
+        }
+        let plainly = |key| on_key_event(&editing(), &mut Drafts::default(), plain(key), 0);
+        for key in ['j', '/', 'q'] {
+            let events = press(plain(key));
+            assert_eq!(events.first(), Some(&Event::LeaveStepping), "{key}");
+            assert_eq!(events[1..], plainly(key), "{key} is not what it always is");
+        }
+        // The one way out that is not a key Varde interprets: a click can put
+        // the keyboard in a shell, whose child owns these letters, and a mode
+        // that outlived that would have nothing left that could end it.
+        let shell = State {
+            focus: Pane::Terminal,
+            ..stepping
+        };
+        let in_shell = on_key_event(&shell, &mut Drafts::default(), plain('n'), 0);
+        assert_eq!(in_shell.first(), Some(&Event::LeaveStepping));
+        assert!(matches!(in_shell[1..], [Event::Bytes(_)]));
+    }
+
+    /// The Evaluator's arrange mode, on Stepping mode's terms: the four
+    /// letters and the arrows move or resize the window, and any other key
+    /// leaves the mode and then does what it always does — so the Snippet is
+    /// never a buffer somebody is stuck outside of.
+    #[test]
+    fn the_arrange_mode_claims_its_motions_and_hands_every_other_key_back() {
+        let mut open = crate::debug::paused(editing());
+        crate::debug::open_evaluator(&mut open, "count".to_string());
+        let arranging = |how| State {
+            arranging: Some(how),
+            ..open.clone()
+        };
+        let moving = arranging(crate::debug::Arrange::Moving);
+        let press = |state: &State, key| on_key_event(state, &mut Drafts::default(), key, 0);
+        for (key, direction) in [
+            (plain('h'), Direction::Left),
+            (plain('j'), Direction::Down),
+            (plain('k'), Direction::Up),
+            (plain('l'), Direction::Right),
+            (KeyEvent::new(KeyCode::Right), Direction::Right),
+        ] {
+            assert_eq!(
+                press(&moving, key),
+                vec![Event::MoveEvaluator(direction)],
+                "{key:?}"
+            );
+        }
+        assert_eq!(
+            press(&arranging(crate::debug::Arrange::Sizing), plain('j')),
+            vec![Event::ResizeEvaluator(Direction::Down)]
+        );
+        // Any other key: the mode goes, and the key is the key it always was
+        // in the Snippet.
+        let plainly = |key| on_key_event(&open, &mut Drafts::default(), key, 0);
+        for key in [plain('i'), plain('x'), KeyEvent::new(KeyCode::Esc)] {
+            let events = press(&moving, key);
+            assert_eq!(events.first(), Some(&Event::LeaveArranging), "{key:?}");
+            assert_eq!(
+                events[1..],
+                plainly(key),
+                "{key:?} is not what it always is"
+            );
+        }
+    }
+
     /// The other half of the picker's contract: the sweep above excuses every
     /// key that only narrows the list, so this is what holds those keys to
     /// doing what the box says they do. Backspace is here because the excuse
@@ -4125,7 +4843,7 @@ mod tests {
                 !named(label)
                     // Claimed before the box and held by the cheatsheet where
                     // every view answers them.
-                    && !listed(label, View::Edit)
+                    && !listed(&State::default(), label, View::Edit)
                     && !omitted_in(label, View::Edit)
             })
             .collect();
@@ -4135,6 +4853,65 @@ mod tests {
             unnamed.is_empty(),
             "the results box answers keys its helper row does not name: {unnamed:?}"
         );
+    }
+
+    /// The Chord hint is drawn from [`CHORDS`] and [`DEBUG_CHORDS`], so what it
+    /// names must be what a waiting Space answers, and what a waiting Space
+    /// answers must be named. Measured against Escape, which takes the hint
+    /// down and does nothing else: a second key that only does that is not a
+    /// chord. A key claimed before the hint — `C-q`, `C-space` — answers
+    /// through it and is not the hint's.
+    ///
+    /// Driven with a Debug session and without one, because the list is not
+    /// fixed: the debug chords are on it only while a session exists, so a
+    /// state with none would never see them and a state with one would never
+    /// see them go. And with the Evaluator open, for the same reason once
+    /// more: its two are on it only while its window is.
+    #[test]
+    fn a_waiting_space_answers_exactly_the_keys_the_chord_hint_names() {
+        let arranging = {
+            let mut state = crate::debug::paused(editing());
+            crate::debug::open_evaluator(&mut state, String::new());
+            state
+        };
+        for state in [editing(), crate::debug::paused(editing()), arranging] {
+            let (waiting, _) = drive(&state, &mut Drafts::default(), &[plain(' ')]);
+            assert_eq!(waiting.modal, crate::Modal::Chord, "the hint opens at once");
+            let (cancelled, _) = drive(
+                &waiting,
+                &mut Drafts::default(),
+                &[KeyEvent::new(KeyCode::Esc)],
+            );
+            assert_eq!(cancelled.modal, crate::Modal::None, "Escape cancels it");
+            let chord = |event: KeyEvent| {
+                let events = on_key_event(&waiting, &mut Drafts::default(), event, 0);
+                let (after, acted) = drive(&waiting, &mut Drafts::default(), &[event]);
+                matches!(events.as_slice(), [Event::Key(_)])
+                    && (acted || settled(&after) != settled(&cancelled))
+            };
+            let mut answered: Vec<String> = every_key()
+                .into_iter()
+                .filter(|event| chord(*event))
+                .map(label)
+                .collect();
+            answered.sort();
+            answered.dedup();
+            let mut named: Vec<String> = super::chord_rows(&waiting)
+                .into_iter()
+                .filter_map(|(key, _)| key.map(String::from))
+                .collect();
+            named.sort();
+            assert_eq!(answered, named);
+        }
+    }
+
+    /// Space is only a chord prefix in normal mode: inserting, it is a space.
+    #[test]
+    fn space_while_inserting_is_a_space() {
+        let inserting = crate::update(&editing(), Event::EditorKey('i')).0;
+        let (after, _) = drive(&inserting, &mut Drafts::default(), &[plain(' ')]);
+        assert_eq!(after.modal, crate::Modal::None);
+        assert!(crate::current_buffer(&after).is_some_and(|buffer| buffer.is_dirty()));
     }
 
     /// An omissions list nobody prunes is how the contract rots: an entry for a
@@ -4158,7 +4935,7 @@ mod tests {
                     "{omitted} is excused as an omission in {view:?} but does nothing there"
                 );
                 assert!(
-                    !listed(omitted, view),
+                    !listed(&State::default(), omitted, view),
                     "{omitted} is both listed and omitted in {view:?}"
                 );
             }
@@ -4235,7 +5012,7 @@ mod tests {
                 .filter(|(_, sequence)| states.iter().any(|s| answers(s, sequence)))
                 .map(|(label, _)| label)
                 .collect();
-            for (keys, what, views) in super::CHEATSHEET {
+            for (keys, what, views) in super::cheatsheet(&state) {
                 if !super::applies_to(views, view) {
                     continue;
                 }
@@ -4277,7 +5054,7 @@ mod tests {
                 filling_in_a_snippet(&state),
             ];
             let states: Vec<&State> = std::iter::once(&state).chain(extra.iter()).collect();
-            for (keys, what, views) in super::CHEATSHEET {
+            for (keys, what, views) in super::cheatsheet(&state) {
                 if !super::applies_to(views, view) {
                     continue;
                 }

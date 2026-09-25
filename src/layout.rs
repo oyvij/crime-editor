@@ -57,23 +57,59 @@ pub fn strip_at(area: Area, labels: &[String], column: u16) -> Option<usize> {
     })
 }
 
+/// A Transport's labels, as [`strip_width`] measures them and [`strip_at`]
+/// hit-tests them: each Chip its glyph and keys, padded a column each side, or
+/// — when the whole strip would not fit in the pane's `width` less the `title`
+/// its border keeps — every Chip its glyph alone. All at once, never one
+/// by one, so the row has one shape at a given width
+/// (`docs/adr/0022-every-action-has-a-chip.md`); and a glyph alone is never
+/// cut, since a strip past its pane's width hit-tests as nothing. The one
+/// derivation `ui` draws and `mouse` hit-tests, for the reason [`GUTTER`] is.
+pub fn chip_labels(chips: &[crate::Chip], width: u16, title: u16) -> Vec<String> {
+    let whole: Vec<String> = chips
+        .iter()
+        .map(|chip| format!(" {} {} ", chip.glyph, chip.keys))
+        .collect();
+    match strip_width(&whole) <= width.saturating_sub(title) {
+        true => whole,
+        false => chips
+            .iter()
+            .map(|chip| format!(" {} ", chip.glyph))
+            .collect(),
+    }
+}
+
+/// The columns of the editor's top border its Transport leaves to the
+/// filename and the Authorship before its Chips show their keys: the corners,
+/// a name, its dirty mark and its mode. The Chips give before the name does —
+/// the keys are in the cheatsheet, and which file this is is nowhere else.
+pub const EDITOR_TITLE: u16 = 34;
+
+/// The same for a Corner occupant's top border: the corners and its name.
+pub const CORNER_TITLE: u16 = 14;
+
 /// How wide the editor's line-number gutter is, between its border and its
 /// text. The renderer draws it and the mouse hit-tests past it, so both read
 /// this rather than each counting columns.
 ///
-/// Eight, not five. Four columns are the number; the fifth is the bar a
-/// diagnostic or a Reading draws; the sixth is the fold toggle; the last two
-/// are air between the gutter and the code. A toggle wedged between the last
-/// digit and the first character of the code is a target too small to aim a
-/// pointer at, and code that starts against the line number is code you read
-/// the number as part of.
-pub const GUTTER: u16 = 8;
+/// Nine, not five. The first column holds Breakpoints; the next four are the
+/// number; the sixth is the bar a diagnostic or a Reading draws; the seventh
+/// is the fold toggle; the last two are air between the gutter and the code. A
+/// toggle wedged between the last digit and the first character of the code is
+/// a target too small to aim a pointer at, and code that starts against the
+/// line number is code you read the number as part of.
+pub const GUTTER: u16 = 9;
+
+/// Which gutter column Breakpoints sit in, counted from the pane's inside
+/// edge: the leftmost, where a JetBrains hand already reaches for them, and
+/// apart from the line numbers so a click on a number sets nothing.
+pub const BREAKPOINT_COLUMN: u16 = 0;
 
 /// Which gutter column the fold toggle sits in, counted from the pane's inside
 /// edge. Here beside [`GUTTER`] for the reason `GUTTER` is here — `ui` draws
 /// it and `mouse` hit-tests it, and two derivations of one column is a click
 /// landing beside the thing it pointed at.
-pub const TOGGLE_COLUMN: u16 = 5;
+pub const TOGGLE_COLUMN: u16 = 6;
 
 /// How wide the step-menu is while walking a Story — a fixed constant, the
 /// same shape as `GUTTER`, rather than sized to the longest Step name in
@@ -154,6 +190,8 @@ pub enum Corner {
     Risk,
     Buffers,
     History,
+    Breakpoints,
+    Frames,
 }
 
 impl Corner {
@@ -168,19 +206,206 @@ impl Corner {
             Corner::Risk => Some(Pane::Risk),
             Corner::Buffers => Some(Pane::Buffers),
             Corner::History => Some(Pane::History),
+            Corner::Breakpoints => Some(Pane::Breakpoints),
+            Corner::Frames => Some(Pane::Frames),
         }
     }
 }
 
+/// Which group the Strip is showing. One slot naming its occupant, for the
+/// reason [`Corner`] is one: the Debug group joins it, and "both at once" must
+/// stay a state nobody can write down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Group {
+    #[default]
+    Shells,
+    /// The Variables, while a Debug session exists. Offered only then: a tab
+    /// for a group nothing can be in is a tab that shows an empty Strip.
+    Debug,
+}
+
+impl Group {
+    /// Its Group tab, as the Strip's top border draws it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Group::Shells => "Shells",
+            Group::Debug => "Debug",
+        }
+    }
+
+    /// Which pane the Strip is holding — the one the keyboard goes to when a
+    /// group is brought forward. One answer, read by the hit-test, by the
+    /// focus geometry and by the Group tabs, for the reason [`Corner::pane`]
+    /// is one.
+    pub fn pane(self) -> Pane {
+        match self {
+            Group::Shells => Pane::Terminal,
+            Group::Debug => Pane::Variables,
+        }
+    }
+
+    /// Whether this group is the one `pane` lives in. Not `pane()` compared,
+    /// because the Debug group holds two: the keyboard left in the Program
+    /// output when the Shells come forward is a keyboard in a pane nobody can
+    /// see, which is the whole of what the comparison was there to prevent.
+    pub fn holds(self, pane: Pane) -> bool {
+        match self {
+            Group::Shells => pane == Pane::Terminal,
+            Group::Debug => matches!(pane, Pane::Variables | Pane::Output),
+        }
+    }
+}
+
+/// Whether the Debug group is showing the Program output beside the Variables,
+/// and how wide it is once the border between them has been dragged — `None`
+/// until then, a share of the group, exactly as the AI pane's width is. One
+/// value rather than a flag beside a width, for the reason [`Corner`] is one:
+/// "hidden and 60 columns wide" is a state the layout has no rectangle for,
+/// and the width a hidden output keeps is `State`'s to remember, not the
+/// layout's to be told twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Output {
+    #[default]
+    Away,
+    Shown(Option<u16>),
+}
+
+/// The fewest columns either side of that border keeps. Small on purpose: the
+/// gesture is "give the other one the room", and a floor wide enough to read
+/// is a floor that stops the drag well short of where it was aimed. Hiding is
+/// how the Program output goes away entirely.
+pub const GROUP_LEAST: u16 = 8;
+
+/// The fewest rows the area above the Strip keeps, and the fewest the Strip
+/// does: its two borders and the two rows a pty needs, since vt100 underflows
+/// on a one-row grid.
+pub const TOP_LEAST: u16 = 5;
+pub const STRIP_LEAST: u16 = 4;
+
+/// A Strip height, bounded so that neither the Strip nor the area above it
+/// vanishes. The area above wins on a screen too short for both, as it always
+/// has: a Strip of fewer rows is one the edge clamps its pty against.
+pub fn strip_height(screen_height: u16, asked: u16) -> u16 {
+    asked
+        .max(STRIP_LEAST)
+        .min(screen_height.saturating_sub(TOP_LEAST))
+}
+
 /// The two panes that take their columns out of the shell, one from each side:
-/// the AI pane's shape from the right and the corner from the left. One value
-/// because they are one question — how much of the bottom row is the shell's —
-/// and because a rectangle chosen from a growing list of positional flags is a
-/// rectangle nobody can read at the call site.
+/// the AI pane's shape from the right and the corner from the left, and how
+/// tall the Strip they sit in is. One value because they are one question —
+/// how much of the bottom row is the shell's — and because a rectangle chosen
+/// from a growing list of positional flags is a rectangle nobody can read at
+/// the call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Shapes {
     pub ai: AiPane,
     pub corner: Corner,
+    /// Which group the Strip is showing, carried here for the reason
+    /// `corner` is: the rectangle is the same either way, and what is in it
+    /// is what a hit-test has to answer from the layout alone.
+    pub group: Group,
+    /// `None` until the border above the Strip is dragged: a share of the
+    /// screen until somebody names a height, as the AI pane's width is.
+    pub strip: Option<u16>,
+    /// Whether the Debug group is showing the Program output, and how wide.
+    pub output: Output,
+    /// Where the Evaluator's window is, and `None` while none is open. It
+    /// floats over the editor and takes no columns from anything, so it
+    /// changes no other rectangle — but where it is has to come from here, so
+    /// the renderer and the hit-test read one answer, for the reason every
+    /// other pane does. A rectangle rather than a flag because the window is
+    /// moved and resized: `update` holds the rectangle and clamps it, the way
+    /// it holds every other view's offset.
+    pub evaluator: Option<Area>,
+}
+
+/// The least a window may be squeezed to: its two borders, a row of Snippet,
+/// the rule between them and a row of output — and columns enough for the
+/// Chips on its top border. A window smaller than this is one with nothing
+/// readable in it, which is not a window somebody meant to drag.
+pub const WINDOW_LEAST_WIDTH: u16 = 24;
+pub const WINDOW_LEAST_HEIGHT: u16 = 5;
+
+/// Where the Evaluator opens when the project has never left it anywhere: the
+/// middle of the screen, three fifths across and half of it down, so the code
+/// it floats over is still readable around it.
+pub fn centred_window(width: u16, height: u16) -> Area {
+    let box_width = (width as u32 * 3).div_ceil(5) as u16;
+    let box_height = height / 2;
+    Area {
+        x: (width - box_width) / 2,
+        y: (height - box_height) / 2,
+        width: box_width,
+        height: box_height,
+    }
+}
+
+/// Where a floating window ends up once the screen and the Paused line have
+/// had their say: never smaller than the floor above, never bigger than the
+/// screen, wholly on it, and clear of the row `clear` names.
+///
+/// One function for both because they are one question — where may this
+/// window be? — and a second author for a rectangle is a window drawn where
+/// nothing hit-tests it. Called from `update` for every event, the way the
+/// scroll offsets are clamped there: a drag, a resize and a program stopping
+/// somewhere new all move the answer, and an arm that forgot to ask is a
+/// window half off the screen.
+///
+/// The row and not its columns: the Paused line's wash runs the width of the
+/// editor, so a window clear of it vertically is clear of it. Below it by
+/// preference and above it where the screen leaves no room below, and left
+/// where it is when neither fits — a window taller than the screen covers
+/// every row there is, and shuffling it would only hide something else.
+pub fn placed_window(window: Area, width: u16, height: u16, clear: Option<u16>) -> Area {
+    let box_width = window.width.max(WINDOW_LEAST_WIDTH).min(width.max(1));
+    let box_height = window.height.max(WINDOW_LEAST_HEIGHT).min(height.max(1));
+    let mut placed = Area {
+        x: window.x.min(width.saturating_sub(box_width)),
+        y: window.y.min(height.saturating_sub(box_height)),
+        width: box_width,
+        height: box_height,
+    };
+    if let Some(row) = clear.filter(|row| (placed.y..placed.bottom()).contains(row)) {
+        if row + 1 + box_height <= height {
+            placed.y = row + 1;
+        } else if box_height <= row {
+            placed.y = row - box_height;
+        }
+    }
+    placed
+}
+
+/// Where the Snippet and the Evaluator output are inside that window: the
+/// Snippet takes `asked` rows — half of what the borders leave until the rule
+/// between them is dragged — the output the rest, and one row between them
+/// carries that rule. One answer, which `ui` draws and the mouse hit-tests,
+/// for the reason [`GUTTER`] is one.
+///
+/// Clamped here rather than where the drag is read: both sides keep a row,
+/// because a half dragged to nothing is a half nobody can drag back.
+pub fn evaluator_split(window: Area, asked: Option<u16>) -> (Area, Area) {
+    let interior = Area {
+        x: window.x + 1,
+        y: window.y + 1,
+        width: window.width.saturating_sub(2),
+        height: window.height.saturating_sub(2),
+    };
+    let half = interior.height.saturating_sub(1) / 2;
+    let snippet = asked
+        .unwrap_or(half)
+        .clamp(1, interior.height.saturating_sub(2).max(1));
+    (
+        Area {
+            height: snippet,
+            ..interior
+        },
+        Area {
+            y: interior.y + snippet + 1,
+            height: interior.height.saturating_sub(snippet + 1),
+            ..interior
+        },
+    )
 }
 
 /// The first content row a pane shows: where the wheel left it, pulled back so
@@ -237,11 +462,40 @@ pub struct Layout {
     /// from the layout alone — the alternative is every hit-test taking the
     /// occupant as a second argument and one of them forgetting.
     pub occupant: Corner,
+    /// The same for the Strip, whose one rectangle is the shells or the Debug
+    /// group: `terminal` is where it is, and this is whose it is.
+    pub group: Group,
+    /// The Program output, at the Strip's right-hand end, with the Variables
+    /// keeping what is left. Empty (zero width) whenever it is not showing —
+    /// which `Area::holds` answers `false` for, so no hit-test has to ask
+    /// whether there is one before asking where it is.
+    pub output: Area,
+    /// The Evaluator's floating window. Empty whenever none is open, for the
+    /// reason the Program output's is empty while it is hidden.
+    pub evaluator: Area,
+}
+
+impl Layout {
+    /// The Strip's whole rectangle: the Variables and the Program output
+    /// together, or the shells. Where its top border is — which the Group tabs
+    /// and the Variables' Transport are right-aligned on and hit-tested
+    /// against, and which the handle that drags its height runs along.
+    /// `terminal` alone stops at the border between the two, so a strip of
+    /// labels measured against it would slide every time that border was
+    /// dragged and vanish altogether once the Variables were squeezed to
+    /// [`GROUP_LEAST`].
+    pub fn strip(&self) -> Area {
+        Area {
+            width: self.terminal.width + self.output.width,
+            ..self.terminal
+        }
+    }
 }
 
 /// Tree, editor and AI across the top; terminal beneath. The terminal takes 30%
-/// of the height and the AI pane 30% of the width, except that the editor keeps
-/// at least 20 columns and the top keeps at least 5 rows. `band_height` is 0
+/// of the height, or the Strip's dragged height, and the AI pane 30% of the
+/// width, except that the editor keeps at least 20 columns and the top keeps
+/// at least [`TOP_LEAST`] rows. `band_height` is 0
 /// outside Story view's walk; the editor comes back already shortened by it,
 /// so no caller has to remember to subtract it a second time.
 ///
@@ -259,8 +513,10 @@ pub fn panes(
     step_menu_width: u16,
     shapes: Shapes,
 ) -> Layout {
-    let terminal_height =
-        ((height as u32 * 3 + 5) / 10).min(height.saturating_sub(5) as u32) as u16;
+    let terminal_height = shapes
+        .strip
+        .unwrap_or(((height as u32 * 3 + 5) / 10) as u16)
+        .min(height.saturating_sub(TOP_LEAST));
     let top = height - terminal_height;
 
     let tree_width = tree_divider.min(width);
@@ -286,7 +542,19 @@ pub fn panes(
         Corner::Hidden => 0,
         _ => tree_width.min(shell_room.saturating_sub(1)),
     };
-    let terminal_width = shell_room.saturating_sub(corner_width).max(1);
+    let strip_width = shell_room.saturating_sub(corner_width).max(1);
+    // The Program output takes its columns out of the Strip's right-hand end,
+    // the way the corner takes its out of the left: the Variables keep what is
+    // left, and neither can be squeezed past `GROUP_LEAST`.
+    let output_width = match shapes.output {
+        Output::Away => 0,
+        Output::Shown(asked) => {
+            let least = GROUP_LEAST.min(strip_width);
+            let most = strip_width.saturating_sub(GROUP_LEAST).max(least);
+            asked.unwrap_or(strip_width / 2).clamp(least, most)
+        }
+    };
+    let terminal_width = strip_width - output_width;
 
     Layout {
         tree: Area {
@@ -329,14 +597,40 @@ pub fn panes(
             width: corner_width,
             height: terminal_height,
         },
+        output: Area {
+            x: corner_width + terminal_width,
+            y: top,
+            width: output_width,
+            height: terminal_height,
+        },
         occupant: shapes.corner,
+        group: shapes.group,
         band: Area {
             x: tree_width + step_menu_width,
             y: editor_height,
             width: editor_width,
             height: band_height,
         },
+        evaluator: shapes.evaluator.unwrap_or_default(),
     }
+}
+
+/// The pty size a pane's rectangle asks for: its interior, clamped so vt100
+/// never sees a grid it panics on — two rows and not one, because wrapping a
+/// column needs a row to scroll into and on a one-row grid vt100 subtracts the
+/// scroll off the row it came from.
+///
+/// `None` for a rectangle with nothing in it, which is a pane that is not on
+/// screen: a hidden Program output squeezed to the floor would reflow
+/// everything its child had printed, and showing it again would bring back
+/// something nobody could read.
+pub fn pty_size(width: u16, height: u16) -> Option<(u16, u16)> {
+    (width > 0 && height > 0).then(|| {
+        (
+            height.saturating_sub(2).max(2),
+            width.saturating_sub(2).max(1),
+        )
+    })
 }
 
 /// A centred overlay box sized to its content. Shared so that what is drawn and
@@ -412,12 +706,20 @@ pub fn split_at(strip: Area, n: usize, column: u16) -> usize {
 }
 
 pub fn pane_at(layout: &Layout, column: u16, row: u16) -> Option<Pane> {
+    // The Evaluator floats over the panes, so it is asked first: a click that
+    // landed on the window belongs to the window whatever is drawn under it.
+    // Empty while none is open, which `holds` answers `false` for.
+    if layout.evaluator.holds(column, row) {
+        return Some(Pane::Evaluator);
+    }
     // Before the shell, and never folded into the tree's: a click in the corner
     // means something entirely different from a click in either, and a pane
     // hit-tested against its neighbour's rectangle is every drag in it asking
     // for a span of the wrong pane.
     if layout.corner.holds(column, row) {
         layout.occupant.pane()
+    } else if layout.output.holds(column, row) {
+        Some(Pane::Output)
     } else if layout.tree.holds(column, row) {
         Some(Pane::Tree)
     } else if layout.editor.holds(column, row) || layout.band.holds(column, row) {
@@ -425,7 +727,7 @@ pub fn pane_at(layout: &Layout, column: u16, row: u16) -> Option<Pane> {
     } else if layout.ai.holds(column, row) {
         Some(Pane::Ai)
     } else if layout.terminal.holds(column, row) {
-        Some(Pane::Terminal)
+        Some(layout.group.pane())
     } else {
         None
     }
@@ -434,6 +736,150 @@ pub fn pane_at(layout: &Layout, column: u16, row: u16) -> Option<Pane> {
 #[cfg(test)]
 mod split_tests {
     use super::*;
+
+    /// The Debug group tiles the Strip: the Variables keep what the Program
+    /// output does not take, neither is squeezed past `GROUP_LEAST`, and
+    /// hiding it gives the Variables every column back. Pinned here because
+    /// two rectangles that do not tile are a click landing in a pane nobody
+    /// pointed at.
+    #[test]
+    fn the_program_output_tiles_the_strip_with_the_variables() {
+        let group = |output| {
+            let layout = panes(
+                120,
+                40,
+                30,
+                None,
+                0,
+                0,
+                Shapes {
+                    corner: Corner::Frames,
+                    group: Group::Debug,
+                    output,
+                    ..Shapes::default()
+                },
+            );
+            (layout.terminal, layout.output)
+        };
+        let (variables, output) = group(Output::Away);
+        assert_eq!((variables.x, variables.width), (30, 90));
+        assert_eq!(output.width, 0);
+        assert!(!output.holds(100, variables.y + 1));
+
+        let (variables, output) = group(Output::Shown(Some(60)));
+        assert_eq!((variables.x, variables.width), (30, 30));
+        assert_eq!((output.x, output.width), (60, 60));
+        assert_eq!(variables.right(), output.x);
+        assert_eq!(output.right(), 120);
+
+        // Dragged past either floor, the other side keeps `GROUP_LEAST`.
+        assert_eq!(group(Output::Shown(Some(120))).0.width, GROUP_LEAST);
+        assert_eq!(group(Output::Shown(Some(0))).1.width, GROUP_LEAST);
+    }
+
+    /// Where the Evaluator opens and how its two halves divide it. Pinned
+    /// here for the reason every other rectangle is: the renderer draws these
+    /// numbers and the mouse hit-tests them, and a window nobody can see the
+    /// code around is the one thing it may not be.
+    #[test]
+    fn the_evaluator_is_centred_and_split_between_its_snippet_and_its_output() {
+        let window = |open| {
+            panes(
+                120,
+                40,
+                30,
+                None,
+                0,
+                0,
+                Shapes {
+                    evaluator: open,
+                    ..Shapes::default()
+                },
+            )
+            .evaluator
+        };
+        // Nothing at all while none is open, which `holds` answers `false`
+        // for — so no hit-test has to ask whether there is one.
+        assert!(!window(None).holds(60, 20));
+        let open = window(Some(centred_window(120, 40)));
+        assert_eq!(
+            open,
+            Area {
+                x: 24,
+                y: 10,
+                width: 72,
+                height: 20
+            }
+        );
+        // Centred: the same room either side and above and below.
+        assert_eq!(open.x, 120 - open.right());
+        assert_eq!(open.y, 40 - open.bottom());
+
+        let (snippet, output) = super::evaluator_split(open, None);
+        // Both inside the borders, and the row between them belongs to
+        // neither: it is the rule the renderer draws there.
+        assert_eq!((snippet.x, snippet.y, snippet.height), (25, 11, 8));
+        assert_eq!((output.x, output.y, output.height), (25, 20, 9));
+        assert_eq!(snippet.bottom() + 1, output.y);
+        assert_eq!(output.bottom(), open.bottom() - 1);
+        assert_eq!((snippet.width, output.width), (70, 70));
+
+        // The rule dragged up: the Snippet takes what it was asked for and
+        // the output takes the rest, so a row given up by one is a row the
+        // other gains.
+        let (snippet, output) = super::evaluator_split(open, Some(4));
+        assert_eq!((snippet.height, output.height), (4, 13));
+        assert_eq!(snippet.bottom() + 1, output.y);
+        // Neither side may be dragged away: a half with no rows is a half
+        // nobody can drag back.
+        assert_eq!(super::evaluator_split(open, Some(0)).0.height, 1);
+        assert_eq!(super::evaluator_split(open, Some(99)).1.height, 1);
+    }
+
+    /// The window's rectangle is state, so every event is answered from one
+    /// clamp: it stays on the screen it is drawn on, it is never squeezed to
+    /// nothing, and it never covers the row the program is stopped on.
+    #[test]
+    fn a_window_is_placed_on_the_screen_and_clear_of_the_paused_line() {
+        let window = Area {
+            x: 20,
+            y: 5,
+            width: 60,
+            height: 12,
+        };
+        assert_eq!(placed_window(window, 120, 40, None), window);
+        // A screen it no longer fits on takes it back by the corner it hangs
+        // off, and a screen smaller than the floor takes the floor with it.
+        let squeezed = placed_window(window, 60, 12, None);
+        assert_eq!((squeezed.x, squeezed.right()), (0, 60));
+        assert_eq!((squeezed.y, squeezed.bottom()), (0, 12));
+        assert_eq!(
+            placed_window(window, 10, 3, None),
+            Area {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 3
+            }
+        );
+        // The Paused line: below it where the screen leaves room, above it
+        // where it does not, and where it was when neither fits.
+        assert_eq!(placed_window(window, 120, 40, Some(8)).y, 9);
+        assert_eq!(placed_window(window, 120, 20, Some(14)).y, 2);
+        assert_eq!(placed_window(window, 120, 12, Some(6)).y, 0);
+        // A row it does not cover moves it not at all.
+        assert_eq!(placed_window(window, 120, 40, Some(30)), window);
+    }
+
+    /// A pane with no rectangle asks for no pty, and one with a rectangle
+    /// never asks for a grid vt100 panics on.
+    #[test]
+    fn a_hidden_pane_asks_for_no_pty_and_a_tiny_one_asks_for_the_floor() {
+        assert_eq!(pty_size(0, 10), None);
+        assert_eq!(pty_size(10, 0), None);
+        assert_eq!(pty_size(1, 1), Some((2, 1)));
+        assert_eq!(pty_size(62, 12), Some((10, 60)));
+    }
 
     #[test]
     fn splits_tile_the_strip_and_the_last_takes_the_remainder() {
@@ -534,8 +980,21 @@ mod frame_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        inset, pane_at, panes, strip_at, strip_width, AiPane, Area, Corner, Shapes, STEP_MENU_WIDTH,
+        chip_labels, inset, pane_at, panes, strip_at, strip_height, strip_width, AiPane, Area,
+        Corner, Group, Output, Shapes, EDITOR_TITLE, STEP_MENU_WIDTH, STRIP_LEAST, TOP_LEAST,
     };
+
+    /// Nine columns, the Breakpoint column leftmost and the fold toggle right
+    /// of the four the number takes and the one a bar takes. `ui` draws and
+    /// `mouse` hit-tests both columns from here, so moving one is a change
+    /// on screen and fails here.
+    #[test]
+    fn the_gutter_is_nine_columns_with_breakpoints_leftmost() {
+        use super::{gutter, Gutter, BREAKPOINT_COLUMN, TOGGLE_COLUMN};
+        assert_eq!(gutter(Gutter::Numbers), 9);
+        assert_eq!(BREAKPOINT_COLUMN, 0);
+        assert_eq!(TOGGLE_COLUMN, 1 + 4 + 1);
+    }
     use crate::Pane;
 
     /// Measured from ratatui's solver before the layout moved here. If these
@@ -561,6 +1020,29 @@ mod tests {
                 "heights for {width}x{height}"
             );
         }
+    }
+
+    /// A dragged Strip height is the Strip's height and the top gets the rest,
+    /// the bottom row still ending on the screen's.
+    #[test]
+    fn a_named_strip_height_is_kept_instead_of_the_share() {
+        let shapes = Shapes {
+            strip: Some(16),
+            ..Shapes::default()
+        };
+        let layout = panes(120, 40, 30, None, 0, 0, shapes);
+        assert_eq!((layout.terminal.y, layout.terminal.height), (24, 16));
+        assert_eq!((layout.corner.y, layout.corner.height), (24, 16));
+        assert_eq!(layout.tree.height, 24);
+    }
+
+    #[test]
+    fn a_strip_height_keeps_both_the_strip_and_the_top() {
+        assert_eq!(strip_height(40, 1), STRIP_LEAST);
+        assert_eq!(strip_height(40, 40), 40 - TOP_LEAST);
+        assert_eq!(strip_height(40, 16), 16);
+        // Too short for both: the top keeps its rows, as the share always did.
+        assert_eq!(strip_height(7, 1), 2);
     }
 
     /// A width the user dragged to is kept whatever the screen does — only the
@@ -857,8 +1339,12 @@ mod tests {
             0,
             0,
             Shapes {
+                group: Group::Shells,
                 ai: AiPane::Tall,
                 corner: Corner::Risk,
+                strip: None,
+                output: Output::Away,
+                evaluator: None,
             },
         );
         assert_eq!((layout.corner.x, layout.corner.width), (0, 30));
@@ -883,8 +1369,12 @@ mod tests {
                 0,
                 0,
                 Shapes {
+                    group: Group::Shells,
                     ai,
                     corner: Corner::Risk,
+                    strip: None,
+                    output: Output::Away,
+                    evaluator: None,
                 },
             );
             assert_eq!(layout.terminal.width, 1, "{ai:?}");
@@ -1010,8 +1500,12 @@ mod tests {
                     ..Shapes::default()
                 }),
                 (Shapes {
+                    group: Group::Shells,
                     ai: AiPane::Tall,
                     corner: Corner::Risk,
+                    strip: None,
+                    output: Output::Away,
+                    evaluator: None,
                 }),
             ] {
                 let layout = panes(width, height, 30, None, 6, 0, shapes);
@@ -1054,5 +1548,32 @@ mod tests {
         // A pane narrower than its own strip has no columns to offer rather
         // than wrapping the strip onto columns nobody pointed at.
         assert_eq!(strip_at(Area { width: 4, ..area }, &labels, 2), None);
+    }
+
+    fn chip(glyph: &str, keys: &'static str) -> crate::Chip {
+        crate::Chip {
+            action: "a",
+            name: "a",
+            glyph: glyph.to_string(),
+            keys,
+            hue: crate::Hue::Plain,
+            tone: crate::Tone::Plain,
+        }
+    }
+
+    /// Short of room every Chip sheds its keys at once: one column short of
+    /// the whole strip is a row of bare glyphs, never one Chip with its keys
+    /// beside one without, and never a Chip cut to fit.
+    #[test]
+    fn short_of_room_every_chip_sheds_its_keys_together() {
+        let chips = [chip("\u{25ba}", ":pause"), chip("1.25x", ":speed")];
+        // " ► :pause " is 10 and " 1.25x :speed " is 14, each with its gap,
+        // beside the 34 columns the title keeps.
+        let whole = chip_labels(&chips, 60, EDITOR_TITLE);
+        assert_eq!(whole, [" \u{25ba} :pause ", " 1.25x :speed "]);
+        assert_eq!(strip_width(&whole), 26);
+        let shed = chip_labels(&chips, 59, EDITOR_TITLE);
+        assert_eq!(shed, [" \u{25ba} ", " 1.25x "]);
+        assert_eq!(strip_width(&shed), 12);
     }
 }

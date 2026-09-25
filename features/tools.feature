@@ -23,6 +23,7 @@ Feature: Tools — one list of everything Varde runs
     Then the tools list is grouped as:
       | language-servers |
       | formatters       |
+      | debug-adapters   |
       | requirements     |
       | speech           |
 

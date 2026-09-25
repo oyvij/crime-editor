@@ -86,6 +86,10 @@ pub struct Chrome<'a> {
     /// The current buffer's tokens, by line, parsed once per edit rather than
     /// per frame.
     pub tokens: &'a [Vec<highlight::Token>],
+    /// The lines of the current buffer a Run mark stands on, found with the
+    /// tokens and for their reason: a syntax tree per frame is a parse per
+    /// frame.
+    pub run_marks: &'a [usize],
     /// The new and old sides of the diff under review, each parsed whole when
     /// the diff was read. Whole, and both of them, because a diff interleaves
     /// two sources and neither is one when it is cut into rows — the argument
@@ -116,6 +120,9 @@ pub struct Areas {
     /// mirror is hidden — the library's answer, so the renderer and the
     /// hit-test cannot disagree about which columns are the mirror's.
     pub minimap: Rect,
+    /// The layout these were drawn from, for a box over the buffer: where it
+    /// lands is the library's arithmetic, which the mouse hit-tests too.
+    pub panes: layout::Layout,
 }
 
 /// Rectangles for drawing, derived from the library's layout so that drawing
@@ -128,10 +135,7 @@ pub fn areas(area: Rect, state: &State) -> Areas {
         state.ai_width.map(|width| width as u16),
         story::band_height(state),
         story::step_menu_width(state),
-        layout::Shapes {
-            ai: state.ai_pane,
-            corner: state.corner,
-        },
+        varde::shapes(state),
     );
     Areas {
         tree: rect(panes.tree),
@@ -144,6 +148,7 @@ pub fn areas(area: Rect, state: &State) -> Areas {
         step_menu: rect(panes.step_menu),
         corner: rect(panes.corner),
         minimap: rect(minimap::strip(state, panes.editor)),
+        panes,
     }
 }
 
@@ -157,6 +162,7 @@ pub fn draw(
     rows: &[Row],
     shells: &[PtyPane],
     ai: Option<&PtyPane>,
+    output: Option<&PtyPane>,
     chrome: Chrome,
 ) {
     let areas = areas(frame.area(), state);
@@ -182,7 +188,7 @@ pub fn draw(
         editor_widget(
             state,
             typing.as_deref(),
-            chrome.tokens,
+            (chrome.tokens, chrome.run_marks),
             (chrome.diff_new, chrome.diff_old),
             chrome.preview,
             areas.editor.width,
@@ -205,17 +211,45 @@ pub fn draw(
     minimap(frame, state, &areas, chrome.tokens);
     cheatsheet(frame, state, areas.editor);
     place_cursor(frame, state, &areas, typing.as_deref());
-    for (k, (shell, area)) in shells.iter().zip(&areas.splits).enumerate() {
-        let title = match shells.len() {
-            1 => "terminal".to_string(),
-            _ => format!("terminal {}", k + 1),
-        };
-        let focused = state.focus == Pane::Terminal && k == state.split();
-        frame.render_widget(
-            terminal_widget(shell, &title, focused, state, Pane::Terminal),
-            *area,
-        );
+    // One occupant at a time, exhaustively: the Strip is one rectangle, and a
+    // group drawn over the one beside it is two panes claiming the same rows.
+    match state.strip {
+        layout::Group::Shells => {
+            for (k, (shell, area)) in shells.iter().zip(&areas.splits).enumerate() {
+                let title = match shells.len() {
+                    1 => "terminal".to_string(),
+                    _ => format!("terminal {}", k + 1),
+                };
+                let focused = state.focus == Pane::Terminal && k == state.split();
+                frame.render_widget(
+                    terminal_widget(shell, &title, focused, state, Pane::Terminal),
+                    *area,
+                );
+            }
+        }
+        layout::Group::Debug => {
+            frame.render_widget(
+                variables_widget(state, areas.panes.terminal.width, chrome.name_draft),
+                rect(areas.panes.terminal),
+            );
+            // Zero-width while it is hidden, so there is nothing to draw and
+            // the Variables already have the columns back.
+            if let (Some(output), true) = (output, areas.panes.output.width > 0) {
+                frame.render_widget(
+                    terminal_widget(
+                        output,
+                        "program",
+                        state.focus == Pane::Output,
+                        state,
+                        Pane::Output,
+                    ),
+                    rect(areas.panes.output),
+                );
+            }
+        }
     }
+    strip_chips(frame, state, areas.panes.strip());
+    group_tabs(frame, state, areas.panes.strip());
     // Zero-width while the corner is empty, so there is nothing to draw and
     // nothing to clear: the shell already has the columns back. Exhaustive on
     // the occupant, so a new pane in that slot is a compiler error rather than
@@ -232,11 +266,23 @@ pub fn draw(
             layout::Corner::History => {
                 frame.render_widget(history_widget(state, areas.corner.width), areas.corner)
             }
+            layout::Corner::Breakpoints => {
+                frame.render_widget(breakpoints_widget(state, areas.corner.width), areas.corner)
+            }
+            layout::Corner::Frames => {
+                frame.render_widget(frames_widget(state, areas.corner.width), areas.corner)
+            }
         }
     }
     let caret_is_free = state.modal == Modal::None && typing.is_none();
-    if let (Pane::Terminal, true, Some((shell, area))) = (
+    if let (Pane::Output, layout::Group::Debug, true, Some(output)) =
+        (state.focus, state.strip, caret_is_free, output)
+    {
+        place_pty_cursor(frame, rect(areas.panes.output), output);
+    }
+    if let (Pane::Terminal, layout::Group::Shells, true, Some((shell, area))) = (
         state.focus,
+        state.strip,
         caret_is_free,
         shells.iter().zip(&areas.splits).nth(state.split()),
     ) {
@@ -244,14 +290,25 @@ pub fn draw(
     }
     draw_ai_pane(frame, state, &areas, ai, &chrome, caret_is_free);
     draw_status(frame, state, &chrome);
+    // On the editor's text, under everything that floats over it.
+    if let Some((x, y)) = varde::debug::edit_chip(state, &areas.panes) {
+        frame.render_widget(
+            Paragraph::new(action_icon(varde::debug::EDIT)),
+            Rect::new(x, y, 1, 1),
+        );
+    }
 
     // Over the panes rather than under them: the box is wrapped to the screen,
     // so it overhangs the editor's own rectangle, and anything drawn after it
     // paints over it — which is how its right-hand half came to sit behind the
     // AI pane's border. A modal still outranks it, below.
-    hover(frame, state, areas.editor);
-    diagnostic_box(frame, state, areas.editor);
-    candidates(frame, state, areas.editor);
+    hover(frame, state, &areas.panes);
+    breakpoint_reason(frame, state, &areas.panes);
+    diagnostic_box(frame, state, &areas.panes);
+    candidates(frame, state, &areas.panes);
+    // Over the panes for the Hover's reason, and after it: the window is the
+    // thing the reader is working in, so nothing floats above it but a modal.
+    evaluator(frame, state, &areas.panes);
 
     // Search floats over the panes rather than replacing them: you can still
     // see where you were.
@@ -389,12 +446,30 @@ fn status_line(
 /// asserts on wording.
 fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
     match &state.modal {
-        Modal::Palette => overlay(frame, "COMMANDS", palette_lines(frame.area().height)),
+        // The screen's height goes in because the row count depends on it —
+        // the same number the mouse hit-test passes.
+        Modal::Palette => overlay(
+            frame,
+            "COMMANDS",
+            rows_lines(palette_rows(frame.area().height)),
+        ),
+        Modal::Chord => overlay(frame, "SPACE", rows_lines(keys::chord_rows(state))),
+        Modal::Breakpoint { field, draft, .. } => {
+            overlay(frame, "BREAKPOINT", breakpoint_box_lines(*field, draft))
+        }
         Modal::NameBox { .. } => overlay(
             frame,
             "NAME",
             vec![Line::from(chrome.name_draft.to_string())],
         ),
+        Modal::ExceptionClass => overlay(
+            frame,
+            "PAUSE ON EXCEPTION CLASS",
+            vec![Line::from(chrome.name_draft.to_string())],
+        ),
+        // Drawn by `variables_lines`, in the row being acted on: an overlay
+        // would cover the very row whose value is being written.
+        Modal::SetValue | Modal::NewWatch => {}
         Modal::Comment => overlay(frame, "COMMENT", comment_lines(state, chrome)),
         Modal::ConfirmSubmit => overlay(
             frame,
@@ -420,6 +495,7 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
             let height = frame.area().height;
             overlay(frame, "TOOLS", tool_lines(state, *row, height))
         }
+        Modal::Launches { row } => overlay(frame, "LAUNCH", launch_lines(state, *row)),
         Modal::Branches { refs, filter, row } => overlay(
             frame,
             "BRANCHES",
@@ -441,6 +517,7 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
                 Line::from("  (y) quit, so you can start Varde again    (n) stay"),
             ],
         ),
+        Modal::RunMark { .. } => run_offer(frame, state),
         Modal::Diverged => overlay(frame, "DIVERGED", diverged_lines(state)),
         Modal::StepDetail => overlay(frame, "STEP", step_detail_lines(state)),
         Modal::Prediction { .. } => overlay(frame, "PREDICTION", prediction_lines(state)),
@@ -758,6 +835,287 @@ fn buffers_lines(state: &State, width: u16) -> Vec<Line<'static>> {
                 Span::styled(mark, selected.fg(colour)),
                 Span::styled(format!(" {}", truncate(&name, room)), selected),
             ])
+        })
+        .collect()
+}
+
+/// One row per Breakpoint, its Transport on the top border at the columns
+/// `mouse::breakpoint_chip_at` hit-tests.
+fn breakpoints_widget(state: &State, width: u16) -> Paragraph<'static> {
+    let chips = varde::debug::transport(state);
+    let labels = layout::chip_labels(&chips, width, layout::CORNER_TITLE);
+    let gap = Style::default().fg(border_colour(state, Pane::Breakpoints));
+    let mut spans = Vec::new();
+    for (chip, label) in chips.iter().zip(labels) {
+        spans.extend(chip_spans(state, chip, label));
+        spans.push(Span::styled("\u{2500}", gap));
+    }
+    Paragraph::new(breakpoints_lines(state, width))
+        .scroll((state.breakpoints_scroll as u16, 0))
+        .block(
+            pane_block("breakpoints", state, Pane::Breakpoints)
+                .title(Line::from(spans).right_aligned()),
+        )
+}
+
+/// Split out of `breakpoints_widget` for the reason `risk_lines` is split out
+/// of `risk_widget`: a `Paragraph` will not give its text back.
+///
+/// The line and the icon are taken out of the row's columns first, so a narrow
+/// pane cuts the path and never slides the icon off the columns `mouse`
+/// hit-tests it from. A Stale one says so, dimmed.
+fn breakpoints_lines(state: &State, width: u16) -> Vec<Line<'static>> {
+    let inner = width.saturating_sub(2) as usize;
+    let switches = varde::debug::switches(state);
+    let above = switches.len();
+    let mut lines: Vec<Line<'static>> = switches
+        .into_iter()
+        .enumerate()
+        .map(|(index, (filter, on))| {
+            let style = match index == state.breakpoints_selection {
+                true => Style::default().add_modifier(Modifier::REVERSED),
+                false => Style::default(),
+            };
+            let glyph = match on {
+                true => "\u{25a0}",
+                false => "\u{25a1}",
+            };
+            Line::from(Span::styled(
+                truncate(&format!(" {glyph} {}", filter.label), inner),
+                style,
+            ))
+        })
+        .collect();
+    lines.extend(
+        varde::debug::list(state)
+            .into_iter()
+            .enumerate()
+            .map(|(index, breakpoint)| {
+                let index = index + above;
+                let on_this_row = index == state.breakpoints_selection;
+                let selected = match on_this_row {
+                    true => Style::default().add_modifier(Modifier::REVERSED),
+                    false => Style::default(),
+                };
+                let actions = match on_this_row {
+                    true => varde::debug::row_actions(state),
+                    false => Vec::new(),
+                };
+                let tail = match breakpoint.stale {
+                    true => format!(":{} stale ", breakpoint.line),
+                    false => format!(":{} ", breakpoint.line),
+                };
+                let room = inner.saturating_sub(tail.width() + 1 + actions.len() * 2);
+                let path = match room {
+                    0 => String::new(),
+                    room => truncate(&varde::relative(state, &breakpoint.file), room),
+                };
+                let mut spans = vec![Span::styled(format!(" {path:<room$}"), selected)];
+                spans.push(Span::styled(tail, selected.fg(Color::DarkGray)));
+                for (at, action) in actions.iter().enumerate() {
+                    spans.push(Span::styled(
+                        action_icon(action),
+                        action_style(state, action, state.selected_action == Some(at)),
+                    ));
+                    spans.push(Span::raw(" "));
+                }
+                Line::from(spans)
+            }),
+    );
+    lines
+}
+
+/// The Frames grouped by thread, the inspected call marked.
+fn frames_widget(state: &State, width: u16) -> Paragraph<'static> {
+    let widget = Paragraph::new(frames_lines(state, width))
+        .scroll((state.frames_scroll as u16, 0))
+        .block(pane_block("frames", state, Pane::Frames));
+    dimmed_while_running(state, widget)
+}
+
+/// What the last pause left on screen is drawn dimmed while the program runs,
+/// so nothing stale is mistaken for current. One answer for the two panes that
+/// show it, because it is one fact about the session rather than two about the
+/// panes — the scenarios assert that fact, and which panes read it is edge
+/// work, verified by running it.
+fn dimmed_while_running(state: &State, widget: Paragraph<'static>) -> Paragraph<'static> {
+    match varde::debug::stale(state) {
+        true => widget.style(Style::default().add_modifier(Modifier::DIM)),
+        false => widget,
+    }
+}
+
+/// Split out of `frames_widget` for the reason `risk_lines` is: a `Paragraph`
+/// will not give its text back. A thread heads its calls, flagged when it is
+/// held Paused elsewhere; a call's name comes first and its place after, the
+/// name cut before the place is: which call it is reads off the name, and the
+/// file and line are the Paused line the row would move to. A folded run of
+/// Library frames is one dimmed row that says how many.
+fn frames_lines(state: &State, width: u16) -> Vec<Line<'static>> {
+    use varde::debug::FrameRow;
+    let inner = width.saturating_sub(2) as usize;
+    let chosen = varde::debug::paused_line(state);
+    let frames = varde::debug::frames(state);
+    varde::debug::frame_rows(state)
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let style = match index == state.frames_selection {
+                true => Style::default().add_modifier(Modifier::REVERSED),
+                false => Style::default(),
+            };
+            let frame = match row {
+                FrameRow::Thread {
+                    name,
+                    paused,
+                    child,
+                    ..
+                } => {
+                    let flag = match paused {
+                        true => " \u{2016}",
+                        false => "",
+                    };
+                    let name = match child {
+                        Some(child) => format!("{child} \u{203a} {name}"),
+                        None => name.clone(),
+                    };
+                    let room = inner.saturating_sub(flag.width() + 1);
+                    return Line::from(vec![
+                        Span::styled(
+                            format!(" {:<room$}", truncate(&name, room)),
+                            style.add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(flag, style.fg(Color::Yellow)),
+                    ]);
+                }
+                FrameRow::Library { count, .. } => {
+                    let text = format!("   \u{22ef} {count} library frames");
+                    return Line::from(Span::styled(
+                        format!("{:<inner$}", truncate(&text, inner)),
+                        style.add_modifier(Modifier::DIM),
+                    ));
+                }
+                FrameRow::Frame(index) => &frames[*index],
+            };
+            let mut style = style;
+            let place = match &frame.file {
+                Some(file) => format!(
+                    " {}:{} ",
+                    file.file_name().unwrap_or_default().to_string_lossy(),
+                    frame.line
+                ),
+                None => " ".to_string(),
+            };
+            if chosen.is_some_and(|(file, line, _)| {
+                frame.file.as_deref() == Some(file) && frame.line == line
+            }) {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            let room = inner.saturating_sub(place.width() + 3);
+            let name = truncate(&frame.name, room);
+            Line::from(vec![
+                Span::styled(format!("   {name:<room$}"), style),
+                Span::styled(place, style.fg(Color::DarkGray)),
+            ])
+        })
+        .collect()
+}
+
+/// The Variables of the chosen Frame, in the Strip's Debug group. Its title
+/// says which of the two it is drawing: this pause, or the last one.
+fn variables_widget(state: &State, width: u16, draft: &str) -> Paragraph<'static> {
+    let widget = Paragraph::new(variables_lines(state, width, draft))
+        .scroll((state.variables_scroll as u16, 0))
+        .block(pane_block(
+            varde::debug::title(state),
+            state,
+            Pane::Variables,
+        ));
+    dimmed_while_running(state, widget)
+}
+
+/// Split out of `variables_widget` for the reason `frames_lines` is. One row
+/// per member the tree has open: its depth as indentation, whether it opens,
+/// its name, what the adapter's presentation hint says about it, and its
+/// value.
+fn variables_lines(state: &State, width: u16, draft: &str) -> Vec<Line<'static>> {
+    let inner = width.saturating_sub(2) as usize;
+    varde::debug::variables(state)
+        .into_iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let style = match index == state.variables_selection {
+                true => Style::default().add_modifier(Modifier::REVERSED),
+                false => Style::default(),
+            };
+            // The box is the row: what is being typed stands where the value
+            // or the new Watch will, so the eye never leaves the row it is
+            // acting on.
+            if index == state.variables_selection {
+                if let Some(box_name) = match state.modal {
+                    Modal::SetValue => Some(row.name.as_str()),
+                    Modal::NewWatch => Some("watch"),
+                    _ => None,
+                } {
+                    return Line::from(vec![
+                        Span::styled(format!(" {box_name} "), style),
+                        Span::styled(
+                            truncate(draft, inner.saturating_sub(box_name.width() + 2)),
+                            Style::default().add_modifier(Modifier::UNDERLINED),
+                        ),
+                    ]);
+                }
+            }
+            let marker = match (row.opens, row.open) {
+                (varde::debug::Opens::Nothing, _) => "  ",
+                (_, true) => "\u{25be} ",
+                (_, false) => "\u{25b8} ",
+            };
+            let hint = match row.hint {
+                varde::debug::Hint::Plain => String::new(),
+                hint => format!(" {}", hint.as_str()),
+            };
+            let mark = match row.of {
+                // A Watch that calls something runs that call again at every
+                // pause, which is the one thing about a Watch a reader has to
+                // be told before they add it.
+                varde::debug::Of::Watch { calling: true, .. } => " calls",
+                _ => "",
+            };
+            let name = format!(
+                " {}{marker}{}{hint}{mark}",
+                " ".repeat(row.depth * 2),
+                row.name
+            );
+            let chips = varde::debug::row_chips(state, index);
+            let room = inner
+                .saturating_sub(name.width().min(inner))
+                .saturating_sub(chips.len() * 2);
+            let mut spans = vec![
+                Span::styled(truncate(&name, inner), style),
+                // Padded to the columns left over, so the Chips sit hard
+                // against the right-hand border — the very columns
+                // `mouse::icon_at` hit-tests them from.
+                Span::styled(
+                    format!(
+                        " {:<pad$}",
+                        truncate(&row.value, room.saturating_sub(1)),
+                        pad = room.saturating_sub(1)
+                    ),
+                    style.fg(match row.of {
+                        varde::debug::Of::Watch { failed: true, .. } => WARNING,
+                        _ => Color::DarkGray,
+                    }),
+                ),
+            ];
+            for (at, chip) in chips.iter().enumerate() {
+                spans.push(Span::styled(
+                    chip.glyph.clone(),
+                    chip_style(state, chip, state.selected_action == Some(at)),
+                ));
+                spans.push(Span::raw(" "));
+            }
+            Line::from(spans)
         })
         .collect()
 }
@@ -1490,7 +1848,7 @@ fn remainder_lines(remainder: &story::Remainder, selected: bool) -> Vec<Line<'st
 fn editor_widget(
     state: &State,
     command: Option<&str>,
-    tokens: &[Vec<highlight::Token>],
+    (tokens, run_marks): (&[Vec<highlight::Token>], &[usize]),
     diff_sides: (&[Vec<highlight::Token>], &[Vec<highlight::Token>]),
     preview: &[varde::preview::Row],
     width: u16,
@@ -1613,6 +1971,21 @@ fn editor_widget(
             true,
         );
     }
+    // The expression the Hover is a claim about, washed for as long as the
+    // box is up: a box floating over the code says what a value is without
+    // saying what it was read off, and the reader is left to guess whether
+    // the field or the whole chain was evaluated.
+    if let Some((at, width)) = varde::debug::hover_span(state) {
+        if let Some(line) = lines.get_mut(at.line - 1) {
+            *line = picked(
+                line,
+                at.column - 1,
+                at.column - 1 + width,
+                Style::default().bg(word_tint(dark)),
+                true,
+            );
+        }
+    }
     // Without this a visual selection is invisible, which reads as V not
     // working at all.
     if let Some((from, to)) = buffer.selected_lines() {
@@ -1693,6 +2066,29 @@ fn editor_widget(
             );
         }
     }
+    // What the program holds, at the end of the lines the Paused call has
+    // already run. Faint, the way the indentation guides are faint: a value is
+    // a note about the code and never part of it. A value that moved at this
+    // pause is the one thing here worth looking at, so it is the one thing
+    // drawn in the foreground's own colour — the faintness is what the others
+    // are for. Appended after every pass that counts columns from the start of
+    // a line, so none of them can reach into a span that is not the file's
+    // text.
+    for (number, values) in varde::debug::inline(state, tokens, varde::fits(state).2) {
+        let Some(line) = lines.get_mut(number - 1) else {
+            continue;
+        };
+        for value in values {
+            // No colour of its own: the text's own foreground, bold, beside
+            // neighbours mixed to a tenth of it. A hue here would be a fourth
+            // palette to keep in step with the themes.
+            let style = match value.changed {
+                true => Style::default().add_modifier(Modifier::BOLD),
+                false => faint,
+            };
+            line.spans.push(Span::styled(value.text, style));
+        }
+    }
     shift(&mut lines, state, 1);
     // Last, for the reason the Site's mark is last in `marked_code`: everything
     // above counts columns from the start of the line, and a barred line's
@@ -1720,7 +2116,31 @@ fn editor_widget(
         }
     }
 
-    Paragraph::new(folded(lines, state))
+    // After the fold, which recognises a line's gutter by its first span: the
+    // rows it leaves are numbered by the lines it did not hide.
+    let hidden = varde::fold::hidden(state);
+    let marks = varde::debug::marks(state);
+    let paused = varde::debug::paused_line(state)
+        .filter(|(file, _, _)| state.current_buffer.as_deref() == Some(*file));
+    let lines: Vec<Line> = folded(lines, state)
+        .into_iter()
+        .zip((1..).filter(|number| !hidden.contains(number)))
+        .map(|(line, number)| {
+            // A Breakpoint over a Run mark, as a click in the column takes it.
+            let line = match marks.get(&number) {
+                Some(mark) => with_breakpoint(line, *mark),
+                None if run_marks.contains(&number) => with_run_mark(line),
+                None => line,
+            };
+            match paused {
+                Some((_, at, why)) if at == number => {
+                    on_paused_line(line, why, width, state.editor_theme != "light")
+                }
+                _ => line,
+            }
+        })
+        .collect();
+    Paragraph::new(lines)
         .scroll((state.editor_scroll as u16, 0))
         .block(editor_block(state, title, footer, command, width))
 }
@@ -1871,6 +2291,158 @@ fn folded(lines: Vec<Line<'static>>, state: &State) -> Vec<Line<'static>> {
         .collect()
 }
 
+/// The Breakpoint box's rows, the one the keys type into marked. The switch
+/// names the scope it is set to.
+fn breakpoint_box_lines(
+    field: varde::debug::Field,
+    draft: &varde::debug::Properties,
+) -> Vec<Line<'static>> {
+    varde::debug::FIELDS
+        .iter()
+        .map(|row| {
+            let label = match row {
+                varde::debug::Field::Condition => "condition",
+                varde::debug::Field::HitCount => "hit count",
+                varde::debug::Field::LogMessage => "log message",
+                varde::debug::Field::Suspend => "suspend",
+            };
+            let value = match row {
+                varde::debug::Field::Suspend => match draft.suspend {
+                    varde::debug::Suspend::Thread => "thread  (space: all)".to_string(),
+                    varde::debug::Suspend::All => "all  (space: thread)".to_string(),
+                },
+                _ => varde::debug::field_text(draft, *row).to_string(),
+            };
+            let style = match *row == field {
+                true => Style::default().add_modifier(Modifier::REVERSED),
+                false => Style::default(),
+            };
+            Line::from(vec![
+                Span::styled(
+                    format!(" {label:<12}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(format!(" {value} "), style),
+            ])
+        })
+        .collect()
+}
+
+/// One line with its Breakpoint in the gutter's first column, which every
+/// gutter leaves blank for it: `layout::BREAKPOINT_COLUMN`, where `mouse`
+/// hit-tests the click that set it.
+fn with_breakpoint(line: Line<'static>, mark: varde::debug::Mark) -> Line<'static> {
+    let glyph = match mark {
+        varde::debug::Mark::Plain => Span::styled("●", Style::default().fg(Color::Red)),
+        varde::debug::Mark::Conditional => Span::styled("◉", Style::default().fg(Color::Red)),
+        // A diamond, as most debuggers draw one: it prints rather than pauses.
+        varde::debug::Mark::Logpoint => Span::styled("◆", Style::default().fg(Color::Yellow)),
+        // Dotted and grey: remembered against text its line no longer holds,
+        // so not a place the program will pause. Not the hollow circle, which
+        // is an Unverified breakpoint's.
+        varde::debug::Mark::Stale => Span::styled("◌", Style::default().fg(Color::DarkGray)),
+        // Hollow and still red: a line the user meant, which the adapter could
+        // not bind — resting the pointer on it says why.
+        varde::debug::Mark::Unverified => Span::styled("○", Style::default().fg(Color::Red)),
+    };
+    let style = line.style;
+    let mut spans = line.spans.into_iter();
+    let Some(first) = spans.next() else {
+        return Line::from(vec![glyph]).style(style);
+    };
+    let rest: String = first.content.chars().skip(1).collect();
+    let mut drawn = vec![glyph, Span::styled(rest, first.style)];
+    drawn.extend(spans);
+    Line::from(drawn).style(style)
+}
+
+/// A Run mark's offer: what it would start, and the Run and Debug Chips on
+/// the box's top border, at the columns `run::chip_at` hit-tests.
+fn run_offer(frame: &mut Frame, state: &State) {
+    let screen = frame.area();
+    let Some(offer) = varde::run::offer_area(state, screen.width, screen.height) else {
+        return;
+    };
+    let box_area = rect(offer);
+    frame.render_widget(Clear, box_area);
+    frame.render_widget(
+        Paragraph::new(format!(
+            "  {}",
+            varde::run::offered(state).unwrap_or_default()
+        ))
+        .block(Block::default().borders(Borders::ALL).title("RUN")),
+        box_area,
+    );
+    let chips = varde::run::chips(state);
+    let labels = layout::chip_labels(&chips, offer.width, 0);
+    let Some(mut x) =
+        (offer.x + offer.width.saturating_sub(1)).checked_sub(layout::strip_width(&labels))
+    else {
+        return;
+    };
+    for (chip, label) in chips.iter().zip(labels) {
+        let columns = label.width() as u16;
+        frame.render_widget(
+            Line::from(chip_spans(state, chip, label).to_vec()),
+            Rect::new(x, offer.y, columns, 1),
+        );
+        x += columns + 1;
+    }
+}
+
+/// One line with the ▶ of a Run mark in the Breakpoint column.
+fn with_run_mark(line: Line<'static>) -> Line<'static> {
+    let style = line.style;
+    let mut spans = line.spans.into_iter();
+    let first = spans.next().unwrap_or_default();
+    let mut drawn = vec![
+        Span::styled("\u{25b6}", Style::default().fg(Color::Green)),
+        Span::styled(
+            first.content.chars().skip(1).collect::<String>(),
+            first.style,
+        ),
+    ];
+    drawn.extend(spans);
+    Line::from(drawn).style(style)
+}
+
+/// The line a Debug session is Paused on: its marker in the Breakpoint column,
+/// over any Breakpoint there, and its background across the pane's whole
+/// width rather than only under the text, so a short line reads as the line
+/// the program is on. An exception pause is the error colour's.
+fn on_paused_line(
+    line: Line<'static>,
+    why: varde::debug::Why,
+    width: u16,
+    dark: bool,
+) -> Line<'static> {
+    let tint = match (why, dark) {
+        (varde::debug::Why::Paused, true) => Color::Rgb(0x1e, 0x33, 0x4a),
+        (varde::debug::Why::Paused, false) => Color::Indexed(153),
+        (varde::debug::Why::Exception, true) => Color::Rgb(0x4a, 0x1e, 0x1e),
+        (varde::debug::Why::Exception, false) => Color::Indexed(224),
+    };
+    let marker = match why {
+        varde::debug::Why::Paused => Color::Yellow,
+        varde::debug::Why::Exception => Color::Red,
+    };
+    let mut spans = line.spans.into_iter();
+    let first = spans.next().unwrap_or_default();
+    let mut drawn = vec![
+        Span::styled("\u{2192}", Style::default().fg(marker)),
+        Span::styled(
+            first.content.chars().skip(1).collect::<String>(),
+            first.style,
+        ),
+    ];
+    drawn.extend(spans);
+    let used: usize = drawn.iter().map(|span| span.content.width()).sum();
+    drawn.push(Span::raw(
+        " ".repeat((width.saturating_sub(2) as usize).saturating_sub(used)),
+    ));
+    washed(&Line::from(drawn), tint)
+}
+
 /// What a folded block leaves at the end of the line that opens it: the one
 /// character standing for everything hidden under it, which is also the one
 /// column past the text the cursor may sit on there
@@ -1897,18 +2469,18 @@ fn with_toggle(
         Style::default().fg(Color::Cyan),
     );
     let first = line.spans.first().map(|span| span.content.as_ref());
-    let mut spans = if first == Some(format!("{number:>4} {PAD}").as_str()) {
+    let mut spans = if first == Some(format!(" {number:>4} {PAD}").as_str()) {
         // The number keeps whatever colour it was given — the cursor's line is
         // brighter, and rebuilding it grey here is how that mark would vanish
         // on exactly the lines a reader folds.
         let mut spans = vec![
-            Span::styled(format!("{number:>4} "), line.spans[0].style),
+            Span::styled(format!(" {number:>4} "), line.spans[0].style),
             glyph,
             Span::raw("  "),
         ];
         spans.extend(line.spans.iter().skip(1).cloned());
         spans
-    } else if first == Some(format!("{number:>4}").as_str())
+    } else if first == Some(format!(" {number:>4}").as_str())
         && line.spans.get(2).map(|span| span.content.as_ref()) == Some(PAD)
     {
         let mut spans = line.spans.clone();
@@ -2208,6 +2780,25 @@ fn refusal_spans(state: &State) -> Vec<Span<'static>> {
         varde::preview::Refusal::NeedsInstaller(installer) => {
             format!(" {installer} is not installed — install.sh installs package managers ")
         }
+        varde::preview::Refusal::SessionRunning => {
+            " a debug session is already running ".to_string()
+        }
+        varde::preview::Refusal::NoDebugAdapter(adapter) => {
+            format!(" no debug adapter: {adapter} — install it from Tools ")
+        }
+        varde::preview::Refusal::NoLanguageServer(server) => {
+            format!(" the {server} language server hosts this debug adapter — open a {server} file and wait for it ")
+        }
+        varde::preview::Refusal::DebugAdapterFailed => {
+            " the debug adapter could not be started ".to_string()
+        }
+        varde::preview::Refusal::DebugAdapterExited => " the debug adapter stopped ".to_string(),
+        varde::preview::Refusal::LaunchFailed(why) => format!(" could not start: {why} "),
+        varde::preview::Refusal::NoLastSession => {
+            " nothing to restart — start a launch configuration first ".to_string()
+        }
+        varde::preview::Refusal::NoRunMark => " nothing on this line to run ".to_string(),
+        varde::preview::Refusal::SetValueFailed(why) => format!(" could not set: {why} "),
     };
     vec![Span::styled(wording, Style::default().fg(WARNING))]
 }
@@ -2254,8 +2845,8 @@ fn buffer_title(
 }
 
 /// Everything the editor's top border says at its right-hand end: F40's
-/// Authorship, then R35.8's Transport — the reading controls, one space apart
-/// and the last of them hard against the corner. `layout::strip_at` hit-tests
+/// Authorship, then R35.8's Transport — its Chips, a column of border after
+/// each, the last of them against the corner. `layout::strip_at` hit-tests
 /// exactly those columns, and a test below pins ratatui's placement of a
 /// right-aligned title so the two cannot drift; the Authorship goes to the left
 /// of them for that reason, and `room` is what the filename left it.
@@ -2266,27 +2857,139 @@ fn buffer_title(
 ///
 /// Nothing at all for a buffer that cannot be read and no Authorship to report:
 /// both are empty then, and an empty `Line` draws no title.
-fn right_title(state: &State, room: usize) -> Line<'static> {
+fn right_title(state: &State, room: usize, width: u16) -> Line<'static> {
     let mut spans = match authorship_clause(state, room) {
         clause if clause.is_empty() => Vec::new(),
         clause => vec![Span::styled(clause, Style::default().fg(Color::DarkGray))],
     };
-    spans.extend(
-        varde::reading::transport(state)
-            .into_iter()
-            .flat_map(|(control, glyph)| {
-                // Lit under the pointer, exactly as a row's action icons are:
-                // a control that looks the same whether or not you are on it
-                // is a control nobody knows is a button, and a terminal has no
-                // hand pointer to say so any other way.
-                [
-                    Span::styled(glyph, action_style(state, control, false)),
-                    Span::raw(" "),
-                ]
-            })
-            .collect::<Vec<Span<'static>>>(),
-    );
+    let chips = varde::reading::transport(state);
+    let labels = layout::chip_labels(&chips, width, layout::EDITOR_TITLE);
+    let gap = Style::default().fg(border_colour(state, Pane::Editor));
+    for (chip, label) in chips.iter().zip(labels) {
+        spans.extend(chip_spans(state, chip, label));
+        spans.push(Span::styled("\u{2500}", gap));
+    }
     Line::from(spans).right_aligned()
+}
+
+/// The Variables' Transport, on the Strip's top border left of the Group tabs
+/// — at the columns `mouse::strip_chip_at` hit-tests, both off
+/// `varde::transport_area`. Drawn as its own strip rather than as the pane's
+/// title, for the reason the tabs are: the two share one border, and a title
+/// flush to the right would sit under them.
+fn strip_chips(frame: &mut Frame, state: &State, strip: Area) {
+    let chips = varde::debug::strip_transport(state);
+    if chips.is_empty() || !varde::showing_transport(state) {
+        return;
+    }
+    let area = varde::transport_area(state, strip);
+    let labels = layout::chip_labels(&chips, area.width, layout::CORNER_TITLE);
+    let Some(mut x) = area.right().checked_sub(layout::strip_width(&labels)) else {
+        return;
+    };
+    for (chip, label) in chips.iter().zip(labels) {
+        let columns = label.width() as u16;
+        frame.render_widget(
+            Line::from(chip_spans(state, chip, label).to_vec()),
+            Rect::new(x, strip.y, columns, 1),
+        );
+        x += columns;
+    }
+}
+
+fn group_tabs(frame: &mut Frame, state: &State, strip: Area) {
+    let tabs = varde::group_tabs(state);
+    let labels = varde::group_labels(state);
+    let width = layout::strip_width(&labels);
+    let Some(mut x) = strip.right().saturating_sub(1).checked_sub(width) else {
+        return;
+    };
+    // Each label on its own, so the column of border after it is left as the
+    // split drew it, in the split's own colour. A tab holding output nobody
+    // has read is bold and in the notice colour — the Chip's own mark, one
+    // border over, so the two say the same thing the same way.
+    for (tab, label) in tabs.iter().zip(labels) {
+        let style = match (tab.lit, tab.unseen) {
+            (true, false) => Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::REVERSED),
+            (true, true) => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::REVERSED | Modifier::BOLD),
+            (false, true) => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            (false, false) => Style::default().fg(Color::DarkGray),
+        };
+        let columns = label.width() as u16;
+        frame.render_widget(
+            Span::styled(label, style),
+            Rect::new(x, strip.y, columns, 1),
+        );
+        x += columns + 1;
+    }
+}
+
+/// One Chip as drawn: its glyph in its hue and its keys dimmer, dimmed whole
+/// while it cannot act, and reversed whole while it is the last action taken.
+/// Every colour is one of the terminal's named ones, so the Chip belongs to
+/// whatever theme it is drawn in (ADR 0022). Under the pointer it is bold and
+/// underlined as well, for the reason a row's action icons light up there: a
+/// terminal has no hand pointer to say a thing is a button.
+fn chip_spans(state: &State, chip: &varde::Chip, label: String) -> [Span<'static>; 2] {
+    let hue = match chip.hue {
+        varde::Hue::Go => Color::Green,
+        varde::Hue::Hold => Color::Yellow,
+        varde::Hue::Step => Color::Blue,
+        varde::Hue::Halt => Color::Red,
+        varde::Hue::Plain => Color::Reset,
+    };
+    let (glyph, keys, mut lift) = match chip.tone {
+        varde::Tone::Dimmed => (Color::DarkGray, Color::DarkGray, Modifier::empty()),
+        varde::Tone::Plain => (hue, Color::DarkGray, Modifier::empty()),
+        varde::Tone::Lit => (hue, hue, Modifier::REVERSED),
+        // Bold and in the notice colour rather than reversed: reversed is what
+        // says "you just pressed this", and nobody pressed this one.
+        varde::Tone::Marked => (Color::Yellow, Color::DarkGray, Modifier::BOLD),
+    };
+    if state.hovered_action == Some(chip.action) {
+        lift |= Modifier::BOLD | Modifier::UNDERLINED;
+    }
+    // The label opens with the glyph and a column each side of it; what is
+    // left is the keys, or nothing once the Transport has shed them.
+    let (head, tail) = label.split_at(chip.glyph.len() + 2);
+    [
+        Span::styled(
+            head.to_string(),
+            Style::default().fg(glyph).add_modifier(lift),
+        ),
+        Span::styled(
+            tail.to_string(),
+            Style::default().fg(keys).add_modifier(lift),
+        ),
+    ]
+}
+
+/// A row's Chip, which is its glyph alone: a row has no room for the keys a
+/// Transport's Chip carries, and the row's keys are in the cheatsheet. Dimmed
+/// says the action cannot run here, and the arrows stepping onto it or the
+/// pointer resting on it lift it, exactly as a Transport's does.
+fn chip_style(state: &State, chip: &varde::Chip, armed: bool) -> Style {
+    if armed || state.hovered_action == Some(chip.action) {
+        return Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+    }
+    match chip.tone {
+        varde::Tone::Dimmed => Style::default().fg(Color::DarkGray),
+        _ => Style::default().fg(match chip.hue {
+            varde::Hue::Go => Color::Green,
+            varde::Hue::Hold => Color::Yellow,
+            varde::Hue::Step => Color::Blue,
+            varde::Hue::Halt => Color::Red,
+            varde::Hue::Plain => Color::Reset,
+        }),
+    }
 }
 
 /// F40. Who last committed the line the cursor is on, and the day they wrote
@@ -2322,12 +3025,13 @@ fn authorship_clause(state: &State, room: usize) -> String {
 /// border to give, and a pane too narrow for both says nothing about who wrote
 /// the line rather than nothing about which file it is in.
 fn title_room(state: &State, width: u16) -> usize {
-    let labels: Vec<String> = varde::reading::transport(state)
-        .into_iter()
-        .map(|(_, glyph)| glyph)
-        .collect();
-    // A column of air between the two, when there is a Transport at all: a
-    // name cut to land exactly against `«` reads as one word with the control.
+    let labels = layout::chip_labels(
+        &varde::reading::transport(state),
+        width,
+        layout::EDITOR_TITLE,
+    );
+    // A column of border between the two, when there is a Transport at all: a
+    // name cut to land exactly against a Chip reads as one word with it.
     let strip = match labels.is_empty() {
         true => 0,
         false => layout::strip_width(&labels) as usize + 1,
@@ -2681,7 +3385,7 @@ fn barred(line: &Line<'static>, number: usize, colour: Color) -> Line<'static> {
     let mut spans = vec![
         // Brighter than the grey `dimmed` flattens to: the Site's own numbers
         // are the ones worth reading, and two identical greys say nothing.
-        Span::styled(format!("{number:>4}"), Style::default().fg(Color::Gray)),
+        Span::styled(format!(" {number:>4}"), Style::default().fg(Color::Gray)),
         Span::styled("▌", Style::default().fg(colour)),
         // The pad columns the bar did not take, one of which `with_toggle`
         // then claims — which is what the seventh gutter column buys: news and
@@ -2762,8 +3466,7 @@ fn showing_cheatsheet(state: &State) -> bool {
 /// ones nothing else teaches you. Twenty-five Edit rows compete for sixteen on
 /// a 26-row screen, so the order is the whole of the answer.
 fn cheatsheet_rows(state: &State, height: u16) -> Vec<(String, Color)> {
-    let rows_for_view: Vec<(&str, &str)> = keys::CHEATSHEET
-        .iter()
+    let rows_for_view: Vec<(&str, &str)> = keys::cheatsheet(state)
         .filter(|(_, _, views)| state.cheatsheet && keys::applies_to(views, state.view))
         .map(|(keys, what, _)| (*keys, *what))
         .collect();
@@ -2812,28 +3515,189 @@ fn cheatsheet(frame: &mut Frame, state: &State, area: Rect) {
 /// neither that arithmetic nor the parse behind it is the renderer's. All that is left is turning a buffer line
 /// into a screen row, off the same `editor_scroll` the code lines are drawn
 /// from, and keeping the box inside the pane.
-fn hover(frame: &mut Frame, state: &State, area: Rect) {
-    let Some(hover) = state.hover.as_ref() else {
+fn hover(frame: &mut Frame, state: &State, panes: &layout::Layout) {
+    let (Some(hover), Some(placement)) = (state.hover.as_ref(), lsp::placement(state)) else {
         return;
     };
     let dark = state.editor_theme != "light";
-    let placement = hover.placement();
     // The box's inside: `lsp::measured` adds the two columns its border sits
     // on, so a rule drawn at the full placement would run through them.
     let columns = placement.width.saturating_sub(2);
-    let lines = hover
-        .lines
+    let lines = lsp::sections(state)
         .iter()
-        .map(|row| preview_line(row, dark, columns))
+        .skip(hover.first)
+        .map(|said| match said {
+            // What the program holds, above what the server says it is: the
+            // reader stopped in their program reads this first.
+            varde::lsp::Said::Value(row) => Line::from(vec![
+                Span::styled(
+                    format!(
+                        "{}{}{} ",
+                        " ".repeat(row.depth * 2),
+                        match (row.opens, row.open) {
+                            (varde::debug::Opens::Nothing, _) => "",
+                            (_, true) => "\u{25be} ",
+                            (_, false) => "\u{25b8} ",
+                        },
+                        row.name
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw(row.value.clone()),
+            ]),
+            // Said out loud rather than left blank: a box with nothing where
+            // the value goes reads as a debugger that failed, and this one
+            // declined on purpose.
+            varde::lsp::Said::Needs => Line::from(Span::styled(
+                varde::lsp::NEEDS_EVALUATE,
+                Style::default().fg(Color::Yellow),
+            )),
+            varde::lsp::Said::Docs(row) => preview_line(row, dark, columns),
+        })
         .collect();
-    over_buffer_line(frame, state, area, placement, lines);
+    over_buffer_line(frame, state, panes, placement, lines);
+    hover_chips(frame, state, placement.spot(state, panes));
+}
+
+fn breakpoint_reason(frame: &mut Frame, state: &State, panes: &layout::Layout) {
+    let Some((line, why)) = varde::debug::explained(state) else {
+        return;
+    };
+    let placement = varde::lsp::Placement {
+        from: line + 1,
+        column: 1,
+        width: why.width() + 2,
+        rows: 3,
+    };
+    over_buffer_line(
+        frame,
+        state,
+        panes,
+        placement,
+        vec![Line::from(why.to_string())],
+    );
+}
+
+/// The Evaluator: the Snippet above, the output below, and the Chips on the
+/// top border. Every rectangle here is `layout`'s — the mouse hit-tests the
+/// same ones — and every row of the output is `debug`'s, so this only draws.
+fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout) {
+    let Some(open) = state.evaluator.as_ref() else {
+        return;
+    };
+    let window = panes.evaluator;
+    let (snippet_area, output_area) = layout::evaluator_split(window, open.snippet_rows);
+    frame.render_widget(Clear, rect(window));
+    frame.render_widget(
+        Block::default().borders(Borders::ALL).title("EVALUATE"),
+        rect(window),
+    );
+    let lines: Vec<Line> = open
+        .snippet
+        .shown()
+        .split('\n')
+        .map(|row| Line::raw(row.to_string()))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), rect(snippet_area));
+    // The rule between the two, on the row `layout` left for it.
+    frame.render_widget(
+        Block::default().borders(Borders::TOP),
+        rect(varde::layout::Area {
+            height: 1,
+            y: output_area.y.saturating_sub(1),
+            ..output_area
+        }),
+    );
+    let output: Vec<Line> = varde::debug::evaluator_output(state)
+        .iter()
+        .map(|line| match line {
+            varde::debug::Said::Printed(text) => Line::from(Span::styled(
+                text.clone(),
+                Style::default().fg(Color::DarkGray),
+            )),
+            varde::debug::Said::Running => Line::from(Span::styled(
+                "running\u{2026}",
+                Style::default().fg(Color::Yellow),
+            )),
+            // The adapter's words as it said them: a compile error the reader
+            // cannot read is a Snippet they cannot fix.
+            varde::debug::Said::Failed(why) => Line::from(Span::styled(
+                why.clone(),
+                Style::default().fg(Color::LightRed),
+            )),
+            varde::debug::Said::Value(row) => Line::from(vec![
+                Span::styled(
+                    format!(
+                        "{}{}{} ",
+                        " ".repeat(row.depth * 2),
+                        match (row.opens, row.open) {
+                            (varde::debug::Opens::Nothing, _) => "",
+                            (_, true) => "\u{25be} ",
+                            (_, false) => "\u{25b8} ",
+                        },
+                        row.name
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw(row.value.clone()),
+            ]),
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(output), rect(output_area));
+    evaluator_chips(frame, state, window);
+    if state.focus == varde::Pane::Evaluator {
+        if let Some(buffer) = state.edited() {
+            frame.set_cursor_position((
+                snippet_area.x + buffer.column.saturating_sub(1) as u16,
+                snippet_area.y + buffer.line.saturating_sub(1) as u16,
+            ));
+        }
+    }
+}
+
+/// The Evaluator's Chips along its top border, at the columns
+/// `mouse::pressed_in_evaluator` hit-tests them at — flush right, as every
+/// other strip of Chips on a border is.
+fn evaluator_chips(frame: &mut Frame, state: &State, window: varde::layout::Area) {
+    let chips = varde::debug::evaluator_chips(state);
+    let labels = varde::debug::evaluator_labels(state, window.width);
+    let Some(mut x) = window.right().checked_sub(layout::strip_width(&labels)) else {
+        return;
+    };
+    for (chip, label) in chips.iter().zip(labels) {
+        let width = label.width() as u16;
+        frame.render_widget(
+            Line::from(chip_spans(state, chip, label).to_vec()),
+            Rect::new(x, window.y, width, 1),
+        );
+        x += width;
+    }
+}
+
+/// The Hover's Chips along its top border, at the columns
+/// `mouse::pressed_in_hover` hit-tests them at — flush right, as every other
+/// strip of Chips on a border is.
+fn hover_chips(frame: &mut Frame, state: &State, spot: varde::layout::Area) {
+    let chips = varde::debug::hover_chips(state);
+    let labels = varde::debug::hover_labels(state, spot.width);
+    let Some(mut x) = spot.right().checked_sub(layout::strip_width(&labels)) else {
+        return;
+    };
+    for (chip, label) in chips.iter().zip(labels) {
+        let width = label.width() as u16;
+        frame.render_widget(
+            Line::from(chip_spans(state, chip, label).to_vec()),
+            Rect::new(x, spot.y, width, 1),
+        );
+        x += width;
+    }
 }
 
 /// What is wrong with the characters the pointer rests on, beside the line they
 /// are on. The message is wrapped and the box is placed by the core, for the
 /// reason the hover box is: a box sized here would be one row tall while the
 /// message needs three.
-fn diagnostic_box(frame: &mut Frame, state: &State, area: Rect) {
+fn diagnostic_box(frame: &mut Frame, state: &State, panes: &layout::Layout) {
     let Some((lines, placement)) = lsp::pointed(state) else {
         return;
     };
@@ -2841,13 +3705,13 @@ fn diagnostic_box(frame: &mut Frame, state: &State, area: Rect) {
         .into_iter()
         .map(|row| Line::from(Span::styled(row, Style::default().fg(Color::LightRed))))
         .collect();
-    over_buffer_line(frame, state, area, placement, lines);
+    over_buffer_line(frame, state, panes, placement, lines);
 }
 
 /// The candidate list, over the lines the core placed it on and never over the
 /// one being typed. The chosen row is drawn reversed: a list with nothing
 /// marked is a list where Enter takes something the reader did not pick.
-fn candidates(frame: &mut Frame, state: &State, area: Rect) {
+fn candidates(frame: &mut Frame, state: &State, panes: &layout::Layout) {
     let Modal::Candidates(list) = &state.modal else {
         return;
     };
@@ -2863,52 +3727,21 @@ fn candidates(frame: &mut Frame, state: &State, area: Rect) {
             false => Line::from(candidate.label.clone()),
         })
         .collect();
-    over_buffer_line(frame, state, area, list.placement(), lines);
+    over_buffer_line(frame, state, panes, list.placement(), lines);
 }
 
 /// A bordered box over a buffer line, where and as big as the core said. Every
-/// number in a `Placement` is the core's — a box sized here from unwrapped
-/// text would be drawn one row tall while the message needs three, and one
-/// shifted left by a width measured somewhere else is a box drawn past the
-/// edge it was shifted away from. All that is left is turning a buffer line
-/// and column into a screen row and column, off the same `editor_scroll` and
-/// `editor_hscroll` the code is drawn from, and keeping the box inside the
-/// pane. One function for both boxes for the same reason there is one layout:
-/// two copies of this arithmetic is one of them landing a row off.
+/// number in a `Placement` is the core's, and so is the rectangle it turns into
+/// on screen — the mouse hit-tests the same one. One function for every box for
+/// the same reason there is one layout.
 fn over_buffer_line(
     frame: &mut Frame,
     state: &State,
-    area: Rect,
+    panes: &layout::Layout,
     placement: varde::lsp::Placement,
     lines: Vec<Line>,
 ) {
-    let varde::lsp::Placement {
-        from,
-        column,
-        width: widest,
-        rows,
-    } = placement;
-    let height = (rows as u16).min(area.height);
-    // Bounded by the screen across and by the editor pane down. The box floats
-    // over its neighbours like every other overlay — the core wraps it to the
-    // screen for that reason — but its *rows* are that pane's lines, so a row
-    // outside the pane would sit beside a line nobody is looking at.
-    let screen = frame.area();
-    let width = (widest as u16).min(screen.width);
-    // The first row the box wants, in the pane's own rows: its lines are buffer
-    // lines and `editor_scroll` is the first one drawn.
-    let row = from.saturating_sub(1 + state.editor_scroll) as u16;
-    // The column is the core's, turned into a screen column off the same
-    // `editor_hscroll` the code is drawn from — exactly as `from` is turned
-    // into a row off `editor_scroll`. The clamp keeps the box inside the
-    // screen; it no longer decides where the box goes.
-    let across = column.saturating_sub(1 + state.editor_hscroll) as u16;
-    let spot = Rect {
-        x: (area.x + varde::gutter(state) + across).min(screen.width.saturating_sub(width)),
-        y: (area.y + 1 + row).min(area.bottom().saturating_sub(height)),
-        width,
-        height,
-    };
+    let spot = rect(placement.spot(state, panes));
     frame.render_widget(Clear, spot);
     frame.render_widget(
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL)),
@@ -2943,7 +3776,7 @@ fn editor_block(
     // Transport leaves.
     let room = title_room(state, width).saturating_sub(title.width());
     pane_block(title, state, Pane::Editor)
-        .title(right_title(state, room))
+        .title(right_title(state, room, width))
         .title_bottom(Line::from(footer).right_aligned())
         .title_bottom(
             Line::from(Span::styled(
@@ -3005,7 +3838,7 @@ fn diff_rows(
         let mut spans = vec![
             Span::styled(
                 format!(
-                    "{:>4} ",
+                    " {:>4} ",
                     line.new_line.map(|n| n.to_string()).unwrap_or_default()
                 ),
                 Style::default().fg(Color::DarkGray),
@@ -3073,7 +3906,7 @@ fn changed_row(
     let (_, own, tint) = change_colours(removed, dark);
     let mut spans = vec![
         Span::styled(
-            format!("{:>4}", number.map(|n| n.to_string()).unwrap_or_default()),
+            format!(" {:>4}", number.map(|n| n.to_string()).unwrap_or_default()),
             Style::default().fg(Color::Gray),
         ),
         Span::styled("▌", Style::default().fg(own)),
@@ -3363,7 +4196,7 @@ fn numbered(number: usize, cursor: Option<usize>) -> Line<'static> {
         false => Color::DarkGray,
     };
     Line::from(Span::styled(
-        format!("{number:>4} {PAD}"),
+        format!(" {number:>4} {PAD}"),
         Style::default().fg(colour),
     ))
 }
@@ -3554,6 +4387,10 @@ fn action_icon(action: &str) -> &'static str {
         "copy-path" => "\u{f0c5}",
         "search-here" => "\u{f002}",
         varde::history::GO_TO => "\u{f0a9}",
+        // One cell in every font, as ADR 0022 asks of a Chip's glyph: the
+        // debugger's first row action, built after the rule.
+        varde::debug::REMOVE => "\u{2715}",
+        varde::debug::EDIT => "\u{270e}",
         varde::risk::REFACTOR => "\u{f0ad}",
         varde::risk::RECOMPUTE => "\u{f021}",
         varde::risk::START_LOOP => "\u{f04b}",
@@ -3808,6 +4645,7 @@ fn tool_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>>
                 match row.kind {
                     tools::Kind::Server => "Language servers",
                     tools::Kind::Formatter => "Formatters",
+                    tools::Kind::Adapter => "Debug adapters",
                     tools::Kind::Requirement => "Requirements",
                     tools::Kind::Speech => "Speech",
                 },
@@ -3874,6 +4712,36 @@ fn tool_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>>
     lines
 }
 
+/// The launch list: one row per Launch configuration, the branch picker's
+/// shape, and a list with none says where one is written.
+fn launch_lines(state: &State, selected: usize) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line> = varde::debug::launches(state)
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let cursor = match index == selected {
+                true => '>',
+                false => ' ',
+            };
+            Line::from(format!("{cursor} {name}"))
+        })
+        .collect();
+    if lines.is_empty() {
+        lines.push(Line::from(
+            "  No Launch configurations: name one as [launch.<name>] in a config file.",
+        ));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        keys::LAUNCH_LIST_KEYS
+            .iter()
+            .map(|(key, word)| format!("   {key}  {word}"))
+            .collect::<String>(),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines
+}
+
 /// The branch picker: one row per branch, newest first, with the row Enter acts
 /// on marked where every list in Varde marks it, over the footer naming the two
 /// keys the list answers.
@@ -3917,13 +4785,10 @@ fn branch_lines(names: &[String], filter: &str, selected: usize) -> Vec<Line<'st
     lines
 }
 
-/// The rows `varde::palette_rows` built, with the headings dimmed: a heading
-/// offers no key, so it must not read as one. The screen's height goes in
-/// because the row count depends on it — the same number the mouse hit-test
-/// passes, since the two must be handed the same vector.
-fn palette_lines(screen: u16) -> Vec<Line<'static>> {
-    palette_rows(screen)
-        .into_iter()
+/// A list whose rows offer a key or carry none — a heading, a gap, the cancel
+/// line — the ones carrying none dimmed so they do not read as keys.
+fn rows_lines(rows: Vec<(Option<char>, String)>) -> Vec<Line<'static>> {
+    rows.into_iter()
         .map(|(key, row)| match key {
             Some(_) => Line::from(row),
             None => Line::from(Span::styled(row, Style::default().fg(Color::DarkGray))),
@@ -4016,9 +4881,9 @@ mod tests {
         action_icon, authorship_clause, branch_lines, buffer_title, cheatsheet_rows, code_lines,
         colour, diff_rows, editor_block, faint, folded, guided, highlight, icon_colour, layout,
         paint_drag, pane_actions_title, preview_line, right_title, risk_lines, risk_title, shift,
-        status_line, story_title, title_room, tree_lines, truncate, with_caret, Block, Borders,
-        Color, Kind, Line, Modifier, Place, Selection, Span, State, Style, Tone, UnicodeWidthStr,
-        DIRTY, DOTS, WARNING,
+        status_line, story_title, title_room, tree_lines, truncate, with_breakpoint, with_caret,
+        Block, Borders, Color, Kind, Line, Modifier, Place, Selection, Span, State, Style, Tone,
+        UnicodeWidthStr, DIRTY, DOTS, WARNING,
     };
     use varde::risk::{Figure, Figures, Function, Metrics};
 
@@ -4271,51 +5136,133 @@ mod tests {
     }
 
     /// R35.8. The Transport lands on the columns `mouse::transport_at`
-    /// hit-tests: each control one space from the next, the last hard against
-    /// the top-right corner. Rendered rather than reasoned about, because the
-    /// placement is ratatui's and not ours — the same reason `layout`'s tests
-    /// pin the rectangles its solver produced.
+    /// hit-tests: each Chip followed by a column of border, the last against
+    /// the top-right corner, in both of its shapes. Rendered rather than
+    /// reasoned about, because the placement is ratatui's and not ours — the
+    /// same reason `layout`'s tests pin the rectangles its solver produced.
     #[test]
-    fn the_transports_controls_land_on_the_columns_they_are_hit_tested_from() {
+    fn the_transports_chips_land_on_the_columns_they_are_hit_tested_from() {
         use ratatui::widgets::Widget;
         let mut state = State::default();
         state.current_buffer = Some(std::path::PathBuf::from("/w/guide.md"));
         state.speech.speed = 1.25;
-        let area = ratatui::layout::Rect::new(0, 0, 40, 4);
-        let mut buffer = ratatui::buffer::Buffer::empty(area);
-        Block::default()
-            .borders(Borders::ALL)
-            // No Authorship on a default State — nothing told the core git is
-            // installed — so there is no clause to leave room for.
-            .title(right_title(&state, 0))
-            .render(area, &mut buffer);
-        let top: Vec<String> = (0..40)
-            .map(|column| buffer[(column, 0)].symbol().to_string())
-            .collect();
-        let controls = varde::reading::transport(&state);
-        let labels: Vec<String> = controls.iter().map(|(_, glyph)| glyph.clone()).collect();
-        let drawn: Vec<String> = labels
-            .join(" ")
-            .chars()
-            .map(|glyph| glyph.to_string())
-            .collect();
-        let start = 39 - layout::strip_width(&labels) as usize;
-        assert_eq!(top[start..start + drawn.len()], drawn[..], "{top:?}");
-        // And every column of it answers with the control drawn there.
-        let area = layout::Area {
-            x: 0,
-            y: 0,
-            width: 40,
-            height: 4,
-        };
-        for (at, (action, _)) in controls.iter().enumerate() {
-            let column = (start + labels[..at].iter().map(|l| l.width() + 1).sum::<usize>()) as u16;
-            assert_eq!(
-                layout::strip_at(area, &labels, column).map(|hit| controls[hit].0),
-                Some(*action),
-                "column {column}"
-            );
+        let chips = varde::reading::transport(&state);
+        for (width, drawn) in [
+            (40, " \u{25ba} \u{2500} \u{ab} \u{2500} \u{bb} \u{2500} \u{25a0} \u{2500} 1.25x \u{2500}"),
+            (
+                120,
+                " \u{25ba} :pause \u{2500} \u{ab} :prev \u{2500} \u{bb} :next \u{2500} \u{25a0} :stop \u{2500} 1.25x :speed \u{2500}",
+            ),
+        ] {
+            let area = ratatui::layout::Rect::new(0, 0, width, 4);
+            let mut buffer = ratatui::buffer::Buffer::empty(area);
+            Block::default()
+                .borders(Borders::ALL)
+                // No Authorship on a default State — nothing told the core git
+                // is installed — so there is no clause to leave room for.
+                .title(right_title(&state, 0, width))
+                .render(area, &mut buffer);
+            let top: String = (0..width)
+                .map(|column| buffer[(column, 0)].symbol().to_string())
+                .collect();
+            assert!(top.ends_with(&format!("{drawn}\u{2510}")), "{top:?}");
+            // And every column of it answers with the Chip drawn there, every
+            // column of border between two with none.
+            let labels = layout::chip_labels(&chips, width, layout::EDITOR_TITLE);
+            let area = layout::Area {
+                x: 0,
+                y: 0,
+                width,
+                height: 4,
+            };
+            let start = width - 1 - drawn.chars().count() as u16;
+            for (at, cell) in drawn.chars().enumerate() {
+                let column = start + at as u16;
+                let hit = layout::strip_at(area, &labels, column).map(|hit| chips[hit].action);
+                let owner = drawn.chars().take(at + 1).filter(|c| *c == '\u{2500}').count();
+                let expected = match cell {
+                    '\u{2500}' => None,
+                    _ => Some(chips[owner].action),
+                };
+                assert_eq!(hit, expected, "{width}: column {column}");
+            }
         }
+    }
+
+    /// No scenario can see a colour, so this is where "the theme's named
+    /// colours, never fixed RGB" is held: every tone of every hue, under the
+    /// pointer and not.
+    #[test]
+    fn every_chip_is_drawn_in_the_themes_named_colours() {
+        let mut state = State::default();
+        state.current_buffer = Some(std::path::PathBuf::from("/w/guide.md"));
+        let named = |colour: Option<Color>| {
+            !matches!(colour, Some(Color::Rgb(..)) | Some(Color::Indexed(_)))
+        };
+        for lit in [
+            None,
+            Some(varde::reading::STOP),
+            Some(varde::reading::SPEED),
+        ] {
+            for hovered in [None, Some(varde::reading::PREVIOUS)] {
+                state.transport_lit = lit;
+                state.hovered_action = hovered;
+                for span in right_title(&state, 0, 120).spans {
+                    let style = span.style;
+                    assert!(named(style.fg) && named(style.bg), "{span:?}");
+                }
+            }
+        }
+        // And lit is not a colour of its own but the Chip reversed, which is
+        // what keeps it in the theme whatever the theme is.
+        state.transport_lit = Some(varde::reading::STOP);
+        state.hovered_action = None;
+        let spans = right_title(&state, 0, 120).spans;
+        let stop = spans
+            .iter()
+            .find(|span| span.content.contains('\u{25a0}'))
+            .expect("the stop Chip");
+        assert_eq!(stop.style.fg, Some(Color::Red));
+        assert!(stop.style.add_modifier.contains(Modifier::REVERSED));
+
+        // Plain, each glyph in its hue and its keys dimmer beside it; under the
+        // pointer, bold and underlined as well, since nothing else says it is a
+        // button. Play is plain while a Reading is paused, previous with one.
+        state.transport_lit = None;
+        state.hovered_action = Some(varde::reading::PREVIOUS);
+        state.reading = Some(varde::reading::Reading {
+            utterances: varde::reading::utterances("One."),
+            offsets: Vec::new(),
+            at_ms: 0,
+            paused: true,
+            file: None,
+        });
+        let spans = right_title(&state, 0, 120).spans;
+        let drawn = |glyph: char| {
+            let at = spans
+                .iter()
+                .position(|span| span.content.contains(glyph))
+                .expect("the Chip");
+            (spans[at].style, spans[at + 1].style)
+        };
+        for (glyph, hue) in [
+            ('\u{25ba}', Color::Green),
+            ('\u{ab}', Color::Blue),
+            ('\u{bb}', Color::Blue),
+        ] {
+            let (head, keys) = drawn(glyph);
+            assert_eq!((head.fg, keys.fg), (Some(hue), Some(Color::DarkGray)));
+        }
+        let hovered = Modifier::BOLD | Modifier::UNDERLINED;
+        assert!(drawn('\u{ab}').0.add_modifier.contains(hovered));
+        assert!(!drawn('\u{bb}').0.add_modifier.intersects(hovered));
+        state.reading.as_mut().expect("a Reading").paused = false;
+        let spans = right_title(&state, 0, 120).spans;
+        let pause = spans
+            .iter()
+            .find(|span| span.content.contains('\u{25ae}'))
+            .expect("the pause Chip");
+        assert_eq!(pause.style.fg, Some(Color::Yellow));
     }
 
     /// F40 on the border, rendered: the Authorship lands to the *left* of the
@@ -4371,7 +5318,7 @@ mod tests {
             top.contains("Ada Lovelace  2026-01-05"),
             "the authorship is not on the border: {top:?}"
         );
-        assert!(top.ends_with("1.00x \u{2510}"), "{top:?}");
+        assert!(top.ends_with(" 1.00x \u{2500}\u{2510}"), "{top:?}");
 
         // And the filename is the last thing to give: a name that leaves no room
         // for a date takes the columns, rather than being drawn over by a clause
@@ -4380,12 +5327,9 @@ mod tests {
             &state,
             "a-very-long-document-name-indeed-and-then-some-more-of-it.md",
         );
-        assert!(
-            top.contains("indeed-and-then-some"),
-            "the name gave: {top:?}"
-        );
+        assert!(top.contains("indeed-and-then"), "the name gave: {top:?}");
         assert!(!top.contains("Ada"), "{top:?}");
-        assert!(top.ends_with("1.00x \u{2510}"), "{top:?}");
+        assert!(top.ends_with(" 1.00x \u{2500}\u{2510}"), "{top:?}");
     }
 
     /// A filename long enough to reach the Transport is cut, rather than drawn
@@ -4410,16 +5354,16 @@ mod tests {
             ))
             // No Authorship on a default State — nothing told the core git is
             // installed — so there is no clause to leave room for.
-            .title(right_title(&state, 0))
+            .title(right_title(&state, 0, 40))
             .render(area, &mut buffer);
         let top: String = (0..40)
             .map(|column| buffer[(column, 0)].symbol().to_string())
             .collect();
         assert!(top.contains('\u{2026}'), "the name was not cut: {top:?}");
-        assert!(top.ends_with("1.00x \u{2510}"), "{top:?}");
+        assert!(top.ends_with(" 1.00x \u{2500}\u{2510}"), "{top:?}");
         // And a column of border between the cut title and the first
         // control, so the two do not read as one word.
-        assert!(top.contains("\u{2500}\u{ab}"), "{top:?}");
+        assert!(top.contains("[normal]\u{2500} \u{25ba}"), "{top:?}");
     }
 
     /// A running loop's line and the icons share the border: the left title is
@@ -4527,6 +5471,50 @@ mod tests {
             .sum();
         // width - 2 for the borders, less two columns for the action.
         assert_eq!(before, (30 - 2) - 2);
+    }
+
+    /// The Paused line's marker takes the Breakpoint column and its wash runs
+    /// to the pane's right border, however short the line.
+    #[test]
+    fn the_paused_line_is_marked_and_washed_across_the_pane() {
+        let plain = Line::from(vec![Span::raw("   3 "), Span::raw("x")]);
+        let line = super::on_paused_line(plain, varde::debug::Why::Paused, 30, true);
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.starts_with("\u{2192}  3 x"), "{text:?}");
+        assert_eq!(text.width(), 30 - 2);
+        assert!(line.spans.iter().all(|span| span.style.bg.is_some()));
+    }
+
+    /// The Breakpoint list's row: its path and line, `stale` when it is, and
+    /// the icon in the two columns `mouse::breakpoint_action_at` hit-tests —
+    /// however long the path is.
+    #[test]
+    fn the_breakpoint_row_names_its_line_and_keeps_its_icon_in_place() {
+        let mut state = State::default();
+        state.root = std::path::PathBuf::from("/w");
+        state.breakpoints = vec![varde::debug::Breakpoint {
+            file: std::path::PathBuf::from("/w/src/a/very/long/path/to/main.rs"),
+            line: 3,
+            text: String::new(),
+            stale: true,
+            properties: Default::default(),
+        }];
+        let line = super::breakpoints_lines(&state, 30).remove(0);
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.contains(":3 stale"), "{text:?}");
+        let before: usize = line.spans[..line.spans.len() - 2]
+            .iter()
+            .map(|span| span.content.width())
+            .sum();
+        assert_eq!(before, (30 - 2) - 2, "{line:?}");
     }
 
     /// `mouse::history_action_at` hit-tests the row's icon from the pane's right
@@ -5320,10 +6308,10 @@ mod tests {
         assert_eq!(
             drawn(&state),
             [
-                "   1 \u{25bc}  fn main() {",
-                "   2        go();",
-                "   3    }",
-                "   4    "
+                "    1 \u{25bc}  fn main() {",
+                "    2        go();",
+                "    3    }",
+                "    4    "
             ]
         );
         assert_eq!(
@@ -5342,10 +6330,48 @@ mod tests {
         assert_eq!(
             drawn(&state),
             [
-                format!("   1 \u{25ba}  fn main() {{{DOTS}"),
-                "   3    }".to_string(),
-                "   4    ".to_string()
+                format!("    1 \u{25ba}  fn main() {{{DOTS}"),
+                "    3    }".to_string(),
+                "    4    ".to_string()
             ]
+        );
+    }
+
+    /// A Breakpoint takes the gutter's first column, the one `mouse` hit-tests
+    /// the click that set it at, and moves nothing else on the line: the
+    /// number, the toggle and the text are where they were.
+    #[test]
+    fn a_breakpoint_is_drawn_in_the_column_its_click_lands_in() {
+        let plain =
+            code_lines(&highlight::highlight("main.rs", "fn main() {}"), true, None).remove(0);
+        let text = |line: &Line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        };
+        let marked = text(&with_breakpoint(plain.clone(), varde::debug::Mark::Plain));
+        assert_eq!(
+            marked.chars().nth(layout::BREAKPOINT_COLUMN as usize),
+            Some('\u{25cf}')
+        );
+        assert_eq!(
+            marked.chars().skip(1).collect::<String>(),
+            text(&plain).chars().skip(1).collect::<String>()
+        );
+        assert_eq!(
+            text(&with_breakpoint(plain.clone(), varde::debug::Mark::Stale))
+                .chars()
+                .next(),
+            Some('\u{25cc}'),
+            "a Stale breakpoint is drawn apart from one the program will pause at"
+        );
+        assert_eq!(
+            text(&with_breakpoint(plain, varde::debug::Mark::Unverified))
+                .chars()
+                .next(),
+            Some('\u{25cb}'),
+            "an Unverified breakpoint is hollow, and drawn apart from a Stale one"
         );
     }
 

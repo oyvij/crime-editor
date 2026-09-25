@@ -3,6 +3,7 @@
 
 use anyhow::Result;
 use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
@@ -55,14 +56,25 @@ pub struct Pane {
 const QUIET: u8 = 5;
 
 impl Pane {
-    /// `command` is the program to run, or `None` for the user's login shell.
-    /// The login part is the whole difference between a shell that reads the
-    /// profile the user's prompt and aliases live in and one that reads
-    /// nothing: a shell decides it is a login shell from its own `argv[0]`
-    /// having a leading dash, which is how every terminal emulator starts one
-    /// and what `new_default_prog` does — including resolving `$SHELL`, and the
-    /// password database when that is unset.
-    pub fn spawn(command: Option<&str>, cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
+    /// `argv` is the program to run and its arguments, or empty for the user's
+    /// login shell. The login part is the whole difference between a shell
+    /// that reads the profile the user's prompt and aliases live in and one
+    /// that reads nothing: a shell decides it is a login shell from its own
+    /// `argv[0]` having a leading dash, which is how every terminal emulator
+    /// starts one and what `new_default_prog` does — including resolving
+    /// `$SHELL`, and the password database when that is unset.
+    ///
+    /// `argv` is handed to the pty as it stands and never through a shell: the
+    /// debugged program's arguments come from a Debug adapter, which is
+    /// untrusted input, and a command line is something a shell would parse.
+    /// `env` is what the adapter asked to be set on top of `queries::CHILD_ENV`.
+    pub fn spawn(
+        argv: &[String],
+        cwd: &Path,
+        env: &BTreeMap<String, String>,
+        rows: u16,
+        cols: u16,
+    ) -> Result<Self> {
         // A zero-sized grid panics inside vt100, and a terminal that has not
         // reported its size yet gives us zero. Two rows, not one: wrapping a
         // column needs a row to scroll into, and on a one-row grid vt100
@@ -76,8 +88,12 @@ impl Pane {
             pixel_height: 0,
         })?;
 
-        let mut builder = match command {
-            Some(command) => CommandBuilder::new(command),
+        let mut builder = match argv.split_first() {
+            Some((program, arguments)) => {
+                let mut builder = CommandBuilder::new(program);
+                builder.args(arguments);
+                builder
+            }
             None => CommandBuilder::new_default_prog(),
         };
         builder.cwd(cwd);
@@ -93,6 +109,11 @@ impl Pane {
                 // `PATH` and `HOME` with it and leave nothing runnable.
                 None => builder.env_remove(name),
             }
+        }
+        // After Varde's own identity, so an adapter cannot talk a child out of
+        // the terminal it is actually in.
+        for (name, value) in env {
+            builder.env(name, value);
         }
         let mut child = pty.slave.spawn_command(builder)?;
         let pid = child.process_id();

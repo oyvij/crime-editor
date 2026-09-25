@@ -269,3 +269,15 @@ Feature: Reading aloud
 
   Scenario: Every transport action has a key binding
     Then every transport action is reachable from the keyboard
+
+  Scenario: The Reading's Transport is made of Chips
+    Given "guide.md" is open in the editor holding:
+      """
+      Install it.
+      """
+    Then the editor's Transport's Chips are:
+      | play     |
+      | previous |
+      | next     |
+      | stop     |
+      | speed    |

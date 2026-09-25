@@ -759,7 +759,7 @@ pub fn start(state: &mut State, scope: Scope) -> Vec<Effect> {
         Effect::DeleteFile(crate::varde_dir(&state.root, state.sidecar.as_deref()).join(SENTINEL)),
         Effect::Snapshot { iteration: 1 },
     ];
-    effects.extend(crate::queue_for_ai(state, prompt));
+    effects.extend(crate::queue_for_ai(state, crate::Enter::Pressed, prompt));
     effects
 }
 
@@ -1119,7 +1119,7 @@ fn accept(state: &mut State, iteration: &Iteration, after: Figures) -> Vec<Effec
         Effect::DeleteFile(crate::varde_dir(&state.root, state.sidecar.as_deref()).join(SENTINEL)),
         Effect::Snapshot { iteration: number },
     ];
-    effects.extend(crate::queue_for_ai(state, prompt));
+    effects.extend(crate::queue_for_ai(state, crate::Enter::Pressed, prompt));
     effects
 }
 
@@ -1149,6 +1149,7 @@ fn revert(
     ];
     effects.extend(crate::queue_for_ai(
         state,
+        crate::Enter::Pressed,
         reverted_prompt(condition, output),
     ));
     effects

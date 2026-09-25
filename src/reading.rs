@@ -393,14 +393,19 @@ pub fn next_speed(current: f32) -> f32 {
         .unwrap_or(SPEEDS[0])
 }
 
-/// The strip on the editor's top border: each control and the glyph it is
-/// drawn as, left to right. Read by `ui` to draw it and by `mouse` to hit-test
-/// it, so the two cannot disagree about which control is where.
+/// The Chips on the editor's top border, left to right. Read by `ui` to draw
+/// them and by `mouse` to hit-test them, so the two cannot disagree about which
+/// control is where.
 ///
 /// Empty for anything that cannot be read aloud — absent rather than greyed:
-/// a control that is drawn and refuses is a control the reader presses twice
-/// before believing it. A diff and a Story are drawn in the editor's rectangle
-/// but are not the buffer, so they have no Reading either.
+/// a Transport drawn over a buffer nothing can read is a row of controls the
+/// reader presses twice before believing it. A diff and a Story are drawn in
+/// the editor's rectangle but are not the buffer, so they have no Reading
+/// either. Within a Transport that is drawn, previous, next and stop are dimmed
+/// while nothing is in flight, since then there is nothing for them to act on.
+///
+/// Play leads, as continue leads the debugger's, so every Transport opens on
+/// the Chip that says whether something is moving.
 ///
 /// The glyphs are deliberately narrow and non-emoji. U+23EE and its family
 /// report as narrow to `unicode-width` and are rendered emoji-wide by most
@@ -413,7 +418,8 @@ pub fn next_speed(current: f32) -> f32 {
 /// the pointer-and-square pair is the same size on the screen without it. The
 /// small U+25B8/U+25AA they replaced were legible only to somebody who already
 /// knew what they were.
-pub fn transport(state: &State) -> Vec<(&'static str, String)> {
+pub fn transport(state: &State) -> Vec<crate::Chip> {
+    use crate::{Chip, Hue, Tone};
     if state.diff.is_some() || state.walking.is_some() {
         return Vec::new();
     }
@@ -425,18 +431,33 @@ pub fn transport(state: &State) -> Vec<(&'static str, String)> {
         return Vec::new();
     }
     let playing = matches!(&state.reading, Some(reading) if !reading.paused);
+    let chip = |action, name, glyph: &str, keys, hue, needs_reading: bool| Chip {
+        action,
+        name,
+        glyph: glyph.to_string(),
+        keys,
+        hue,
+        tone: match state.transport_lit == Some(action) {
+            true => Tone::Lit,
+            false if needs_reading && state.reading.is_none() => Tone::Dimmed,
+            false => Tone::Plain,
+        },
+    };
     vec![
-        (PREVIOUS, "\u{ab}".to_string()),
         // The play control says what pressing it does, which is a pause while
         // a Reading plays — and is the whole of "shows whether one is in
         // flight".
-        (
-            PLAY_PAUSE,
-            if playing { "\u{25ae}" } else { "\u{25ba}" }.to_string(),
-        ),
-        (NEXT, "\u{bb}".to_string()),
-        (STOP, "\u{25a0}".to_string()),
-        (SPEED, format!("{:.2}x", state.speech.speed)),
+        match playing {
+            true => chip(PLAY_PAUSE, "pause", "\u{25ae}", ":pause", Hue::Hold, false),
+            false => chip(PLAY_PAUSE, "play", "\u{25ba}", ":pause", Hue::Go, false),
+        },
+        chip(PREVIOUS, "previous", "\u{ab}", ":prev", Hue::Step, true),
+        chip(NEXT, "next", "\u{bb}", ":next", Hue::Step, true),
+        chip(STOP, "stop", "\u{25a0}", ":stop", Hue::Halt, true),
+        Chip {
+            glyph: format!("{:.2}x", state.speech.speed),
+            ..chip(SPEED, "speed", "", ":speed", Hue::Plain, false)
+        },
     ]
 }
 
@@ -791,7 +812,7 @@ mod tests {
             current_buffer: Some(std::path::PathBuf::from("/w/guide.md")),
             ..State::default()
         };
-        assert_eq!(names(&state), [PREVIOUS, PLAY_PAUSE, NEXT, STOP, SPEED]);
+        assert_eq!(names(&state), [PLAY_PAUSE, PREVIOUS, NEXT, STOP, SPEED]);
         state.current_buffer = Some(std::path::PathBuf::from("/w/main.rs"));
         assert_eq!(transport(&state), []);
         state.current_buffer = None;
@@ -806,7 +827,7 @@ mod tests {
             current_buffer: Some(std::path::PathBuf::from("/w/guide.md")),
             ..State::default()
         };
-        let glyph = |state: &State| transport(state)[1].1.clone();
+        let glyph = |state: &State| transport(state)[0].glyph.clone();
         assert_eq!(glyph(&state), "\u{25ba}");
         state.reading = Some(Reading {
             utterances: utterances("One."),
@@ -829,7 +850,7 @@ mod tests {
             ..State::default()
         };
         state.speech.speed = 1.25;
-        assert_eq!(transport(&state)[4].1, "1.25x");
+        assert_eq!(transport(&state)[4].glyph, "1.25x");
     }
 
     /// Wrapping at the top, and stepping off a rung a config file wrote —
@@ -846,8 +867,80 @@ mod tests {
     fn names(state: &State) -> Vec<&'static str> {
         transport(state)
             .into_iter()
-            .map(|(action, _)| action)
+            .map(|chip| chip.action)
             .collect()
+    }
+
+    fn tones(state: &State) -> Vec<crate::Tone> {
+        transport(state).into_iter().map(|chip| chip.tone).collect()
+    }
+
+    /// Previous, next and stop act on a Reading in flight, so with none they
+    /// are dimmed — never hidden, so the Transport keeps one shape.
+    #[test]
+    fn with_nothing_in_flight_only_play_and_speed_are_available() {
+        use crate::Tone::{Dimmed, Plain};
+        let mut state = State {
+            current_buffer: Some(std::path::PathBuf::from("/w/guide.md")),
+            ..State::default()
+        };
+        assert_eq!(tones(&state), [Plain, Dimmed, Dimmed, Dimmed, Plain]);
+        state.reading = Some(Reading {
+            utterances: utterances("One."),
+            offsets: Vec::new(),
+            at_ms: 0,
+            paused: true,
+            file: None,
+        });
+        assert_eq!(tones(&state), [Plain; 5]);
+    }
+
+    /// Lit is the last action taken and nothing else — no timer, and it
+    /// outranks dimmed, so a stop that ended the Reading still says it did.
+    #[test]
+    fn the_last_action_taken_is_lit() {
+        use crate::Tone::{Dimmed, Lit, Plain};
+        let mut state = State {
+            current_buffer: Some(std::path::PathBuf::from("/w/guide.md")),
+            transport_lit: Some(STOP),
+            ..State::default()
+        };
+        assert_eq!(tones(&state), [Plain, Dimmed, Dimmed, Lit, Plain]);
+        state.transport_lit = Some(PLAY_PAUSE);
+        assert_eq!(tones(&state), [Lit, Dimmed, Dimmed, Dimmed, Plain]);
+    }
+
+    /// One cell wide in every font, or every click right of the glyph lands a
+    /// column off (ADR 0022). `unicode-width` alone cannot say so — U+23EE is
+    /// narrow to it and emoji-wide on screen — so each glyph is also held to
+    /// ASCII, Latin-1, or the Geometric Shapes that carry no `Emoji` property.
+    #[test]
+    fn every_glyph_is_one_cell_in_every_font() {
+        use unicode_width::UnicodeWidthChar;
+        const EMOJI: [char; 8] = [
+            '\u{25aa}', '\u{25ab}', '\u{25b6}', '\u{25c0}', '\u{25fb}', '\u{25fc}', '\u{25fd}',
+            '\u{25fe}',
+        ];
+        let mut state = State {
+            current_buffer: Some(std::path::PathBuf::from("/w/guide.md")),
+            ..State::default()
+        };
+        let mut glyphs: Vec<String> = transport(&state).into_iter().map(|c| c.glyph).collect();
+        state.reading = Some(Reading {
+            utterances: utterances("One."),
+            offsets: Vec::new(),
+            at_ms: 0,
+            paused: false,
+            file: None,
+        });
+        glyphs.extend(transport(&state).into_iter().map(|c| c.glyph));
+        for glyph in glyphs.iter().flat_map(|glyph| glyph.chars()) {
+            assert_eq!(glyph.width(), Some(1), "{glyph:?}");
+            let safe = glyph.is_ascii()
+                || ('\u{a0}'..='\u{ff}').contains(&glyph)
+                || (('\u{25a0}'..='\u{25ff}').contains(&glyph) && !EMOJI.contains(&glyph));
+            assert!(safe, "{glyph:?} is not one cell in every font");
+        }
     }
 
     #[test]

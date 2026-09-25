@@ -12,6 +12,7 @@ use std::path::Path;
 pub enum Kind {
     Server,
     Formatter,
+    Adapter,
     Requirement,
     Speech,
 }
@@ -21,6 +22,7 @@ impl Kind {
         match self {
             Kind::Server => "language-servers",
             Kind::Formatter => "formatters",
+            Kind::Adapter => "debug-adapters",
             Kind::Requirement => "requirements",
             Kind::Speech => "speech",
         }
@@ -33,6 +35,7 @@ impl Kind {
         match self {
             Kind::Server => Some("lsp"),
             Kind::Formatter => Some("formatter"),
+            Kind::Adapter => Some("dap"),
             Kind::Requirement => Some("facts"),
             Kind::Speech => None,
         }
@@ -202,6 +205,27 @@ pub fn rows(state: &State) -> Vec<ToolRow> {
         |_, formatter| match on_path(&formatter.command) {
             true => Availability::Installed,
             false => absent(formatter.install.get(&state.os)),
+        },
+    ));
+    // An adapter a language server hosts is no program of its own: its
+    // `command` is sent to that server, so the server's command is the one
+    // that has to be on this machine.
+    let program = |adapter: &crate::startup::Adapter| match &adapter.server {
+        Some(server) => state
+            .servers
+            .get(server)
+            .map_or_else(|| server.clone(), |server| server.command.clone()),
+        None => adapter.command.clone(),
+    };
+    rows.extend(group(
+        Kind::Adapter,
+        &state.adapters,
+        template.adapters(),
+        program,
+        |adapter| adapter.install.get(&state.os).cloned(),
+        |_, adapter| match on_path(&program(adapter)) {
+            true => Availability::Installed,
+            false => absent(adapter.install.get(&state.os)),
         },
     ));
     // A requirement is a search, not a command: what it reads is whether the

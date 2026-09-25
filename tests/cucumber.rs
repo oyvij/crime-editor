@@ -140,6 +140,12 @@ pub struct VardeWorld {
     /// What the AI session's grid holds. Separate from `screen` because they are
     /// separate ptys: a drag that read the wrong one is the bug behind this.
     ai_screen: Vec<String>,
+    /// Every argv the edge was asked to run in the Debug group's own terminal.
+    program: Vec<Vec<String>>,
+    /// The size of the pty the edge holds for it, `None` when it holds none.
+    /// Kept as a size rather than a flag because a hidden pane that was
+    /// resized to nothing is the failure the scenarios pin.
+    output_pty: Option<(u16, u16)>,
     /// What the edge is half-way through collecting — the key router needs it.
     drafts: Drafts,
     /// The content last shown or held for a diffed file, so a `Then` can
@@ -288,6 +294,54 @@ pub struct VardeWorld {
     /// where a refused jump would have gone, and "naming where it went" is what
     /// makes that refusal a decision rather than a key that did nothing.
     named: Vec<String>,
+    /// The scripted Debug adapter. No scenario runs one: the world plays the
+    /// edge and the adapter both, answering requests with canned replies and
+    /// sending the events a scenario names.
+    dap: FakeAdapter,
+}
+
+/// What the scripted Debug adapter has been asked and holds ready to say.
+#[derive(Debug, Default)]
+struct FakeAdapter {
+    /// Every command the edge was asked to spawn, including one that
+    /// produced no process.
+    spawned: Vec<String>,
+    /// Every port the edge was asked to connect to an adapter a language
+    /// server hosts on, which is spawned by nobody.
+    dialed: Vec<u16>,
+    /// Whether the edge holds the adapter.
+    held: bool,
+    /// Whether it answers `initialize` the moment it is asked — "is ready".
+    ready: bool,
+    /// Every message sent to it, in order.
+    sent: Vec<Value>,
+    /// The call stack each thread answers `stackTrace` with: name, file, line
+    /// and presentation hint.
+    stacks: BTreeMap<i64, Vec<(String, PathBuf, usize, String)>>,
+    /// The scopes the chosen Frame answers `scopes` with, by name, and the
+    /// reference each is asked for its members by.
+    scopes: Vec<(String, i64)>,
+    /// What each reference answers `variables` with. A scenario plants
+    /// members here; the adapter hands back whichever page was asked for.
+    members: BTreeMap<i64, Vec<Value>>,
+    /// How many requests had been sent when the last pause brought the
+    /// Variables up, which is what "since the pause" counts from.
+    since_pause: usize,
+    /// The `stopped` event that brought the last pause, kept so a scenario
+    /// that plants a member can drive the same pause again and have the
+    /// Variables hold it.
+    stopped: Option<Value>,
+    /// The Exception filters it lists in its `initialize` answer, as the
+    /// protocol shapes them.
+    filters: Vec<Value>,
+    /// What the next `stopped` event says paused the program.
+    text: Option<String>,
+    /// Every child session's connection the edge was asked to open, and what
+    /// was sent over it, by the number it was opened under.
+    children: BTreeMap<usize, Vec<Value>>,
+    /// The one thread a child session names, which stops as soon as the child
+    /// is configured, the way a worker started under a Breakpoint does.
+    child_thread: String,
 }
 
 impl VardeWorld {
@@ -478,10 +532,7 @@ impl VardeWorld {
             self.state.ai_width.map(|width| width as u16),
             story::band_height(&self.state),
             story::step_menu_width(&self.state),
-            layout::Shapes {
-                ai: self.state.ai_pane,
-                corner: self.state.corner,
-            },
+            varde::shapes(&self.state),
         )
     }
 
@@ -540,9 +591,28 @@ impl VardeWorld {
                 .map(|buffer| buffer.shown().split('\n').map(str::to_string).collect())
                 .unwrap_or_default(),
             Pane::Ai => self.ai_screen.clone(),
-            Pane::Tree | Pane::Risk | Pane::Buffers | Pane::History | Pane::Terminal => {
-                self.screen.clone()
-            }
+            Pane::Evaluator => self
+                .state
+                .evaluator
+                .as_ref()
+                .map(|evaluator| {
+                    evaluator
+                        .snippet
+                        .shown()
+                        .split('\n')
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Pane::Tree
+            | Pane::Risk
+            | Pane::Buffers
+            | Pane::History
+            | Pane::Breakpoints
+            | Pane::Frames
+            | Pane::Variables
+            | Pane::Output
+            | Pane::Terminal => self.screen.clone(),
         }
     }
 
@@ -557,6 +627,17 @@ impl VardeWorld {
     /// edge's to know, so the core is told rather than remembering it.
     fn tell_core(&mut self) {
         self.state.ai_running = self.ai_pane;
+        self.state.output_running = self.output_pty.is_some();
+        // What `resize_panes` does before every frame: fit the pty to the
+        // rectangle the layout gives it, and leave it alone when the layout
+        // gives it none.
+        let output = self.panes().output;
+        if let (true, Some(size)) = (
+            self.output_pty.is_some(),
+            layout::pty_size(output.width, output.height),
+        ) {
+            self.output_pty = Some(size);
+        }
         self.state.head = self.head.clone();
         // Which branch HEAD is on is the edge's to read, so the world reads it
         // too — the core never writes it.
@@ -603,6 +684,139 @@ impl VardeWorld {
             language: language.to_string(),
             why,
         });
+    }
+
+    /// The scripted adapter's canned replies: `initialize` with the one
+    /// capability Varde reads, a thread to pause, the stack a scenario gave a
+    /// thread, and a `disconnect` answered. Anything else it is only told.
+    fn adapter_answers(&mut self, message: &Value) {
+        if message["type"] != "request" {
+            return;
+        }
+        let body = match message["command"].as_str() {
+            Some("initialize") => json!({
+                "supportsConfigurationDoneRequest": true,
+                "exceptionBreakpointFilters": self.dap.filters,
+            }),
+            Some("threads") => json!({ "threads": [{ "id": 1, "name": "main" }] }),
+            Some("stackTrace") => {
+                let thread = message["arguments"]["threadId"]
+                    .as_i64()
+                    .unwrap_or_default();
+                let frames: Vec<Value> = self
+                    .dap
+                    .stacks
+                    .get(&thread)
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                    .map(|(id, (name, file, line, hint))| {
+                        let mut source = json!({ "path": file });
+                        if !hint.is_empty() {
+                            source["presentationHint"] = json!(hint);
+                        }
+                        json!({ "id": id, "name": name, "line": line, "source": source })
+                    })
+                    .collect();
+                json!({ "stackFrames": frames })
+            }
+            Some("disconnect") => json!({}),
+            // As an adapter that can run one thread alone answers: only what
+            // was asked for ran on.
+            Some("continue") => json!({
+                "allThreadsContinued": message["arguments"]["singleThread"] != json!(true)
+            }),
+            Some("scopes") => {
+                let scopes: Vec<Value> = self
+                    .dap
+                    .scopes
+                    .iter()
+                    .map(|(name, reference)| {
+                        json!({ "name": name, "variablesReference": reference })
+                    })
+                    .collect();
+                json!({ "scopes": scopes })
+            }
+            // The page asked for, or everything the reference holds when no
+            // page was named — which is what a real adapter does with a
+            // request carrying no `start`.
+            Some("variables") => {
+                let reference = message["arguments"]["variablesReference"]
+                    .as_i64()
+                    .unwrap_or_default();
+                let held = self
+                    .dap
+                    .members
+                    .get(&reference)
+                    .cloned()
+                    .unwrap_or_default();
+                let start = message["arguments"]["start"].as_u64().unwrap_or_default() as usize;
+                let count = message["arguments"]["count"]
+                    .as_u64()
+                    .map_or(held.len(), |count| count as usize);
+                let page: Vec<Value> = held.into_iter().skip(start).take(count).collect();
+                json!({ "variables": page })
+            }
+            _ => return,
+        };
+        self.adapter_says(json!({
+            "type": "response",
+            "request_seq": message["seq"],
+            "success": true,
+            "command": message["command"],
+            "body": body,
+        }));
+    }
+
+    /// One message from the adapter, driven straight in as the edge would.
+    fn adapter_says(&mut self, message: Value) {
+        self.send_now(Event::DapReceived {
+            json: message.to_string(),
+            from: 0,
+        });
+    }
+
+    /// A child session's side of the protocol: it starts when asked, names
+    /// its one thread, and that thread stops once it is configured. Its
+    /// thread is numbered 1, as the session's own is, which is the point.
+    fn child_answers(&mut self, child: usize, message: &Value) {
+        if message["type"] != "request" {
+            return;
+        }
+        let command = message["command"].as_str().unwrap_or_default();
+        let body = match command {
+            "threads" => json!({ "threads": [{ "id": 1, "name": self.dap.child_thread }] }),
+            "stackTrace" => json!({ "stackFrames": [] }),
+            _ => json!({}),
+        };
+        let says = |world: &mut Self, message: Value| {
+            world.send_now(Event::DapReceived {
+                json: message.to_string(),
+                from: child,
+            })
+        };
+        says(
+            self,
+            json!({
+                "type": "response",
+                "request_seq": message["seq"],
+                "success": true,
+                "command": command,
+                "body": body,
+            }),
+        );
+        match command {
+            "launch" | "attach" => says(self, json!({ "type": "event", "event": "initialized" })),
+            "configurationDone" => says(
+                self,
+                json!({
+                    "type": "event",
+                    "event": "stopped",
+                    "body": { "threadId": 1, "reason": "breakpoint" },
+                }),
+            ),
+            _ => {}
+        }
     }
 
     /// What the canned server said, driven straight in as the edge would.
@@ -718,6 +932,71 @@ impl VardeWorld {
                     self.lsp_is_running(&language, &command);
                 }
             }
+            Effect::StartDap {
+                reach: varde::debug::Reach::Port(port),
+                ..
+            } => {
+                self.dap.dialed.push(port);
+                if self.dap.ready {
+                    self.dap.held = true;
+                    self.send_now(Event::DapStarted { from: 0 });
+                }
+            }
+            Effect::StartDap { command, .. } => {
+                self.dap.spawned.push(command.clone());
+                // A command that is not there is the spawn failing as the
+                // edge sees it; one that is starts only once the scenario's
+                // adapter is ready, so a Scenario can report the spawn itself.
+                if !self.on_path.contains(&command) {
+                    self.send_now(Event::DapGone {
+                        why: varde::debug::Gone::Missing,
+                        from: 0,
+                    });
+                } else if self.dap.ready {
+                    self.dap.held = true;
+                    self.send_now(Event::DapStarted { from: 0 });
+                }
+            }
+            Effect::DapChild { child } => {
+                self.dap.children.insert(child, Vec::new());
+                self.send_now(Event::DapStarted { from: child });
+            }
+            // A child session's connection goes with the adapter's, so one
+            // let go hears what it was sent and answers nothing.
+            Effect::DapSend { to, json } if to != 0 => {
+                let message: Value = serde_json::from_str(&json).expect("valid DAP");
+                self.dap
+                    .children
+                    .get_mut(&to)
+                    .expect("a child session the edge was asked to open")
+                    .push(message.clone());
+                if self.dap.held {
+                    self.child_answers(to, &message);
+                }
+            }
+            Effect::DapSend { json, .. } => {
+                let message: Value = serde_json::from_str(&json).expect("valid DAP");
+                self.dap.sent.push(message.clone());
+                match self.dap.held {
+                    true => self.adapter_answers(&message),
+                    false => self.send_now(Event::DapGone {
+                        why: varde::debug::Gone::Exited,
+                        from: 0,
+                    }),
+                }
+            }
+            Effect::StopDap => {
+                if std::mem::take(&mut self.dap.held) {
+                    // The debugged program goes with the session it belonged
+                    // to, which is what the edge does at every site that stops
+                    // holding an adapter.
+                    self.output_pty = None;
+                    self.send_now(Event::DapGone {
+                        why: varde::debug::Gone::Exited,
+                        from: 0,
+                    });
+                }
+            }
             Effect::LspSend { language, json } => {
                 let message: Value = serde_json::from_str(&json).expect("valid JSON-RPC");
                 let handshake = message["method"] == "initialize";
@@ -764,6 +1043,13 @@ impl VardeWorld {
             // The edge holds one status line, so a withdrawal leaves
             // nothing showing rather than the notice before it.
             Effect::ClearNotice => self.notices.clear(),
+            // What the edge does: start the program in the Debug group's own
+            // terminal, never in a shell. Its pty opens at the floor and is
+            // fitted by `tell_core` above, exactly as the edge does.
+            Effect::RunProgram { argv, .. } => {
+                self.program.push(argv);
+                self.output_pty = Some((2, 1));
+            }
             // What the edge does: build the stream under `~/.varde/tmp` and
             // play it. No path crosses the seam, so none is modelled — what a
             // scenario can see is that words reached a voice.
@@ -870,6 +1156,13 @@ impl VardeWorld {
     /// The effects that read something back and feed it in as an event.
     fn applied_to_lists(&mut self, effect: Effect) -> Option<Effect> {
         match effect {
+            Effect::ReadBreakpointFile(path) => {
+                let contents = self.on_disk(&path);
+                let (state, effects) =
+                    update(&self.state, Event::BreakpointFileRead { path, contents });
+                self.state = state;
+                self.apply(effects);
+            }
             Effect::ReadForReview(path) => {
                 let contents = self.on_disk(&path);
                 let (state, effects) =
@@ -1562,6 +1855,7 @@ fn nothing_written(world: &mut VardeWorld) {
 }
 
 #[given(expr = "Varde started in the project")]
+#[given(expr = "Varde starts in the project")]
 #[when(expr = "Varde starts in the project")]
 fn varde_starts(world: &mut VardeWorld) {
     // A scenario that says nothing about the OS still needs one, since the
@@ -1986,8 +2280,14 @@ fn pointer_at(
         Pane::Editor => (panes.editor, varde::gutter(state), state.editor_scroll),
         Pane::Tree => (panes.tree, 0, state.tree_scroll),
         Pane::Ai => (panes.ai, 0, 0),
-        Pane::Risk | Pane::Buffers | Pane::History => (panes.corner, 0, 0),
-        Pane::Terminal => (panes.terminal, 0, 0),
+        Pane::Output => (panes.output, 0, 0),
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
+            (panes.corner, 0, 0)
+        }
+        Pane::Terminal | Pane::Variables => (panes.terminal, 0, 0),
+        // The window itself, not the Snippet's own rectangle: the `+ 1` below
+        // is the border every other pane's rectangle carries.
+        Pane::Evaluator => (panes.evaluator, 0, 0),
     };
     (
         area.x + 1 + gutter + (column - 1) as u16,
@@ -2468,6 +2768,20 @@ fn enter_name(world: &mut VardeWorld, name: String) {
 #[when(expr = "I press {string}")]
 #[given(expr = "I pressed {string}")]
 fn press(world: &mut VardeWorld, key: String) {
+    // Through the router: what a tapped Space means is where the keyboard is
+    // and what mode it is in, which no one event stands for — and in Stepping
+    // mode that is true of every key, since the mode claims four letters and
+    // hands the rest back to whatever they always were.
+    if key == "Space"
+        || world.state.stepping
+        // The Snippet is a buffer being typed into, so what a key means there
+        // is the router's answer too: Enter runs it in normal mode and opens a
+        // line while inserting, which no one event stands for.
+        || world.state.focus == Pane::Evaluator
+        || named_key(&key).is_some_and(|event| matches!(event.code, terminput::KeyCode::F(_)))
+    {
+        return route_key(world, &key, 0);
+    }
     world.send(match key.as_str() {
         "Escape" => Event::Cancel,
         "Ctrl+Space" => Event::FallbackBinding,
@@ -2519,6 +2833,7 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Left" => plain(terminput::KeyCode::Left),
         "Right" => plain(terminput::KeyCode::Right),
         "Ctrl+c" => plain(terminput::KeyCode::Char('c')).modifiers(terminput::KeyModifiers::CTRL),
+        "Ctrl+Enter" => plain(terminput::KeyCode::Enter).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+v" => plain(terminput::KeyCode::Char('v')).modifiers(terminput::KeyModifiers::CTRL),
         // Command, which the host terminal reports as Super where it reports
         // it at all: the alias the copy and paste keys inspect and nothing
@@ -2543,7 +2858,18 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Ctrl+Space" => {
             plain(terminput::KeyCode::Char(' ')).modifiers(terminput::KeyModifiers::CTRL)
         }
-        _ => return None,
+        "Space" => plain(terminput::KeyCode::Char(' ')),
+        // A function key, bare or with the one modifier a binding inspects.
+        other => {
+            let (modifiers, name) = match other.split_once('+') {
+                Some(("Ctrl", name)) => (terminput::KeyModifiers::CTRL, name),
+                Some(("Shift", name)) => (terminput::KeyModifiers::SHIFT, name),
+                Some(_) => return None,
+                None => (terminput::KeyModifiers::NONE, other),
+            };
+            let number = name.strip_prefix('F')?.parse().ok()?;
+            plain(terminput::KeyCode::F(number)).modifiers(modifiers)
+        }
     })
 }
 
@@ -3279,6 +3605,90 @@ fn prompt_submitted(world: &mut VardeWorld) {
     assert!(prompt.ends_with('\r'), "not submitted: {prompt:?}");
 }
 
+#[then(expr = "the prompt was not submitted to the AI")]
+fn prompt_not_submitted(world: &mut VardeWorld) {
+    let sent = ai_sends(world);
+    assert!(!sent.is_empty(), "nothing reached the AI");
+    assert!(
+        sent.iter().all(|prompt| !prompt.contains('\r')),
+        "submitted: {sent:?}"
+    );
+}
+
+/// The one thing the AI's prompt was handed, with the paste markers taken off.
+fn pasted(world: &VardeWorld) -> String {
+    let sent = ai_sends(world);
+    let [prompt] = sent.as_slice() else {
+        panic!("expected one send, got {sent:?}")
+    };
+    prompt.replace("\x1b[200~", "").replace("\x1b[201~", "")
+}
+
+#[then(expr = "the AI pane's prompt holds a Pause snapshot")]
+fn prompt_holds_snapshot(world: &mut VardeWorld) {
+    let snapshot = varde::debug::snapshot(&world.state).expect("still Paused");
+    assert_eq!(pasted(world), snapshot);
+}
+
+#[then(expr = "the AI program received the Pause snapshot as a bracketed paste")]
+fn snapshot_bracketed(world: &mut VardeWorld) {
+    let sent = ai_sends(world);
+    let [prompt] = sent.as_slice() else {
+        panic!("expected one send, got {sent:?}")
+    };
+    assert!(prompt.starts_with("\x1b[200~"), "{prompt:?}");
+    assert!(prompt.ends_with("\x1b[201~"), "{prompt:?}");
+}
+
+/// The quoted source is every line carrying the gutter's bar, each ending in
+/// the text the buffer holds on that line.
+#[then(
+    expr = "the Pause snapshot holds {string} lines {int} to {int} with line {int} marked as the Paused line"
+)]
+fn snapshot_holds_lines(
+    world: &mut VardeWorld,
+    file: String,
+    from: usize,
+    to: usize,
+    marked: usize,
+) {
+    let text = pasted(world);
+    let source = world.state.buffers[&abs(world, &file)].disk.clone();
+    let source: Vec<&str> = source.lines().collect();
+    let quoted: Vec<&str> = text.lines().filter(|line| line.contains(" | ")).collect();
+    assert_eq!(quoted.len(), to + 1 - from, "{text}");
+    for (line, number) in quoted.into_iter().zip(from..=to) {
+        assert!(line.ends_with(source[number - 1]), "{number}: {line}");
+        assert!(line.contains(&number.to_string()), "{number}: {line}");
+        assert_eq!(line.starts_with('\u{2192}'), number == marked, "{line}");
+    }
+}
+
+#[then(expr = "the Pause snapshot names the Frames {string} and {string}")]
+fn snapshot_names_frames(world: &mut VardeWorld, inner: String, outer: String) {
+    let text = pasted(world);
+    let frames = &text[text.find("Frames:").expect("a Frames section")..];
+    let at = |name: &str| {
+        frames
+            .find(name)
+            .unwrap_or_else(|| panic!("{name}: {text}"))
+    };
+    assert!(at(&inner) < at(&outer), "{text}");
+}
+
+#[then(expr = "the Pause snapshot holds the Variable {string} with the value {string}")]
+#[then(expr = "the AI pane's prompt holds the Variable {string} with the value {string}")]
+fn snapshot_holds_variable(world: &mut VardeWorld, name: String, value: String) {
+    let text = pasted(world);
+    assert!(text.contains(&format!("{name} = {value}")), "{text}");
+}
+
+#[then(expr = "the Pause snapshot holds the exception {string}")]
+fn snapshot_holds_exception(world: &mut VardeWorld, exception: String) {
+    let text = pasted(world);
+    assert!(text.contains(&exception), "{text}");
+}
+
 #[then(expr = "no prompt was sent to the AI")]
 fn no_prompt(world: &mut VardeWorld) {
     assert!(ai_sends(world).is_empty(), "{:?}", world.keys_sent);
@@ -3900,6 +4310,748 @@ fn make_ai_pane_tall(world: &mut VardeWorld) {
     world.send(Event::ToggleTallAi);
 }
 
+// ---- F45: the Strip ----
+
+/// A `[dap.<language>]` row in the programs template's layer, which is where
+/// ADR 0021 puts a Debug adapter.
+#[given(expr = "a Debug adapter for {string} is configured")]
+///
+/// The template's row where it ships one — so a scenario's `codelldb` is the
+/// command the rust row really names — and installed, since that is what
+/// "configured" is short for here: `the command … is not on PATH` takes it
+/// away. Into the running workspace as well as the file, for the reason
+/// `load_debug_config` gives.
+fn debug_adapter_configured(world: &mut VardeWorld, language: String) {
+    let adapter = shipped()
+        .adapters
+        .get(&language)
+        .cloned()
+        .unwrap_or_else(|| startup::Adapter {
+            command: format!("{language}-adapter"),
+            args: Vec::new(),
+            install: BTreeMap::new(),
+            server: None,
+            plugin: None,
+        });
+    let row = format!("[dap.{language}]\ncommand = \"{}\"", adapter.command);
+    world.startup.global_config = Some(match world.startup.global_config.take() {
+        Some(config) => format!("{config}\n{row}"),
+        None => row,
+    });
+    // And what installs it, so a scenario that takes the command away is left
+    // with a row an install would fix rather than one needing an installer.
+    let installer = adapter
+        .install
+        .get("macos")
+        .and_then(|install| tools::installer(install));
+    for command in std::iter::once(adapter.command.clone()).chain(installer) {
+        world.on_path.insert(command.clone());
+        world.state.commands_on_path.insert(command);
+    }
+    // Spawned whatever the template says, since the scripted adapter is what
+    // answers: the Rule about adapters a language server hosts configures its
+    // own row.
+    let adapter = startup::Adapter {
+        server: None,
+        plugin: None,
+        ..adapter
+    };
+    world.state.adapters.insert(language, adapter);
+}
+
+/// A World starts with none, and nothing in these steps starts one.
+#[given(expr = "no Debug session exists")]
+fn no_debug_session(_world: &mut VardeWorld) {}
+
+#[given(expr = "the screen is {int} columns by {int} rows")]
+#[when(expr = "the screen is resized to {int} columns by {int} rows")]
+fn screen_columns_by_rows(world: &mut VardeWorld, columns: u16, rows: u16) {
+    world.send(Event::Resized {
+        width: columns,
+        height: rows,
+    });
+}
+
+#[given(expr = "the Strip is {int} rows tall")]
+fn strip_is(world: &mut VardeWorld, rows: u32) {
+    world.state.strip_height = Some(rows);
+}
+
+/// Through the hit-test, from the Strip's own top border, so the handle is
+/// one a pointer can reach.
+#[when(expr = "I drag the border above the Strip {word} {int} rows")]
+fn drag_strip(world: &mut VardeWorld, way: String, rows: u16) {
+    let border = world.panes().terminal.y;
+    let to = match way.as_str() {
+        "up" => border.saturating_sub(rows),
+        "down" => border + rows,
+        other => panic!("no direction {other:?}"),
+    };
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, 2, border);
+    world.report(mouse::Kind::LeftDrag, 2, to);
+    world.report(mouse::Kind::LeftUp, 2, to);
+}
+
+/// The state and the rectangle both: what is remembered has to be what is
+/// drawn.
+#[then(expr = "the Strip is {int} rows tall")]
+fn strip_should_be(world: &mut VardeWorld, rows: u16) {
+    assert_eq!(world.state.strip_height, Some(u32::from(rows)));
+    assert_eq!(world.panes().terminal.height, rows);
+}
+
+#[then(expr = "the Strip is at its least height")]
+fn strip_is_least(world: &mut VardeWorld) {
+    strip_should_be(world, layout::STRIP_LEAST);
+}
+
+#[then(expr = "the area above the Strip is at its least height")]
+fn top_is_least(world: &mut VardeWorld) {
+    let (_, height) = world.screen();
+    strip_should_be(world, height - layout::TOP_LEAST);
+    assert_eq!(world.panes().terminal.y, layout::TOP_LEAST);
+}
+
+#[then(expr = "the project {string} records the Strip as {int} rows tall")]
+fn records_strip(world: &mut VardeWorld, _file: String, rows: u64) {
+    let saved: serde_json::Value =
+        serde_json::from_str(world.startup.state_json.as_deref().expect("state saved"))
+            .expect("json");
+    assert_eq!(saved["strip_height"].as_u64(), Some(rows));
+}
+
+#[then(expr = "the Group tabs are:")]
+fn group_tabs_are(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let tabs: Vec<String> = varde::group_tabs(&world.state)
+        .iter()
+        .map(|tab| format!("{:?}", tab.group))
+        .collect();
+    assert_eq!(tabs, expected);
+}
+
+#[then(expr = "the Strip shows the Shell group")]
+fn strip_shows_shells(world: &mut VardeWorld) {
+    assert_eq!(world.state.strip, layout::Group::Shells);
+    let lit: Vec<layout::Group> = varde::group_tabs(&world.state)
+        .into_iter()
+        .filter_map(|tab| tab.lit.then_some(tab.group))
+        .collect();
+    assert_eq!(lit, vec![layout::Group::Shells]);
+}
+
+// ---- F45: Breakpoints ----
+
+/// Through the hit-test, in the gutter's Breakpoint column, so the column is
+/// one a pointer can reach.
+#[given(expr = "I click the Breakpoint column on line {int}")]
+#[when(expr = "I click the Breakpoint column on line {int}")]
+fn click_breakpoint_column(world: &mut VardeWorld, line: usize) {
+    let panes = world.panes();
+    let (_, row) = pointer_at(&world.state, &panes, Pane::Editor, (line, 1));
+    let column = panes.editor.x + 1 + layout::BREAKPOINT_COLUMN;
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, row);
+    world.report(mouse::Kind::LeftUp, column, row);
+}
+
+// ---- F41: Run marks ----
+
+#[then(expr = "line {int} carries a Run mark")]
+fn carries_run_mark(world: &mut VardeWorld, line: usize) {
+    load_debug_config(world);
+    let marks = varde::run::marks(&world.state);
+    assert!(marks.contains_key(&line), "Run marks: {marks:?}");
+}
+
+#[then(expr = "line {int} carries no Run mark")]
+fn carries_no_run_mark(world: &mut VardeWorld, line: usize) {
+    load_debug_config(world);
+    let marks = varde::run::marks(&world.state);
+    assert!(!marks.contains_key(&line), "Run marks: {marks:?}");
+}
+
+#[then("no line carries a Run mark")]
+fn no_run_marks(world: &mut VardeWorld) {
+    load_debug_config(world);
+    assert_eq!(varde::run::marks(&world.state), BTreeMap::new());
+}
+
+/// Through the hit-test, on the Breakpoint column the ▶ is drawn in.
+#[when(expr = "I click the Run mark on line {int}")]
+fn click_run_mark(world: &mut VardeWorld, line: usize) {
+    load_debug_config(world);
+    click_breakpoint_column(world, line);
+}
+
+#[then("the Run mark offers:")]
+fn run_mark_offers(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("a table of choices")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let offered: Vec<&str> = varde::run::chips(&world.state)
+        .iter()
+        .map(|chip| chip.action)
+        .collect();
+    assert_eq!(offered, expected);
+}
+
+/// The click, then the key the chosen Chip names. The adapter answers, so a
+/// Debug session gets as far as its launch request.
+#[when(expr = "I choose {string} on the Run mark on line {int}")]
+fn choose_on_run_mark(world: &mut VardeWorld, choice: String, line: usize) {
+    click_run_mark(world, line);
+    let chip = varde::run::chips(&world.state)
+        .into_iter()
+        .find(|chip| chip.action == choice)
+        .unwrap_or_else(|| panic!("the Run mark does not offer {choice:?}"));
+    world.dap.ready = true;
+    route_key(world, chip.keys, 0);
+}
+
+#[then(expr = "the Debug adapter's launch arguments name {string}")]
+fn launch_arguments_name(world: &mut VardeWorld, name: String) {
+    let arguments = last_request(world, "launch")["arguments"].to_string();
+    assert!(arguments.contains(&name), "launch arguments: {arguments}");
+}
+
+#[then(expr = "the Debug adapter's launch arguments do not name {string}")]
+fn launch_arguments_do_not_name(world: &mut VardeWorld, name: String) {
+    let arguments = last_request(world, "launch")["arguments"].to_string();
+    assert!(!arguments.contains(&name), "launch arguments: {arguments}");
+}
+
+/// The column right of the Breakpoint column, where the number starts.
+#[when(expr = "I click the line number of line {int}")]
+fn click_line_number(world: &mut VardeWorld, line: usize) {
+    let panes = world.panes();
+    let (_, row) = pointer_at(&world.state, &panes, Pane::Editor, (line, 1));
+    let column = panes.editor.x + 2 + layout::BREAKPOINT_COLUMN;
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, row);
+    world.report(mouse::Kind::LeftUp, column, row);
+}
+
+/// Set as the core holds one, against what the file holds on the line. A file
+/// the scenario never described is given lines enough to hold it, so going to
+/// the Breakpoint lands on its line rather than clamping to an empty file's.
+/// Recorded in the project's state too, as setting it would have: a Then about
+/// what is remembered has to have something to find unchanged.
+#[given(expr = "a Breakpoint on {string} line {int}")]
+fn breakpoint_on(world: &mut VardeWorld, file: String, line: usize) {
+    let relative = file.clone();
+    let file = abs(world, &file);
+    world.files.entry(file.clone()).or_insert_with(|| {
+        (1..=line)
+            .map(|at| format!("line {at}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    });
+    let text = world
+        .files
+        .get(&file)
+        .and_then(|held| held.split('\n').nth(line - 1))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let mut saved: serde_json::Value = world
+        .startup
+        .state_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let remembered = serde_json::json!({"file": relative, "line": line, "text": text});
+    match saved["breakpoints"].as_array_mut() {
+        Some(breakpoints) => breakpoints.push(remembered),
+        None => saved["breakpoints"] = serde_json::json!([remembered]),
+    }
+    world.startup.state_json = Some(saved.to_string());
+    world.state.breakpoints.push(varde::debug::Breakpoint {
+        file,
+        line,
+        text,
+        stale: false,
+        properties: Default::default(),
+    });
+}
+
+/// Written straight onto the Breakpoint the step before it set, the way a
+/// project that remembered one with its properties would hold it.
+fn with_property(
+    world: &mut VardeWorld,
+    file: String,
+    line: usize,
+    set: impl FnOnce(&mut varde::debug::Properties),
+) {
+    breakpoint_on(world, file, line);
+    set(&mut world
+        .state
+        .breakpoints
+        .last_mut()
+        .expect("a Breakpoint")
+        .properties);
+}
+
+#[given(expr = "a Breakpoint on {string} line {int} with the condition {string}")]
+fn breakpoint_with_condition(world: &mut VardeWorld, file: String, line: usize, text: String) {
+    with_property(world, file, line, |properties| properties.condition = text);
+}
+
+#[given(expr = "a Breakpoint on {string} line {int} with the hit count {string}")]
+fn breakpoint_with_hit_count(world: &mut VardeWorld, file: String, line: usize, text: String) {
+    with_property(world, file, line, |properties| properties.hit_count = text);
+}
+
+#[given(expr = "a Logpoint on {string} line {int} with the message {string}")]
+fn logpoint_with_message(world: &mut VardeWorld, file: String, line: usize, text: String) {
+    with_property(world, file, line, |properties| {
+        properties.log_message = text
+    });
+}
+
+/// The Breakpoint as the adapter was told of it, found by its line among
+/// every `setBreakpoints` request sent.
+fn sent_breakpoint(world: &VardeWorld, line: usize) -> Value {
+    dap_requests(world, "setBreakpoints")
+        .into_iter()
+        .flat_map(|request| {
+            request["arguments"]["breakpoints"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .find(|breakpoint| breakpoint["line"] == line)
+        .unwrap_or_else(|| {
+            panic!(
+                "no Breakpoint on line {line} sent; sent {:?}",
+                world.dap.sent
+            )
+        })
+}
+
+#[then(
+    expr = "the Debug adapter was sent a \"setBreakpoints\" request for line {int} with the condition {string}"
+)]
+fn sent_condition(world: &mut VardeWorld, line: usize, text: String) {
+    assert_eq!(sent_breakpoint(world, line)["condition"], text);
+}
+
+#[then(
+    expr = "the Debug adapter was sent a \"setBreakpoints\" request for line {int} with the hit condition {string}"
+)]
+fn sent_hit_condition(world: &mut VardeWorld, line: usize, text: String) {
+    assert_eq!(sent_breakpoint(world, line)["hitCondition"], text);
+}
+
+#[then(
+    expr = "the Debug adapter was sent a \"setBreakpoints\" request for line {int} with the log message {string}"
+)]
+fn sent_log_message(world: &mut VardeWorld, line: usize, text: String) {
+    assert_eq!(sent_breakpoint(world, line)["logMessage"], text);
+}
+
+#[then(expr = "the Breakpoint on {string} line {int} suspends {string}")]
+fn breakpoint_suspends(world: &mut VardeWorld, file: String, line: usize, scope: String) {
+    let file = abs(world, &file);
+    let breakpoint = world
+        .state
+        .breakpoints
+        .iter()
+        .find(|breakpoint| breakpoint.file == file && breakpoint.line == line)
+        .expect("a Breakpoint there");
+    let suspends = match breakpoint.properties.suspend {
+        varde::debug::Suspend::Thread => "thread",
+        varde::debug::Suspend::All => "all",
+    };
+    assert_eq!(suspends, scope);
+}
+
+/// Through `␣B`'s event, on the buffer on screen: the box is only ever opened
+/// on a Breakpoint somebody is looking at.
+#[given(expr = "the Breakpoint box is open for {string} line {int}")]
+fn breakpoint_box_opened(world: &mut VardeWorld, file: String, line: usize) {
+    assert_eq!(world.state.current_buffer, Some(abs(world, &file)));
+    world.send(Event::EditBreakpoint(line));
+    breakpoint_box_is_open(world, file, line);
+}
+
+#[then(expr = "the Breakpoint box is open for {string} line {int}")]
+fn breakpoint_box_is_open(world: &mut VardeWorld, file: String, line: usize) {
+    let file = abs(world, &file);
+    match &world.state.modal {
+        Modal::Breakpoint {
+            file: open,
+            line: at,
+            ..
+        } => assert_eq!((open, *at), (&file, line)),
+        other => panic!("expected the Breakpoint box, got {other:?}"),
+    }
+}
+
+/// Tab to the switch, then Space: the keys, so the switch is one a keyboard
+/// can reach.
+#[when("I switch the Breakpoint's suspend scope")]
+fn switch_suspend_scope(world: &mut VardeWorld) {
+    while !matches!(
+        world.state.modal,
+        Modal::Breakpoint {
+            field: varde::debug::Field::Suspend,
+            ..
+        }
+    ) {
+        press_key(world, terminput::KeyCode::Tab);
+    }
+    press_key(world, terminput::KeyCode::Char(' '));
+}
+
+/// Typed a key at a time into the row the box opens on, which is the
+/// condition's.
+#[given(expr = "I write the condition {string} in the Breakpoint box")]
+#[when(expr = "I write the condition {string} in the Breakpoint box")]
+fn write_condition(world: &mut VardeWorld, text: String) {
+    assert!(matches!(
+        world.state.modal,
+        Modal::Breakpoint {
+            field: varde::debug::Field::Condition,
+            ..
+        }
+    ));
+    for c in text.chars() {
+        press_key(world, terminput::KeyCode::Char(c));
+    }
+}
+
+#[when("I confirm the Breakpoint box")]
+fn confirm_breakpoint_box(world: &mut VardeWorld) {
+    press_key(world, terminput::KeyCode::Enter);
+}
+
+/// The `✎` on the line is drawn on the cursor's line while the editor has the
+/// keyboard, so both are put there first; the click then lands on the cell
+/// `debug::edit_chip` names, which `ui` draws it at.
+#[when(expr = "I click the {string} Chip on line {int}'s Breakpoint")]
+fn click_line_chip(world: &mut VardeWorld, chip: String, line: usize) {
+    assert_eq!(chip, "edit", "unknown line Chip {chip:?}");
+    world.state.focus = Pane::Editor;
+    current_buffer_mut(world).go_to_place(Place { line, column: 1 });
+    let (column, row) =
+        varde::debug::edit_chip(&world.state, &world.panes()).expect("the Chip on screen");
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, row);
+    world.report(mouse::Kind::LeftUp, column, row);
+}
+
+fn breakpoint_lines(world: &VardeWorld, file: &str) -> Vec<usize> {
+    let file = abs(world, file);
+    world
+        .state
+        .breakpoints
+        .iter()
+        .filter(|breakpoint| breakpoint.file == file)
+        .map(|breakpoint| breakpoint.line)
+        .collect()
+}
+
+#[then(expr = "{string} line {int} has a Breakpoint")]
+fn has_breakpoint(world: &mut VardeWorld, file: String, line: usize) {
+    assert!(
+        breakpoint_lines(world, &file).contains(&line),
+        "Breakpoints: {:?}",
+        world.state.breakpoints
+    );
+}
+
+#[then(expr = "{string} line {int} has no Breakpoint")]
+fn has_no_breakpoint(world: &mut VardeWorld, file: String, line: usize) {
+    assert!(
+        !breakpoint_lines(world, &file).contains(&line),
+        "Breakpoints: {:?}",
+        world.state.breakpoints
+    );
+}
+
+#[then(expr = "{string} has no Breakpoints")]
+fn has_no_breakpoints(world: &mut VardeWorld, file: String) {
+    assert_eq!(breakpoint_lines(world, &file), Vec::<usize>::new());
+}
+
+/// Added to whatever the project's state already records, the way a project
+/// that set a Breakpoint last time also recorded everything else.
+#[given(expr = "the project {string} records a Breakpoint on {string} line {int} holding {string}")]
+fn state_records_breakpoint(
+    world: &mut VardeWorld,
+    path: String,
+    file: String,
+    line: u64,
+    text: String,
+) {
+    assert_eq!(path, ".varde/state.json");
+    let mut saved: serde_json::Value = world
+        .startup
+        .state_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    saved["breakpoints"] = serde_json::json!([{"file": file, "line": line, "text": text}]);
+    world.startup.state_json = Some(saved.to_string());
+}
+
+#[then(expr = "the project {string} records a Breakpoint on {string} line {int} holding {string}")]
+fn records_breakpoint(world: &mut VardeWorld, path: String, file: String, line: u64, text: String) {
+    assert_eq!(path, ".varde/state.json");
+    let saved: serde_json::Value =
+        serde_json::from_str(world.startup.state_json.as_deref().expect("state saved"))
+            .expect("json");
+    assert_eq!(
+        saved["breakpoints"],
+        serde_json::json!([{"file": file, "line": line, "text": text}])
+    );
+}
+
+/// The folder is the one the scenario already opened; what makes it Bare is
+/// that its state goes to a Sidecar.
+#[given(expr = "the workspace is a Bare workspace")]
+fn workspace_is_bare(world: &mut VardeWorld) {
+    world.startup.sidecar = Some(PathBuf::from(SIDECAR));
+    world.state.sidecar = Some(PathBuf::from(SIDECAR));
+}
+
+/// What the edge does between two runs: a Bare workspace's state went to its
+/// Sidecar, which is deleted at exit, and the next run is another process
+/// with a Sidecar of its own — so what it reads is nothing.
+#[when(expr = "Varde starts again in the same folder")]
+fn starts_again_in_same_folder(world: &mut VardeWorld) {
+    if world.startup.sidecar.is_some() {
+        world.startup.sidecar = Some(PathBuf::from(format!("{SIDECAR}1")));
+        world.startup.state_json = None;
+    }
+    varde_starts(world);
+}
+
+/// Read off the rows the Breakpoint list draws.
+#[then(expr = "the Breakpoint list marks {string} line {int} as {string}")]
+fn breakpoint_list_marks(world: &mut VardeWorld, file: String, line: usize, mark: String) {
+    let file = abs(world, &file);
+    let breakpoint = varde::debug::list(&world.state)
+        .into_iter()
+        .find(|breakpoint| breakpoint.file == file && breakpoint.line == line)
+        .expect("a Breakpoint there");
+    let marked = match breakpoint.stale {
+        true => "stale",
+        false => "current",
+    };
+    assert_eq!(marked, mark);
+}
+
+/// Through the palette's event rather than by poking the field, as every other
+/// Corner occupant's Given is: the only way the list comes to be on screen is
+/// being asked for.
+#[given("the Corner shows the Breakpoint list")]
+#[when("the Corner shows the Breakpoint list")]
+fn corner_shows_breakpoint_list(world: &mut VardeWorld) {
+    if world.state.corner != layout::Corner::Breakpoints {
+        world.send(Event::ToggleBreakpointList);
+    }
+}
+
+#[then("the Corner holds the Breakpoint list")]
+fn corner_holds_breakpoint_list(world: &mut VardeWorld) {
+    assert_eq!(world.state.corner, layout::Corner::Breakpoints);
+}
+
+#[given("the Breakpoint list has focus")]
+fn breakpoint_list_has_focus(world: &mut VardeWorld) {
+    world.state.focus = Pane::Breakpoints;
+}
+
+/// Headerless: each row is a path relative to the root and a line, in the
+/// order the list draws them.
+#[then("the Breakpoint list rows are:")]
+fn breakpoint_list_rows(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<(String, usize)> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| (row[0].clone(), row[1].parse().expect("a line")))
+        .collect();
+    let drawn: Vec<(String, usize)> = varde::debug::list(&world.state)
+        .into_iter()
+        .map(|breakpoint| {
+            (
+                varde::relative(&world.state, &breakpoint.file),
+                breakpoint.line,
+            )
+        })
+        .collect();
+    assert_eq!(drawn, expected);
+}
+
+/// The row's icon is drawn on the row the keyboard is on, so the keyboard is
+/// put there first; the click then goes through the hit-test at the icon's
+/// columns, hard against the right-hand border.
+#[when(expr = "I click the {string} Chip on the row for {string} line {int}")]
+fn click_breakpoint_row_chip(world: &mut VardeWorld, chip: String, file: String, line: usize) {
+    assert_eq!(chip, "remove", "unknown row Chip {chip:?}");
+    let file = abs(world, &file);
+    let index = varde::debug::list(&world.state)
+        .iter()
+        .position(|breakpoint| breakpoint.file == file && breakpoint.line == line)
+        .expect("a row for that Breakpoint");
+    world.state.focus = Pane::Breakpoints;
+    world.state.breakpoints_selection = index;
+    let column = world.panes().corner.width.saturating_sub(3) as usize;
+    world.click(
+        Pane::Breakpoints,
+        (index + 1, column),
+        terminput::KeyModifiers::NONE,
+    );
+}
+
+/// A Chip on the Transport along the top border of the Corner's occupant or of
+/// the Variables, found by the hit-test that answers a click there — never
+/// driven as an event, so a Chip nobody could reach with a pointer fails here.
+/// The focused Variables row's when no Transport offers the name: `ask-ai` is
+/// on both, and the row's is asked for as "the row's".
+#[given(expr = "I click the {string} Chip")]
+#[when(expr = "I click the {string} Chip")]
+fn click_chip(world: &mut VardeWorld, chip: String) {
+    let on_transport = varde::debug::transport(&world.state)
+        .into_iter()
+        .chain(varde::debug::strip_transport(&world.state))
+        .any(|offered| offered.name == chip);
+    if !on_transport && row_chip(world, &chip).is_some() {
+        return click_variables_row_chip(world, &chip);
+    }
+    let (area, chips) = match varde::debug::transport(&world.state)
+        .iter()
+        .any(|offered| offered.name == chip)
+    {
+        true => (world.panes().corner, varde::debug::transport(&world.state)),
+        false => (
+            varde::transport_area(&world.state, world.panes().strip()),
+            varde::debug::strip_transport(&world.state),
+        ),
+    };
+    let at = chips
+        .iter()
+        .position(|offered| offered.name == chip)
+        .unwrap_or_else(|| panic!("no {chip:?} Chip"));
+    let labels = layout::chip_labels(&chips, area.width, layout::CORNER_TITLE);
+    let column = (area.x..area.right())
+        .find(|&column| layout::strip_at(area, &labels, column) == Some(at))
+        .expect("the Chip on screen");
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, area.y);
+    world.report(mouse::Kind::LeftUp, column, area.y);
+}
+
+#[then("the workspace has no Breakpoints")]
+fn workspace_has_no_breakpoints(world: &mut VardeWorld) {
+    assert_eq!(world.state.breakpoints, vec![]);
+}
+
+#[then(expr = "the gutter draws line {int}'s Breakpoint as {string}")]
+fn gutter_draws_breakpoint(world: &mut VardeWorld, line: usize, kind: String) {
+    let drawn = match varde::debug::marks(&world.state).get(&line) {
+        Some(varde::debug::Mark::Plain) => "plain",
+        Some(varde::debug::Mark::Conditional) => "conditional",
+        Some(varde::debug::Mark::Logpoint) => "logpoint",
+        Some(varde::debug::Mark::Stale) => "stale",
+        Some(varde::debug::Mark::Unverified) => "unverified",
+        None => "none",
+    };
+    assert_eq!(drawn, kind);
+}
+
+#[then(expr = "the gutter draws a Breakpoint on line {int}")]
+fn gutter_draws_a_breakpoint(world: &mut VardeWorld, line: usize) {
+    let marks = varde::debug::marks(&world.state);
+    assert!(marks.contains_key(&line), "gutter: {marks:?}");
+}
+
+#[then(expr = "the gutter draws no Breakpoint on line {int}")]
+fn gutter_draws_no_breakpoint(world: &mut VardeWorld, line: usize) {
+    let marks = varde::debug::marks(&world.state);
+    assert!(!marks.contains_key(&line), "gutter: {marks:?}");
+}
+
+#[then(expr = "the Breakpoint list lists {string} line {int}")]
+fn breakpoint_list_lists(world: &mut VardeWorld, file: String, line: usize) {
+    let file = abs(world, &file);
+    let rows: Vec<(PathBuf, usize)> = varde::debug::list(&world.state)
+        .into_iter()
+        .map(|breakpoint| (breakpoint.file.clone(), breakpoint.line))
+        .collect();
+    assert!(rows.contains(&(file, line)), "rows: {rows:?}");
+}
+
+/// The last `setBreakpoints` answered the way a real adapter answers it: one
+/// entry per line asked for, in order, each bound where it was set except the
+/// one the scenario names.
+fn answer_set_breakpoints(world: &mut VardeWorld, line: usize, verdict: Value) {
+    let request = last_request(world, "setBreakpoints").clone();
+    let breakpoints: Vec<Value> = request["arguments"]["breakpoints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|asked| match asked["line"].as_u64() == Some(line as u64) {
+            true => verdict.clone(),
+            false => json!({ "verified": true, "line": asked["line"] }),
+        })
+        .collect();
+    adapter_event(
+        world,
+        json!({ "type": "response", "request_seq": request["seq"], "success": true,
+                "command": "setBreakpoints", "body": { "breakpoints": breakpoints } }),
+    );
+}
+
+#[when(
+    expr = "the Debug adapter answers \"setBreakpoints\" for line {int} with verified false and message {string}"
+)]
+fn adapter_leaves_unbound(world: &mut VardeWorld, line: usize, message: String) {
+    answer_set_breakpoints(
+        world,
+        line,
+        json!({ "verified": false, "message": message }),
+    );
+}
+
+#[given(
+    expr = "the Debug adapter answers \"setBreakpoints\" for line {int} with verified true at line {int}"
+)]
+#[when(
+    expr = "the Debug adapter answers \"setBreakpoints\" for line {int} with verified true at line {int}"
+)]
+fn adapter_binds_elsewhere(world: &mut VardeWorld, line: usize, bound: usize) {
+    answer_set_breakpoints(world, line, json!({ "verified": true, "line": bound }));
+}
+
+/// Through the hit-test, resting on the Breakpoint column the gutter draws it in.
+#[then(expr = "line {int}'s Breakpoint explains {string} on hover")]
+fn breakpoint_explains_on_hover(world: &mut VardeWorld, line: usize, reason: String) {
+    let panes = world.panes();
+    let (_, row) = pointer_at(&world.state, &panes, Pane::Editor, (line, 1));
+    let column = panes.editor.x + 1 + layout::BREAKPOINT_COLUMN;
+    world.report(mouse::Kind::Moved, column, row);
+    assert_eq!(
+        varde::debug::explained(&world.state),
+        Some((line, reason.as_str()))
+    );
+}
+
 // ---- F38: terminal splits ----
 
 /// What the edge tells: how many shells it holds, after a spawn or an exit.
@@ -3912,6 +5064,17 @@ fn terminal_holds(world: &mut VardeWorld, shells: usize) {
 #[given(expr = "terminal {int} is running a process")]
 fn terminal_busy(world: &mut VardeWorld, split: usize) {
     world.state.terminals[split - 1] = varde::Shell::Busy;
+}
+
+/// The same two as claims: what the Debug group hides, it does not stop.
+#[then(expr = "the terminal holds {int} shell(s)")]
+fn terminal_should_hold(world: &mut VardeWorld, shells: usize) {
+    assert_eq!(world.state.terminals.len(), shells);
+}
+
+#[then(expr = "terminal {int} is running a process")]
+fn terminal_should_be_busy(world: &mut VardeWorld, split: usize) {
+    assert_eq!(world.state.terminals[split - 1], varde::Shell::Busy);
 }
 
 #[when(expr = "terminal {int} prints its prompt")]
@@ -4007,6 +5170,14 @@ fn give_tree_pane_focus(world: &mut VardeWorld) {
 
 #[when(expr = "I type {string}")]
 fn type_text(world: &mut VardeWorld, text: String) {
+    // Bytes are what a hosted pane's child receives. The Snippet is Varde's
+    // own buffer, so the same typing reaches it as the editor's keys do.
+    if world.state.focus == Pane::Evaluator {
+        for key in text.chars() {
+            world.send(Event::EditorKey(key));
+        }
+        return;
+    }
     world.send(Event::Bytes(text.into_bytes()));
 }
 
@@ -4060,6 +5231,23 @@ fn terminal_received(world: &mut VardeWorld, text: String) {
     assert_eq!(
         world.keys_sent,
         vec![(Pane::Terminal, text.into_bytes())],
+        "keys sent: {:?}",
+        world.keys_sent
+    );
+}
+
+/// A key Varde did not claim, as the child received it: the bytes, pinned, so
+/// a key that quietly stops reaching the shell fails here rather than reading
+/// as a pass because something arrived.
+#[then(expr = "the terminal program received the key {string}")]
+fn terminal_received_key(world: &mut VardeWorld, key: String) {
+    let expected: &[u8] = match key.as_str() {
+        "F8" => b"\x1b[19~",
+        other => panic!("no bytes are pinned for {other:?}"),
+    };
+    assert_eq!(
+        world.keys_sent,
+        vec![(Pane::Terminal, expected.to_vec())],
         "keys sent: {:?}",
         world.keys_sent
     );
@@ -4714,8 +5902,12 @@ fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
         Pane::Tree => world.panes().tree,
         Pane::Editor => world.panes().editor,
         Pane::Ai => world.panes().ai,
-        Pane::Terminal => world.panes().terminal,
-        Pane::Risk | Pane::Buffers | Pane::History => world.panes().corner,
+        Pane::Output => world.panes().output,
+        Pane::Terminal | Pane::Variables => world.panes().terminal,
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
+            world.panes().corner
+        }
+        Pane::Evaluator => world.panes().evaluator,
     };
     // Straight out from where the button went down, which is the gesture a
     // person makes: aiming at the middle of the pane instead would move the
@@ -7594,7 +8786,9 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::ConfirmStory { .. } => "confirm-story",
         Modal::ConfirmSubmit => "confirm-submit",
         Modal::Palette => "palette",
+        Modal::Chord => "chord",
         Modal::Tools { .. } => "tools",
+        Modal::Launches { .. } => "launches",
         Modal::Branches { .. } => "branches",
         Modal::Comment => "comment",
         Modal::NameBox { .. } => "name-box",
@@ -7604,6 +8798,11 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::Candidates(_) => "candidates",
         Modal::Stops { .. } => "stops",
         Modal::Restart => "restart",
+        Modal::SetValue => "set-value",
+        Modal::NewWatch => "new-watch",
+        Modal::ExceptionClass => "exception-class",
+        Modal::Breakpoint { .. } => "breakpoint",
+        Modal::RunMark { .. } => "run-mark",
     };
     assert_eq!(actual, expected);
 }
@@ -7886,10 +9085,7 @@ fn editor_pane_is_columns_wide(world: &mut VardeWorld, columns: u16) {
                 world.state.ai_width.map(|width| width as u16),
                 0,
                 0,
-                layout::Shapes {
-                    ai: world.state.ai_pane,
-                    corner: world.state.corner,
-                },
+                varde::shapes(&world.state),
             )
             .editor
             .width
@@ -10015,6 +11211,31 @@ fn server_replies(world: &mut VardeWorld, language: String, method: String, step
     );
 }
 
+#[when(expr = "the language server for {string} answers {string} with the error {string}")]
+fn server_answers_error(world: &mut VardeWorld, language: String, method: String, why: String) {
+    let id = sent(world, &language)
+        .iter()
+        .rfind(|message| message["method"] == method)
+        .unwrap_or_else(|| panic!("{language} was never sent a {method} request"))["id"]
+        .clone();
+    world.lsp_replies(
+        &language,
+        json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": why}}),
+    );
+}
+
+#[then(expr = "the language server for {string} was sent {int} {string} requests")]
+fn server_sent_count(world: &mut VardeWorld, language: String, count: usize, method: String) {
+    let messages = sent(world, &language);
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message["method"] == method)
+            .count(),
+        count
+    );
+}
+
 /// A question the server puts to Varde on a method of its own — a notification,
 /// so the protocol has no reply for it and the server is left waiting unless
 /// Varde says something back on the method its configuration names.
@@ -10501,8 +11722,9 @@ fn hover_code_token_is_a_keyword(world: &mut VardeWorld, text: String) {
 /// happen.
 #[then(expr = "the hover is no taller than {int} rows")]
 fn hover_is_no_taller_than(world: &mut VardeWorld, rows: usize) {
-    let hover = world.state.hover.as_ref().expect("a hover");
-    assert!(hover.rows() <= rows, "the box is {} rows", hover.rows());
+    world.state.hover.as_ref().expect("a hover");
+    let count = varde::lsp::rows(&world.state);
+    assert!(count <= rows, "the box is {count} rows");
 }
 
 #[then(expr = "the last hover row says it was cut short")]
@@ -10544,7 +11766,7 @@ fn hover_fits(world: &mut VardeWorld, columns: usize) {
 fn hover_does_not_cover(world: &mut VardeWorld, line: usize) {
     let hover = world.state.hover.as_ref().expect("a hover");
     assert!(
-        !hover.covers(line),
+        !varde::lsp::covers(&world.state, line),
         "the hover covers {} lines from line {}",
         hover.lines.len(),
         hover.from
@@ -10607,6 +11829,75 @@ fn pointer_rests_on(world: &mut VardeWorld, line: usize, column: usize) {
     if world.dwell_armed.take().is_some() {
         world.send(Event::HoverDue);
     }
+}
+
+/// Where the box is drawn, asked of the same rectangle the renderer and the
+/// mouse both read — a step that worked it out for itself would prove its own
+/// arithmetic rather than the hit-test's. Its first row of text, inside the
+/// border.
+fn on_the_hover(world: &VardeWorld) -> (u16, u16) {
+    let panes = world.panes();
+    let spot = varde::lsp::placement(&world.state)
+        .expect("a hover")
+        .spot(&world.state, &panes);
+    (spot.x + 1, spot.y + 1)
+}
+
+#[given("the pointer moves onto the hover")]
+#[when("the pointer moves onto the hover")]
+fn pointer_onto_the_hover(world: &mut VardeWorld) {
+    let (column, row) = on_the_hover(world);
+    move_pointer(world, column, row);
+}
+
+#[when(expr = "I scroll {word} with the pointer over the hover")]
+fn scroll_over_the_hover(world: &mut VardeWorld, direction: String) {
+    let (column, row) = on_the_hover(world);
+    let kind = match parse_direction(&direction) {
+        Direction::Down => mouse::Kind::ScrollDown,
+        _ => mouse::Kind::ScrollUp,
+    };
+    world.report(kind, column, row);
+}
+
+#[then(expr = "the hover starts at its row {int}")]
+fn hover_starts_at(world: &mut VardeWorld, row: usize) {
+    assert_eq!(world.state.hover.as_ref().expect("a hover").first + 1, row);
+}
+
+#[given(expr = "the language server for {string} answers the hover with a {int}-line reply")]
+fn server_answers_a_long_hover(world: &mut VardeWorld, language: String, lines: usize) {
+    let value: Vec<String> = (1..=lines).map(|line| format!("row {line}")).collect();
+    world.lsp_replies(
+        &language,
+        json!({
+            "jsonrpc": "2.0",
+            "id": asked(world, &language, "textDocument/hover"),
+            "result": {"contents": {"kind": "plaintext", "value": value.join("\n")}},
+        }),
+    );
+}
+
+/// Arrived at the way a reader arrives at it: `K`, the reply, and `K` again.
+#[given("the hover has focus")]
+fn hover_focused(world: &mut VardeWorld) {
+    world.send(Event::EditorKey('K'));
+    world.lsp_replies(
+        "rust",
+        json!({
+            "jsonrpc": "2.0",
+            "id": asked(world, "rust", "textDocument/hover"),
+            "result": {"contents": {"kind": "plaintext", "value": "fn main()"}},
+        }),
+    );
+    world.send(Event::EditorKey('K'));
+    hover_has_focus(world);
+}
+
+#[then("the hover has focus")]
+fn hover_has_focus(world: &mut VardeWorld) {
+    let hover = world.state.hover.as_ref().expect("a hover");
+    assert!(hover.focused, "the keyboard is not in the hover");
 }
 
 #[then(expr = "the pointer must rest {int} ms before the server is asked")]
@@ -13132,6 +14423,25 @@ fn transport_not_on_screen(world: &mut VardeWorld) {
     );
 }
 
+/// R44.7. The names say what pressing each does, so the first reads `play`
+/// here and `pause` while a Reading plays.
+#[then("the editor's Transport's Chips are:")]
+fn editor_transport_chips_are(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table
+        .as_ref()
+        .expect("a table of Chips")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let drawn: Vec<&str> = reading::transport(&world.state)
+        .iter()
+        .map(|chip| chip.name)
+        .collect();
+    assert_eq!(drawn, expected);
+}
+
 /// R35.8. The bar is an affordance and a reminder, never the only way in: a
 /// control reachable only by mouse is one the cheatsheet cannot promise.
 ///
@@ -13144,19 +14454,24 @@ fn transport_not_on_screen(world: &mut VardeWorld) {
 fn every_transport_action_has_a_key(world: &mut VardeWorld) {
     open_buffer_plain(world, "guide.md".to_string());
     let commands = [
-        (reading::PREVIOUS, ":prev"),
         (reading::PLAY_PAUSE, ":pause"),
+        (reading::PREVIOUS, ":prev"),
         (reading::NEXT, ":next"),
         (reading::STOP, ":stop"),
         // The ladder's next rung, said out loud: a glyph on a border cannot be
         // typed a number into, so the click steps and the key names.
         (reading::SPEED, ":speed 1.25"),
     ];
-    let offered: Vec<&str> = reading::transport(&world.state)
+    // Each Chip's keys are the command it is held to below, so a Chip cannot
+    // teach a key that does something else.
+    let offered: Vec<(&str, &str)> = reading::transport(&world.state)
         .iter()
-        .map(|(action, _)| *action)
+        .map(|chip| (chip.action, chip.keys))
         .collect();
-    let listed: Vec<&str> = commands.iter().map(|(action, _)| *action).collect();
+    let listed: Vec<(&str, &str)> = commands
+        .iter()
+        .map(|(action, line)| (*action, line.split(' ').next().unwrap_or(line)))
+        .collect();
     assert_eq!(offered, listed, "a control with no key beside it");
     for (action, line) in commands {
         let clicked = update(&world.state, Event::PaneAction(action));
@@ -13259,4 +14574,3108 @@ fn marked_brackets(world: &mut VardeWorld, step: &Step) {
 #[then(expr = "no brackets are marked")]
 fn no_marked_brackets(world: &mut VardeWorld) {
     assert_eq!(current_buffer(world).bracket_pair(), None);
+}
+
+// ---- F45: the Debug session. No scenario runs an adapter: `FakeAdapter`
+// answers what a real one would, and the events a scenario names are driven in
+// as the edge would drive them.
+
+/// What a scenario's config files name, loaded into the running workspace
+/// rather than by restarting it, which would take the Breakpoints and Buffers
+/// the scenario set up with it. An adapter a step already configured is kept.
+fn load_debug_config(world: &mut VardeWorld) {
+    let (loaded, _, _) = startup::start(&world.startup).expect("the scenario's config starts");
+    world.state.launches = loaded.launches;
+    world.state.runs = loaded.runs;
+    for (language, adapter) in loaded.adapters {
+        world.state.adapters.entry(language).or_insert(adapter);
+    }
+}
+
+/// A session over whichever adapter the Background configured, for the
+/// features that are about being Paused rather than about how a session is
+/// started: they name no Launch configuration, so one is made here.
+fn session_running(world: &mut VardeWorld) {
+    let adapter = world
+        .state
+        .adapters
+        .keys()
+        .next()
+        .cloned()
+        .expect("a Debug adapter is configured");
+    world.state.launches.insert(
+        "debug".to_string(),
+        startup::Launch {
+            adapter,
+            request: "launch".to_string(),
+            args: serde_json::Map::new(),
+            reattach: true,
+        },
+    );
+    world.dap.ready = true;
+    world.send(Event::StartLaunch("debug".to_string()));
+    adapter_event(world, json!({ "type": "event", "event": "initialized" }));
+}
+
+fn adapter_event(world: &mut VardeWorld, message: Value) {
+    world.adapter_says(message);
+    world.tell_core();
+}
+
+/// The stack a thread answers with, unless a scenario gave it one.
+fn stopped_at(world: &mut VardeWorld, thread: i64, file: &str, line: usize, reason: &str) {
+    plant_the_programs_locals(world);
+    let path = abs(world, file);
+    let stack = world
+        .dap
+        .stacks
+        .entry(thread)
+        .or_insert_with(|| vec![("main".to_string(), path.clone(), line, String::new())]);
+    // Where the program stopped is the top of its stack, whatever the pause
+    // before it left there: a second `stopped` event naming another line with
+    // the stack still pointing at the first is a program that never moved.
+    if let Some(top) = stack.first_mut() {
+        top.1 = path;
+        top.2 = line;
+    }
+    let mut body = json!({ "threadId": thread, "reason": reason });
+    if let Some(text) = world.dap.text.clone() {
+        body["text"] = json!(text);
+    }
+    let stopped = json!({ "type": "event", "event": "stopped", "body": body });
+    world.dap.stopped = Some(stopped.clone());
+    adapter_event(world, stopped);
+    // What the pause itself asked for is the pause, so "since the pause"
+    // counts from after it has brought the Variables up.
+    world.dap.since_pause = world.dap.sent.len();
+}
+
+/// The requests the adapter was sent, by command, in order.
+fn dap_requests<'a>(world: &'a VardeWorld, command: &str) -> Vec<&'a Value> {
+    world
+        .dap
+        .sent
+        .iter()
+        .filter(|message| message["type"] == "request" && message["command"] == command)
+        .collect()
+}
+
+fn last_request<'a>(world: &'a VardeWorld, command: &str) -> &'a Value {
+    dap_requests(world, command)
+        .pop()
+        .unwrap_or_else(|| panic!("no {command:?} request; sent {:?}", world.dap.sent))
+}
+
+#[given(expr = "the Debug adapter for {string} is ready")]
+fn debug_adapter_ready(world: &mut VardeWorld, _language: String) {
+    world.dap.ready = true;
+}
+
+#[when(expr = "I open the launch palette")]
+fn open_launch_palette(world: &mut VardeWorld) {
+    load_debug_config(world);
+    world.send(Event::FallbackBinding);
+    route_key(world, &palette_key("Launch").to_string(), 0);
+}
+
+/// Through the palette the way a person goes: its Launch face, the arrows down
+/// to the row, and Enter.
+#[given(expr = "I start the Launch configuration {string} from the palette")]
+#[when(expr = "I start the Launch configuration {string} from the palette")]
+fn start_launch_from_palette(world: &mut VardeWorld, name: String) {
+    open_launch_palette(world);
+    let row = varde::debug::launches(&world.state)
+        .iter()
+        .position(|offered| *offered == name)
+        .unwrap_or_else(|| panic!("the launch palette does not offer {name:?}"));
+    for _ in 0..row {
+        route_key(world, "Down", 0);
+    }
+    route_key(world, "Enter", 0);
+}
+
+#[then(expr = "the launch palette offers {string}")]
+fn launch_palette_offers(world: &mut VardeWorld, name: String) {
+    assert!(matches!(world.state.modal, Modal::Launches { .. }));
+    assert!(
+        varde::debug::launches(&world.state).contains(&name.as_str()),
+        "offered: {:?}",
+        varde::debug::launches(&world.state)
+    );
+}
+
+#[given(expr = "a Debug session was started from the Launch configuration {string}")]
+#[when(expr = "a Debug session was started from the Launch configuration {string}")]
+fn session_was_started(world: &mut VardeWorld, name: String) {
+    world.dap.ready = true;
+    start_launch_from_palette(world, name);
+    adapter_event(world, json!({ "type": "event", "event": "initialized" }));
+}
+
+#[given(expr = "a Debug session is Running")]
+fn debug_session_is_running(world: &mut VardeWorld) {
+    session_running(world);
+}
+
+#[given(expr = "a Debug session is Paused at {string} line {int}")]
+#[when(expr = "a Debug session is Paused at {string} line {int}")]
+fn debug_session_is_paused(world: &mut VardeWorld, file: String, line: usize) {
+    session_running(world);
+    stopped_at(world, 1, &file, line, "breakpoint");
+}
+
+#[given(expr = "a Debug session is Paused at {string} line {int} on thread {int}")]
+fn debug_session_is_paused_on(world: &mut VardeWorld, file: String, line: usize, thread: i64) {
+    session_running(world);
+    stopped_at(world, thread, &file, line, "breakpoint");
+}
+
+#[given(
+    expr = "a Debug session is Paused in {string} at {string} line {int} called from {string} at {string} line {int}"
+)]
+fn debug_session_is_paused_in(
+    world: &mut VardeWorld,
+    inner: String,
+    inner_file: String,
+    inner_line: usize,
+    outer: String,
+    outer_file: String,
+    outer_line: usize,
+) {
+    let stack = vec![
+        (inner, abs(world, &inner_file), inner_line, String::new()),
+        (outer, abs(world, &outer_file), outer_line, String::new()),
+    ];
+    world.dap.stacks.insert(1, stack);
+    session_running(world);
+    stopped_at(world, 1, &inner_file, inner_line, "breakpoint");
+}
+
+#[given(expr = "the Debug adapter sends the event {string}")]
+#[when(expr = "the Debug adapter sends the event {string}")]
+fn adapter_sends_event(world: &mut VardeWorld, event: String) {
+    adapter_event(world, json!({ "type": "event", "event": event }));
+}
+
+#[given(
+    expr = "the Debug adapter sends the {string} event for thread {int} at {string} line {int} with reason {string}"
+)]
+#[when(
+    expr = "the Debug adapter sends the {string} event for thread {int} at {string} line {int} with reason {string}"
+)]
+fn adapter_sends_stopped(
+    world: &mut VardeWorld,
+    event: String,
+    thread: i64,
+    file: String,
+    line: usize,
+    reason: String,
+) {
+    assert_eq!(event, "stopped");
+    stopped_at(world, thread, &file, line, &reason);
+}
+
+#[given(expr = "the Debug adapter reports the program continued")]
+#[when(expr = "the Debug adapter reports the program continued")]
+fn adapter_reports_continued(world: &mut VardeWorld) {
+    adapter_event(
+        world,
+        json!({ "type": "event", "event": "continued", "body": { "threadId": 1, "allThreadsContinued": true } }),
+    );
+}
+
+#[when(expr = "the Debug adapter answers {string} with the error {string}")]
+fn adapter_answers_with_error(world: &mut VardeWorld, command: String, error: String) {
+    let seq = last_request(world, &command)["seq"].clone();
+    adapter_event(
+        world,
+        json!({ "type": "response", "request_seq": seq, "success": false, "command": command, "message": error }),
+    );
+}
+
+#[when(expr = "the edge reports the Debug adapter is gone")]
+fn edge_reports_adapter_gone(world: &mut VardeWorld) {
+    world.dap.held = false;
+    world.send(Event::DapGone {
+        why: varde::debug::Gone::Exited,
+        from: 0,
+    });
+}
+
+/// Only for the port the session is watching: an edge told to try another
+/// would be trying the wrong one.
+#[given(expr = "the edge reports the port {int} answers")]
+#[when(expr = "the edge reports the port {int} answers")]
+fn edge_reports_port_answers(world: &mut VardeWorld, port: u16) {
+    let watched = varde::debug::waiting_on(&world.state).map(|(_, watched)| watched);
+    assert_eq!(watched, Some(port));
+    world.send(Event::DapPortAnswers);
+}
+
+#[when(expr = "the edge reports the Debug adapter could not be started")]
+fn edge_reports_adapter_failed(world: &mut VardeWorld) {
+    world.send(Event::DapGone {
+        why: varde::debug::Gone::FailedToStart,
+        from: 0,
+    });
+}
+
+#[then(expr = "the Debug adapter's {word} arguments are:")]
+fn request_arguments_are(world: &mut VardeWorld, request: String, step: &Step) {
+    let expected: Value =
+        serde_json::from_str(step.docstring().expect("docstring")).expect("JSON arguments");
+    assert_eq!(last_request(world, &request)["arguments"], expected);
+}
+
+#[then("the Debug adapter was sent, in order:")]
+fn adapter_sent_in_order(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<&str> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].as_str())
+        .collect();
+    let sent: Vec<&str> = world
+        .dap
+        .sent
+        .iter()
+        .filter(|message| message["type"] == "request")
+        .filter_map(|message| message["command"].as_str())
+        .collect();
+    assert_eq!(sent, expected);
+}
+
+#[then(expr = "the Debug adapter was sent no {string} request")]
+fn adapter_sent_no(world: &mut VardeWorld, command: String) {
+    assert!(
+        dap_requests(world, &command).is_empty(),
+        "{:?}",
+        world.dap.sent
+    );
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request")]
+fn adapter_sent_a(world: &mut VardeWorld, command: String) {
+    last_request(world, &command);
+}
+
+#[then(expr = "no Debug adapter was spawned")]
+fn no_adapter_spawned(world: &mut VardeWorld) {
+    assert_eq!(world.dap.spawned, Vec::<String>::new());
+}
+
+#[then(expr = "the Debug adapter is reached on port {int}")]
+fn adapter_reached_on(world: &mut VardeWorld, port: u16) {
+    assert_eq!(world.dap.dialed, vec![port]);
+}
+
+#[then(expr = "the Debug adapter was sent {int} {string} requests")]
+fn adapter_sent_count(world: &mut VardeWorld, count: usize, command: String) {
+    assert_eq!(dap_requests(world, &command).len(), count);
+}
+
+#[then(expr = "the Debug adapter was sent {int} {string} requests for {string}")]
+fn adapter_sent_count_for(world: &mut VardeWorld, count: usize, command: String, file: String) {
+    let path = json!(abs(world, &file));
+    let sent = dap_requests(world, &command)
+        .into_iter()
+        .filter(|request| request["arguments"]["source"]["path"] == path)
+        .count();
+    assert_eq!(sent, count);
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for thread {int}")]
+fn adapter_sent_for_thread(world: &mut VardeWorld, command: String, thread: i64) {
+    assert_eq!(
+        last_request(world, &command)["arguments"]["threadId"],
+        thread
+    );
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for thread {int} alone")]
+fn adapter_sent_for_thread_alone(world: &mut VardeWorld, command: String, thread: i64) {
+    let arguments = &last_request(world, &command)["arguments"];
+    assert_eq!(arguments["threadId"], thread);
+    assert_eq!(arguments["singleThread"], true);
+}
+
+/// The lines of the last request naming `file`: a file's list is replaced
+/// whole by each one, so the last is what the adapter holds.
+fn lines_sent(world: &VardeWorld, command: &str, file: &str) -> Vec<Value> {
+    let path = abs(world, file);
+    let request = dap_requests(world, command)
+        .into_iter()
+        .rfind(|request| request["arguments"]["source"]["path"] == json!(path))
+        .unwrap_or_else(|| panic!("no {command:?} for {file:?}; sent {:?}", world.dap.sent));
+    request["arguments"]["breakpoints"]
+        .as_array()
+        .expect("a list of breakpoints")
+        .iter()
+        .map(|breakpoint| breakpoint["line"].clone())
+        .collect()
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for {string} line {int}")]
+fn adapter_sent_for_line(world: &mut VardeWorld, command: String, file: String, line: usize) {
+    assert_eq!(lines_sent(world, &command, &file), vec![json!(line)]);
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for {string} with no lines")]
+fn adapter_sent_no_lines(world: &mut VardeWorld, command: String, file: String) {
+    assert_eq!(lines_sent(world, &command, &file), Vec::<Value>::new());
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request with {string} {word}")]
+fn adapter_sent_with(world: &mut VardeWorld, command: String, key: String, value: String) {
+    let expected: Value = serde_json::from_str(&value).expect("a JSON value");
+    assert_eq!(
+        last_request(world, &command)["arguments"][key.as_str()],
+        expected
+    );
+}
+
+/// The hint is a menu as well as a reminder: the mouse hit-tests the rows
+/// `chord_rows` names, which the unit test beside it holds, so what this
+/// drives is the key the row offers.
+#[when(expr = "I click the Chord hint entry for {string}")]
+fn click_chord_entry(world: &mut VardeWorld, key: String) {
+    let key = key.chars().next().expect("a key");
+    let rows = keys::chord_rows(&world.state);
+    assert!(
+        rows.iter().any(|(offered, _)| *offered == Some(key)),
+        "the Chord hint does not offer {key:?}: {rows:?}"
+    );
+    world.send(Event::ClickPaletteEntry(key));
+}
+
+/// The cheatsheet as `ui` draws it for the view on screen: the rows
+/// `keys::cheatsheet` yields, which is the one list the box and the sweep both
+/// read.
+fn cheatsheet_lists(world: &VardeWorld, key: &str) -> bool {
+    keys::cheatsheet(&world.state)
+        .filter(|(_, _, views)| keys::applies_to(views, world.state.view))
+        .flat_map(|(keys, _, _)| keys.split_whitespace())
+        .any(|token| token == key)
+}
+
+#[then(expr = "the cheatsheet lists {string}")]
+fn cheatsheet_should_list(world: &mut VardeWorld, key: String) {
+    assert!(cheatsheet_lists(world, &key), "{key:?} is not listed");
+}
+
+#[then(expr = "the cheatsheet does not list {string}")]
+fn cheatsheet_should_not_list(world: &mut VardeWorld, key: String) {
+    assert!(!cheatsheet_lists(world, &key), "{key:?} is listed");
+}
+
+/// The hint and the cheatsheet are drawn from one list, and this is what holds
+/// them to it: a key offered in the hint that the box never names is a key
+/// nobody can find once the hint is down.
+#[then(expr = "every key the Chord hint lists is in the cheatsheet")]
+fn every_chord_hint_key_is_in_the_cheatsheet(world: &mut VardeWorld) {
+    for (key, _) in keys::chord_rows(&world.state) {
+        let Some(key) = key else { continue };
+        let chord = format!("␣{key}");
+        assert!(
+            cheatsheet_lists(world, &chord),
+            "the hint offers {key:?} and the cheatsheet does not name {chord:?}"
+        );
+    }
+}
+
+#[then(expr = "the Chord hint is shown")]
+fn chord_hint_is_shown(world: &mut VardeWorld) {
+    assert_eq!(world.state.modal, Modal::Chord);
+}
+
+#[then(expr = "no Chord hint is shown")]
+fn no_chord_hint_is_shown(world: &mut VardeWorld) {
+    assert_ne!(world.state.modal, Modal::Chord);
+}
+
+#[then(expr = "the Chord hint lists the keys:")]
+fn chord_hint_lists(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<char> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].chars().next().expect("a key"))
+        .collect();
+    let offered: Vec<char> = keys::chord_rows(&world.state)
+        .into_iter()
+        .filter_map(|(key, _)| key)
+        .collect();
+    assert_eq!(offered, expected);
+}
+
+#[given(expr = "Stepping mode is on")]
+fn stepping_mode_on(world: &mut VardeWorld) {
+    world.state.stepping = true;
+}
+
+#[then(expr = "Stepping mode is on")]
+fn stepping_mode_should_be_on(world: &mut VardeWorld) {
+    assert!(world.state.stepping);
+}
+
+#[then(expr = "Stepping mode is off")]
+fn stepping_mode_should_be_off(world: &mut VardeWorld) {
+    assert!(!world.state.stepping);
+}
+
+#[then(expr = "the Debug session is {string}")]
+fn debug_session_is(world: &mut VardeWorld, phase: String) {
+    let actual = match world.state.debug.as_ref().map(|session| &session.phase) {
+        Some(varde::debug::Phase::Running(_)) => "running",
+        Some(varde::debug::Phase::Paused(_)) => "paused",
+        Some(varde::debug::Phase::Waiting) => "waiting",
+        other => panic!("the session is {other:?}"),
+    };
+    assert_eq!(actual, phase);
+}
+
+#[then(expr = "no Debug session exists")]
+fn no_debug_session_exists(world: &mut VardeWorld) {
+    assert_eq!(world.state.debug, None);
+}
+
+#[then(expr = "the Paused line is {string} line {int}")]
+fn paused_line_is(world: &mut VardeWorld, file: String, line: usize) {
+    let file = abs(world, &file);
+    assert_eq!(
+        varde::debug::paused_line(&world.state).map(|(file, line, _)| (file.to_path_buf(), line)),
+        Some((file, line))
+    );
+}
+
+/// The gutter and the full-width wash are drawn from the same answer, and it is
+/// only drawn over the Buffer on screen — which is what these two ask.
+#[then(expr = "the gutter marks line {int} as the Paused line")]
+#[then(expr = "line {int} is highlighted across the editor's full width")]
+fn paused_line_on_screen(world: &mut VardeWorld, line: usize) {
+    let (file, at, _) = varde::debug::paused_line(&world.state).expect("a Paused line");
+    assert_eq!(world.state.current_buffer.as_deref(), Some(file));
+    assert_eq!(at, line);
+}
+
+#[then(expr = "the Paused line is drawn as {string}")]
+fn paused_line_drawn_as(world: &mut VardeWorld, kind: String) {
+    let (_, _, why) = varde::debug::paused_line(&world.state).expect("a Paused line");
+    assert_eq!(why.as_str(), kind);
+}
+
+#[then(expr = "no Paused line is marked")]
+fn no_paused_line(world: &mut VardeWorld) {
+    assert_eq!(varde::debug::paused_line(&world.state), None);
+}
+
+#[given(expr = "the Corner shows the Buffers pane")]
+fn corner_shows_buffers(world: &mut VardeWorld) {
+    world.state.corner = layout::Corner::Buffers;
+}
+
+#[then(expr = "the Corner shows the Buffers pane")]
+fn corner_should_show_buffers(world: &mut VardeWorld) {
+    assert_eq!(world.state.corner, layout::Corner::Buffers);
+}
+
+#[given(expr = "the corner is empty")]
+fn corner_is_empty(world: &mut VardeWorld) {
+    world.state.corner = layout::Corner::Hidden;
+}
+
+#[then(expr = "the Corner holds the Frames")]
+fn corner_holds_frames(world: &mut VardeWorld) {
+    assert_eq!(world.state.corner, layout::Corner::Frames);
+}
+
+/// Through the hit-test, on the Frame's row in the Corner.
+#[when(expr = "I choose the Frame {string}")]
+#[given(expr = "I choose the Frame {string}")]
+fn choose_frame(world: &mut VardeWorld, name: String) {
+    let frames = varde::debug::frames(&world.state);
+    let index = varde::debug::frame_rows(&world.state)
+        .iter()
+        .position(
+            |row| matches!(row, varde::debug::FrameRow::Frame(at) if frames[*at].name == name),
+        )
+        .unwrap_or_else(|| panic!("no Frame {name:?}"));
+    let corner = world.panes().corner;
+    let row = corner.y + 1 + (index - world.state.frames_scroll) as u16;
+    world.report(mouse::Kind::LeftDown, corner.x + 2, row);
+    world.report(mouse::Kind::LeftUp, corner.x + 2, row);
+}
+
+#[then(expr = "the buffer has unsaved edits")]
+fn the_buffer_has_unsaved_edits(world: &mut VardeWorld) {
+    let path = world.state.current_buffer.clone().expect("a buffer");
+    assert!(world.state.buffers[&path].is_dirty());
+}
+
+#[when(expr = "the tools list is shown")]
+fn tools_list_is_shown(world: &mut VardeWorld) {
+    // The OS a row's install is looked up under, as `Varde starts` fixes it.
+    if world.state.os.is_empty() {
+        world.state.os = "macos".to_string();
+    }
+    world.send(Event::FallbackBinding);
+    route_key(world, &palette_key("Tools").to_string(), 0);
+}
+
+// ---- F45: the Strip's Debug group, and the Variables in it ----
+
+/// The reference the world's one scope answers its members by. A number of its
+/// own, so a scenario's own references cannot collide with it.
+const LOCALS: i64 = 1000;
+
+#[given(expr = "the Strip shows the {word} group")]
+fn strip_shows(world: &mut VardeWorld, group: String) {
+    world.state.strip = parse_group(&group);
+}
+
+#[then(expr = "the Strip shows the Debug group")]
+fn strip_should_show_debug(world: &mut VardeWorld) {
+    assert_eq!(world.state.strip, layout::Group::Debug);
+}
+
+fn parse_group(name: &str) -> layout::Group {
+    match name {
+        "Shell" => layout::Group::Shells,
+        "Debug" => layout::Group::Debug,
+        other => panic!("unknown group {other:?}"),
+    }
+}
+
+/// Whether a tab is drawn as the one showing — the same pairs `ui` draws from.
+fn tab(world: &VardeWorld, label: &str) -> varde::Tab {
+    varde::group_tabs(&world.state)
+        .into_iter()
+        .find(|tab| tab.group.label() == label)
+        .unwrap_or_else(|| panic!("no Group tab {label:?}"))
+}
+
+#[then(expr = "the Group tab {string} is lit")]
+fn group_tab_is_lit(world: &mut VardeWorld, label: String) {
+    assert!(tab(world, &label).lit);
+}
+
+#[then(expr = "the Group tab {string} is not lit")]
+fn group_tab_is_not_lit(world: &mut VardeWorld, label: String) {
+    assert!(!tab(world, &label).lit);
+}
+
+/// Through the hit-test, on the tab's own columns of the Strip's top border —
+/// the columns `layout::strip_at` names and `ui` draws into.
+#[when(expr = "I click the Group tab {string}")]
+fn click_group_tab(world: &mut VardeWorld, label: String) {
+    let strip = world.panes().strip();
+    let labels = varde::group_labels(&world.state);
+    let index = varde::group_tabs(&world.state)
+        .iter()
+        .position(|tab| tab.group.label() == label)
+        .unwrap_or_else(|| panic!("no Group tab {label:?}"));
+    let column = (strip.x + strip.width - 1 - varde::layout::strip_width(&labels)
+        + labels[..index]
+            .iter()
+            .map(|label| label.chars().count() as u16 + 1)
+            .sum::<u16>())
+        + 1;
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, strip.y);
+    world.report(mouse::Kind::LeftUp, column, strip.y);
+}
+
+#[then(expr = "the Variables have focus")]
+fn variables_have_focus(world: &mut VardeWorld) {
+    assert_eq!(world.state.focus, Pane::Variables);
+}
+
+/// The title is what the Transport's border says beside its Chips.
+#[then(expr = "the Variables title says {string}")]
+#[then(expr = "the Transport says {string}")]
+fn variables_title_says(world: &mut VardeWorld, said: String) {
+    assert_eq!(varde::debug::title(&world.state), said);
+}
+
+/// What the last pause left on screen is drawn dimmed — one answer for both
+/// panes, because it is one fact about the session rather than two.
+/// A header row names the file, line and, where the scenario gives one, the
+/// adapter's presentation hint. The thread's name is what the canned
+/// `threads` answer calls it.
+#[given(expr = "the Debug adapter's stack for thread {int} {string} is:")]
+fn adapter_stack_is(world: &mut VardeWorld, thread: i64, _name: String, step: &Step) {
+    let table = step.table().expect("table");
+    let hints = table.rows[0].iter().position(|column| column == "hint");
+    let stack = table.rows[1..]
+        .iter()
+        .map(|row| {
+            let hint = hints.map_or(String::new(), |at| row[at].clone());
+            (
+                row[0].clone(),
+                abs(world, &row[1]),
+                row[2].parse().expect("a line"),
+                hint,
+            )
+        })
+        .collect();
+    world.dap.stacks.insert(thread, stack);
+}
+
+/// Library frames outside the workspace, named as the scenario that unfolds
+/// them expects the run to read.
+#[given(
+    expr = "a Debug session is Paused with {int} Library frames folded between {string} and {string}"
+)]
+fn paused_with_library_frames(world: &mut VardeWorld, count: usize, inner: String, outer: String) {
+    let mut stack = vec![(inner, abs(world, "src/lib.rs"), 8, String::new())];
+    stack.extend(
+        ["call_once", "poll", "run"]
+            .iter()
+            .cycle()
+            .take(count)
+            .map(|name| {
+                let file = PathBuf::from(format!("/home/me/.cargo/registry/{name}.rs"));
+                (name.to_string(), file, 1, String::new())
+            }),
+    );
+    stack.push((outer, abs(world, "src/main.rs"), 4, String::new()));
+    world.dap.stacks.insert(1, stack);
+    session_running(world);
+    stopped_at(world, 1, "src/lib.rs", 8, "breakpoint");
+}
+
+#[given(expr = "the Frames have focus")]
+fn frames_have_focus(world: &mut VardeWorld) {
+    world.state.focus = Pane::Frames;
+}
+
+#[given(expr = "the Frames selection is the folded row")]
+fn frames_selection_is_folded(world: &mut VardeWorld) {
+    world.state.frames_selection = varde::debug::frame_rows(&world.state)
+        .iter()
+        .position(|row| matches!(row, varde::debug::FrameRow::Library { .. }))
+        .expect("a folded row");
+}
+
+/// Each Frame under the thread whose header it follows.
+#[then(expr = "the Frames are:")]
+fn frames_are(world: &mut VardeWorld, step: &Step) {
+    let mut thread = String::new();
+    let mut shown = Vec::new();
+    let frames = varde::debug::frames(&world.state);
+    for row in varde::debug::frame_rows(&world.state) {
+        match row {
+            varde::debug::FrameRow::Thread { name, .. } => thread = name,
+            varde::debug::FrameRow::Frame(index) => {
+                shown.push(vec![thread.clone(), frames[index].name.clone()])
+            }
+            varde::debug::FrameRow::Library { .. } => {}
+        }
+    }
+    let expected: Vec<Vec<String>> = step.table().expect("table").rows[1..].to_vec();
+    assert_eq!(shown, expected);
+}
+
+/// The inspected thread's rows under its header: a Frame by its name, a
+/// folded run by how many it holds.
+#[then(expr = "the Frames rows are:")]
+fn frames_rows_are(world: &mut VardeWorld, step: &Step) {
+    let frames = varde::debug::frames(&world.state);
+    let shown: Vec<Vec<String>> = varde::debug::frame_rows(&world.state)
+        .into_iter()
+        .filter_map(|row| match row {
+            varde::debug::FrameRow::Thread { .. } => None,
+            varde::debug::FrameRow::Frame(index) => {
+                Some(vec!["frame".to_string(), frames[index].name.clone()])
+            }
+            varde::debug::FrameRow::Library { count, .. } => {
+                Some(vec!["library".to_string(), count.to_string()])
+            }
+        })
+        .collect();
+    let expected: Vec<Vec<String>> = step.table().expect("table").rows[1..].to_vec();
+    assert_eq!(shown, expected);
+}
+
+/// `ui` draws every folded run dimmed, so the row being one is the fact.
+#[then(expr = "the folded row is drawn dimmed")]
+fn folded_row_is_dimmed(world: &mut VardeWorld) {
+    assert!(varde::debug::frame_rows(&world.state)
+        .iter()
+        .any(|row| matches!(row, varde::debug::FrameRow::Library { .. })));
+}
+
+#[then(expr = "the Frames flag thread {int} as paused")]
+fn frames_flag_thread(world: &mut VardeWorld, thread: i64) {
+    assert!(
+        varde::debug::frame_rows(&world.state)
+            .iter()
+            .any(|row| matches!(
+                row,
+                varde::debug::FrameRow::Thread { id, paused: true, .. } if *id == thread
+            )),
+        "{:?}",
+        varde::debug::frame_rows(&world.state)
+    );
+}
+
+#[then(expr = "thread {int} is still Paused")]
+fn thread_still_paused(world: &mut VardeWorld, thread: i64) {
+    frames_flag_thread(world, thread);
+}
+
+#[then(expr = "the {string} Chip counts {int}")]
+fn chip_counts(world: &mut VardeWorld, name: String, count: usize) {
+    let glyph = chip(world, &name).glyph;
+    let digits: String = glyph.chars().filter(char::is_ascii_digit).collect();
+    assert_eq!(digits, count.to_string(), "{glyph:?}");
+}
+
+#[then(expr = "the Variables are drawn dimmed")]
+#[then(expr = "the Frames are drawn dimmed")]
+fn debug_panes_are_dimmed(world: &mut VardeWorld) {
+    assert!(varde::debug::stale(&world.state));
+}
+
+fn variable_row(world: &VardeWorld, name: &str) -> varde::debug::Row {
+    varde::debug::variables(&world.state)
+        .into_iter()
+        .find(|row| row.name == name)
+        .unwrap_or_else(|| {
+            panic!(
+                "no Variables row {name:?}; rows are {:?}",
+                varde::debug::variables(&world.state)
+                    .iter()
+                    .map(|row| row.name.clone())
+                    .collect::<Vec<String>>()
+            )
+        })
+}
+
+/// The pause driven again, so the Variables hold what a scenario has just
+/// planted in the adapter: what they show is what the adapter answered at the
+/// pause, and a member planted after it was answered would be a member nobody
+/// asked for. What "since the pause" counts from is reset here for the same
+/// reason — the requests the pause itself makes are the pause, not something
+/// done in it.
+fn repause(world: &mut VardeWorld) {
+    let stop = world.dap.stopped.clone().expect("a pause");
+    adapter_event(world, stop);
+    world.dap.since_pause = world.dap.sent.len();
+}
+
+/// A member the adapter answers with, in the one scope the world gives a
+/// Frame that has none of its own.
+fn plant_member(world: &mut VardeWorld, member: Value) {
+    if world.dap.scopes.is_empty() {
+        world.dap.scopes.push(("Locals".to_string(), LOCALS));
+    }
+    let held = world.dap.members.entry(LOCALS).or_default();
+    // Planted over whatever the pause already had by that name, never beside
+    // it: two rows with one name is a scenario acting on whichever the walk
+    // reached first.
+    held.retain(|already| already["name"] != member["name"]);
+    held.push(member);
+    repause(world);
+}
+
+/// The locals of the program every debug Scenario's Background opens on. A
+/// pause has to show something, and a scenario that says "the row `count`"
+/// without planting one means the program's own — the same two names its code
+/// declares.
+fn plant_the_programs_locals(world: &mut VardeWorld) {
+    if !world.dap.scopes.is_empty() {
+        return;
+    }
+    world.dap.scopes.push(("Locals".to_string(), LOCALS));
+    world.dap.members.entry(LOCALS).or_default().extend([
+        json!({ "name": "orders", "value": "[…]" }),
+        json!({ "name": "count", "value": "3" }),
+    ]);
+}
+
+#[given(expr = "the Variables show {string}")]
+#[when(expr = "the Variables show {string}")]
+fn variables_show(world: &mut VardeWorld, name: String) {
+    plant_member(world, json!({ "name": name, "value": "3" }));
+}
+
+#[given(expr = "the Variables show {string} with the value {string}")]
+fn variables_show_value(world: &mut VardeWorld, name: String, value: String) {
+    plant_member(world, json!({ "name": name, "value": value }));
+}
+
+#[then(expr = "the Variables show {string}")]
+fn variables_should_show(world: &mut VardeWorld, name: String) {
+    variable_row(world, &name);
+}
+
+#[given(expr = "the Variables show {string} with reference {int}")]
+#[when(expr = "the Variables show {string} with reference {int}")]
+fn variables_show_reference(world: &mut VardeWorld, name: String, reference: i64) {
+    plant_member(
+        world,
+        json!({ "name": name, "value": "[…]", "variablesReference": reference }),
+    );
+}
+
+#[given(expr = "the Variables show {string} with reference {int} holding {int} indexed children")]
+fn variables_show_collection(
+    world: &mut VardeWorld,
+    name: String,
+    reference: i64,
+    children: usize,
+) {
+    world.dap.members.insert(
+        reference,
+        (0..children)
+            .map(|index| json!({ "name": format!("[{index}]"), "value": "0" }))
+            .collect(),
+    );
+    plant_member(
+        world,
+        json!({
+            "name": name,
+            "value": "[…]",
+            "variablesReference": reference,
+            "indexedVariables": children,
+        }),
+    );
+}
+
+#[given(expr = "the Variables show {string} with the presentation hint {string}")]
+#[when(expr = "the Variables show {string} with the presentation hint {string}")]
+fn variables_show_hint(world: &mut VardeWorld, name: String, hint: String) {
+    plant_member(world, hinted(&name, 0, &hint));
+}
+
+#[given(
+    expr = "the Variables show {string} with reference {int} and the presentation hint {string}"
+)]
+fn variables_show_reference_hint(
+    world: &mut VardeWorld,
+    name: String,
+    reference: i64,
+    hint: String,
+) {
+    plant_member(world, hinted(&name, reference, &hint));
+}
+
+/// One member carrying the adapter's hint in the field the protocol puts it
+/// in: visibility for who may see it, attributes for what may be done to it.
+fn hinted(name: &str, reference: i64, hint: &str) -> Value {
+    let presentation = match hint {
+        "private" => json!({ "visibility": "private" }),
+        attribute => json!({ "attributes": [attribute] }),
+    };
+    json!({
+        "name": name,
+        "value": "…",
+        "variablesReference": reference,
+        "presentationHint": presentation,
+    })
+}
+
+#[when(expr = "the Debug adapter answers {string} with the scopes:")]
+fn adapter_answers_scopes(world: &mut VardeWorld, command: String, step: &Step) {
+    assert_eq!(command, "scopes");
+    world.dap.scopes = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| (row[0].clone(), LOCALS + index as i64))
+        .collect();
+    repause(world);
+}
+
+#[then(expr = "the Variables' top rows are:")]
+fn variables_top_rows_are(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let tops: Vec<String> = varde::debug::variables(&world.state)
+        .into_iter()
+        .filter(|row| row.depth == 0)
+        .map(|row| row.name)
+        .collect();
+    assert_eq!(tops, expected);
+}
+
+#[then(expr = "the Variables row {string} is drawn as {string}")]
+fn variables_row_drawn_as(world: &mut VardeWorld, name: String, drawn: String) {
+    assert_eq!(variable_row(world, &name).hint.as_str(), drawn);
+}
+
+/// Through the hit-test, on the row's own line of the Strip — the gesture
+/// Enter is, which is why opening by mouse and by key are one arm.
+fn open_variables_row(world: &mut VardeWorld, index: usize) {
+    let strip = world.panes().terminal;
+    let row = strip.y + 1 + (index - world.state.variables_scroll) as u16;
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, strip.x + 2, row);
+    world.report(mouse::Kind::LeftUp, strip.x + 2, row);
+}
+
+#[given(expr = "I open the Variables row {string}")]
+#[when(expr = "I open the Variables row {string}")]
+fn open_row_named(world: &mut VardeWorld, name: String) {
+    let index = varde::debug::variables(&world.state)
+        .iter()
+        .position(|row| row.name == name)
+        .unwrap_or_else(|| panic!("no Variables row {name:?}"));
+    open_variables_row(world, index);
+}
+
+/// The row that stands for the rest of `name`'s children: the one whose next
+/// page is that member's reference.
+fn next_page_row(world: &VardeWorld, name: &str) -> Option<usize> {
+    let reference = match variable_row(world, name).opens {
+        varde::debug::Opens::Children { reference, .. } => reference,
+        other => panic!("the row {name:?} opens {other:?}"),
+    };
+    varde::debug::variables(&world.state).iter().position(|row| {
+        matches!(row.opens, varde::debug::Opens::NextPage { reference: next, .. } if next == reference)
+    })
+}
+
+#[then(expr = "the Variables show a row for the next page of {string}")]
+fn variables_show_next_page(world: &mut VardeWorld, name: String) {
+    assert!(
+        next_page_row(world, &name).is_some(),
+        "no next-page row for {name:?}"
+    );
+}
+
+/// By keyboard rather than by pointer: the row that stands for the rest of a
+/// ten thousand element collection is a hundred rows past the Strip's last
+/// line, and a row nothing has scrolled to is a row no pointer can reach. The
+/// arrows are what scroll it into view, and Enter is what every list in Varde
+/// opens a row with.
+#[when(expr = "I open the next page of {string}")]
+fn open_next_page(world: &mut VardeWorld, name: String) {
+    let index = next_page_row(world, &name).unwrap_or_else(|| panic!("no next page of {name:?}"));
+    world.state.focus = Pane::Variables;
+    while world.state.variables_selection < index {
+        world.send(Event::MoveSelection(Direction::Down));
+    }
+    world.send(Event::Activate);
+}
+
+/// The `variables` requests that named a reference, in order.
+fn for_reference<'a>(world: &'a VardeWorld, command: &str, reference: i64) -> Vec<&'a Value> {
+    dap_requests(world, command)
+        .into_iter()
+        .filter(|message| message["arguments"]["variablesReference"] == reference)
+        .collect()
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for reference {int}")]
+fn adapter_sent_for_reference(world: &mut VardeWorld, command: String, reference: i64) {
+    assert!(
+        !for_reference(world, &command, reference).is_empty(),
+        "{:?}",
+        world.dap.sent
+    );
+}
+
+#[then(expr = "the Debug adapter was sent no {string} request for reference {int}")]
+fn adapter_sent_none_for_reference(world: &mut VardeWorld, command: String, reference: i64) {
+    assert!(
+        for_reference(world, &command, reference).is_empty(),
+        "{:?}",
+        world.dap.sent
+    );
+}
+
+#[then(
+    expr = "the Debug adapter was sent a {string} request for reference {int} starting at {int} counting {int}"
+)]
+fn adapter_sent_page(
+    world: &mut VardeWorld,
+    command: String,
+    reference: i64,
+    start: u64,
+    count: u64,
+) {
+    let asked = for_reference(world, &command, reference);
+    assert!(
+        asked.iter().any(|message| {
+            message["arguments"]["start"] == start && message["arguments"]["count"] == count
+        }),
+        "{asked:?}"
+    );
+}
+
+#[then(expr = "the Debug adapter was sent exactly {int} {string} request(s) since the pause")]
+fn adapter_sent_exactly_since(world: &mut VardeWorld, count: usize, command: String) {
+    let sent: Vec<&Value> = world.dap.sent[world.dap.since_pause..]
+        .iter()
+        .filter(|message| message["type"] == "request" && message["command"] == command)
+        .collect();
+    assert_eq!(sent.len(), count, "{sent:?}");
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for the Frame {string}")]
+fn adapter_sent_for_frame(world: &mut VardeWorld, command: String, name: String) {
+    let frame = varde::debug::frames(&world.state)
+        .iter()
+        .find(|frame| frame.name == name)
+        .unwrap_or_else(|| panic!("no Frame {name:?}"));
+    assert_eq!(
+        last_request(world, &command)["arguments"]["frameId"],
+        frame.id
+    );
+}
+
+#[given(
+    expr = "the Debug adapter sends the {string} event for thread {int} at {string} line {int} with reason {string} and the text {string}"
+)]
+#[when(
+    expr = "the Debug adapter sends the {string} event for thread {int} at {string} line {int} with reason {string} and the text {string}"
+)]
+fn adapter_sends_stopped_with_text(
+    world: &mut VardeWorld,
+    event: String,
+    thread: i64,
+    file: String,
+    line: usize,
+    reason: String,
+    text: String,
+) {
+    assert_eq!(event, "stopped");
+    world.dap.text = Some(text);
+    stopped_at(world, thread, &file, line, &reason);
+}
+
+#[then(expr = "the first Variables row is the exception {string}")]
+fn first_variables_row_is_the_exception(world: &mut VardeWorld, text: String) {
+    let first = varde::debug::variables(&world.state)
+        .into_iter()
+        .next()
+        .expect("a row");
+    assert_eq!((first.name.as_str(), first.value), ("exception", text));
+}
+
+#[then(expr = "the Debug adapter row for {string} is {string}")]
+fn debug_adapter_row_is(world: &mut VardeWorld, language: String, expected: String) {
+    assert_eq!(
+        tool_row(world, tools::Kind::Adapter, &language)
+            .availability
+            .as_str(),
+        expected
+    );
+}
+
+// ---- R41.7: child sessions are more threads ----
+
+/// `startDebugging`, as js-debug sends it for a worker: a configuration of
+/// its own, which the child session is started with.
+#[given(expr = "the Debug adapter asks to start a child session whose thread is {string}")]
+#[when(expr = "the Debug adapter asks to start a child session whose thread is {string}")]
+fn adapter_asks_for_a_child(world: &mut VardeWorld, thread: String) {
+    world.dap.child_thread = thread;
+    let seq = 1000 + world.dap.sent.len();
+    adapter_event(
+        world,
+        json!({
+            "type": "request",
+            "seq": seq,
+            "command": "startDebugging",
+            "arguments": {
+                "request": "attach",
+                "configuration": { "type": "pwa-node", "name": "worker.js", "__pendingTargetId": "7" },
+            },
+        }),
+    );
+}
+
+#[then(expr = "the Frames list the thread {string}")]
+fn frames_list_the_thread(world: &mut VardeWorld, thread: String) {
+    let listed = varde::debug::frame_rows(&world.state)
+        .into_iter()
+        .any(|row| matches!(row, varde::debug::FrameRow::Thread { name, .. } if name == thread));
+    assert!(listed, "{:?}", varde::debug::frame_rows(&world.state));
+}
+
+/// One session, which is the one started: a child opened as a session of its
+/// own would have its adapter started again, or the session replaced by it.
+#[then(expr = "exactly one Debug session is shown")]
+fn exactly_one_session(world: &mut VardeWorld) {
+    assert!(world.state.debug.is_some());
+    assert_eq!(world.dap.spawned.len() + world.dap.dialed.len(), 1);
+    assert_eq!(dap_requests(world, "launch").len(), 1);
+}
+
+#[then(expr = "no session picker is shown")]
+fn no_session_picker(world: &mut VardeWorld) {
+    assert_eq!(world.state.modal, Modal::None);
+}
+
+#[then(expr = "the Transport has one {string} Chip")]
+fn transport_has_one_chip(world: &mut VardeWorld, name: String) {
+    let chips = varde::debug::strip_transport(&world.state);
+    assert_eq!(chips.iter().filter(|chip| chip.name == name).count(), 1);
+}
+
+/// In the id the child knows its thread by, which is the session's own
+/// thread's too: only the connection tells them apart.
+#[then(expr = "the child session was sent a {string} request for its thread")]
+fn child_was_sent_for_its_thread(world: &mut VardeWorld, command: String) {
+    let (child, sent) = world.dap.children.iter().next().expect("a child session");
+    let asked = sent
+        .iter()
+        .rev()
+        .find(|message| message["command"] == command)
+        .unwrap_or_else(|| panic!("child {child} was sent {sent:?}"));
+    assert_eq!(asked["arguments"]["threadId"], 1);
+}
+
+#[then(expr = "every child session was sent a {string} request")]
+fn every_child_was_sent(world: &mut VardeWorld, command: String) {
+    assert!(
+        !world.dap.children.is_empty(),
+        "no child session was opened"
+    );
+    for (child, sent) in &world.dap.children {
+        assert!(
+            sent.iter().any(|message| message["command"] == command),
+            "child {child} was sent {sent:?}"
+        );
+    }
+}
+
+// ---- F45: the Program output in the Debug group ----
+
+/// The adapter's reverse request, driven in exactly as the edge frames it.
+#[given(expr = "the Debug adapter asks to run {string} in a terminal")]
+#[when(expr = "the Debug adapter asks to run {string} in a terminal")]
+fn adapter_asks_for_a_terminal(world: &mut VardeWorld, program: String) {
+    // A `seq` of the adapter's own, past anything Varde has sent: a reverse
+    // request is numbered in the adapter's sequence, not in Varde's.
+    let seq = 1000 + world.dap.sent.len() as i64;
+    adapter_event(
+        world,
+        json!({
+            "type": "request",
+            "seq": seq,
+            "command": "runInTerminal",
+            "arguments": { "kind": "integrated", "args": [program] },
+        }),
+    );
+}
+
+/// A session with the debugged program already running in the Debug group,
+/// which is what every step about the Program output needs behind it.
+fn program_running(world: &mut VardeWorld) {
+    if world.output_pty.is_none() {
+        adapter_asks_for_a_terminal(world, "target/debug/server".to_string());
+    }
+}
+
+#[then(expr = "a Program output pty is asked for running {string}")]
+fn program_pty_asked_for(world: &mut VardeWorld, program: String) {
+    assert_eq!(world.program, vec![vec![program]]);
+    assert!(
+        world.output_pty.is_some(),
+        "the edge holds no Program output"
+    );
+}
+
+#[then(expr = "no shell is asked for")]
+fn no_shell_asked_for(world: &mut VardeWorld) {
+    assert_eq!(world.splits, Vec::<usize>::new());
+    assert_eq!(world.state.terminals.len(), 1);
+}
+
+/// What is in the Debug group, whether or not it is the group on screen — so
+/// the group is brought forward, which is where a reader looking would be.
+#[then(expr = "the Debug group holds the Variables and the Program output")]
+fn debug_group_holds_both(world: &mut VardeWorld) {
+    program_running(world);
+    world.state.strip = layout::Group::Debug;
+    world.tell_core();
+    let panes = world.panes();
+    assert_eq!(
+        layout::pane_at(&panes, panes.terminal.x + 1, panes.terminal.y + 1),
+        Some(Pane::Variables)
+    );
+    assert_eq!(
+        layout::pane_at(&panes, panes.output.x + 1, panes.output.y + 1),
+        Some(Pane::Output)
+    );
+}
+
+/// The border's column, as a width off the Strip's right-hand end — which is
+/// what the layout is told, since the Strip's own left edge moves with the
+/// Corner beside it.
+#[given(expr = "the border between the Variables and the Program output is at column {int}")]
+fn border_at_column(world: &mut VardeWorld, column: u16) {
+    program_running(world);
+    let right = debug_group_right(world);
+    world.state.output_width = Some(u32::from(right.saturating_sub(column)));
+    world.tell_core();
+}
+
+/// The Debug group's right-hand edge, which the border is a width back from.
+/// Off the Strip when the Program output is away and off the output when it is
+/// not: the group is the two rectangles together.
+fn debug_group_right(world: &VardeWorld) -> u16 {
+    let panes = world.panes();
+    panes.terminal.right().max(panes.output.right())
+}
+
+/// Through the hit-test, from the border column itself: the handle has to be
+/// one a pointer can reach.
+#[when(expr = "I drag that border to column {int}")]
+#[when(expr = "I drag the border between the Variables and the Program output to column {int}")]
+fn drag_output_border(world: &mut VardeWorld, column: u16) {
+    program_running(world);
+    let panes = world.panes();
+    let row = panes.output.y + 1;
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, panes.output.x, row);
+    world.report(mouse::Kind::LeftDrag, column, row);
+    world.report(mouse::Kind::LeftUp, column, row);
+}
+
+#[given(expr = "the Program output is {int} columns wide")]
+fn output_is_wide(world: &mut VardeWorld, columns: u16) {
+    program_running(world);
+    let column = debug_group_right(world) - columns;
+    border_at_column(world, column);
+}
+
+#[then(expr = "the Program output is {int} columns wide")]
+fn output_should_be_wide(world: &mut VardeWorld, columns: u16) {
+    assert_eq!(world.panes().output.width, columns);
+}
+
+#[then(expr = "the Variables are at their least width")]
+fn variables_at_least_width(world: &mut VardeWorld) {
+    assert_eq!(world.panes().terminal.width, layout::GROUP_LEAST);
+}
+
+#[then(expr = "the Variables have the Debug group's whole width")]
+fn variables_have_the_whole_width(world: &mut VardeWorld) {
+    let panes = world.panes();
+    assert_eq!(panes.output.width, 0);
+    assert_eq!(panes.terminal.right(), panes.ai.right());
+}
+
+#[given(expr = "the Program output is hidden")]
+fn output_is_hidden(world: &mut VardeWorld) {
+    program_running(world);
+    if !world.state.output_hidden {
+        world.send(Event::ToggleOutput);
+    }
+}
+
+#[then(expr = "the Program output is hidden")]
+fn output_should_be_hidden(world: &mut VardeWorld) {
+    assert!(world.state.output_hidden);
+    assert_eq!(world.panes().output.width, 0);
+}
+
+#[then(expr = "the Program output is shown")]
+fn output_should_be_shown(world: &mut VardeWorld) {
+    assert!(varde::showing_output(&world.state));
+    assert!(world.panes().output.width > 0);
+}
+
+#[given(expr = "the Program output has focus")]
+fn output_has_focus(world: &mut VardeWorld) {
+    program_running(world);
+    world.state.focus = Pane::Output;
+}
+
+#[given(expr = "the Variables have focus")]
+fn variables_take_focus(world: &mut VardeWorld) {
+    world.state.focus = Pane::Variables;
+}
+
+/// Everything the program prints reaches the core the same way: the edge says
+/// it spoke, and the core decides whether the reader could see it.
+#[when(expr = "the program prints {string}")]
+fn program_prints(world: &mut VardeWorld, text: String) {
+    program_running(world);
+    world.send(Event::OutputSpoke);
+    // The adapter's own copy of the same output, which is what a run in the
+    // Evaluator collects: the pty prints it and the adapter repeats it.
+    if world.state.debug.is_some() {
+        adapter_event(
+            world,
+            json!({
+                "type": "event",
+                "event": "output",
+                "body": { "category": "stdout", "output": format!("{text}\n") },
+            }),
+        );
+    }
+}
+
+#[given(expr = "the program prints {string}")]
+fn program_printed(world: &mut VardeWorld, text: String) {
+    program_prints(world, text);
+}
+
+#[then(expr = "the Group tab {string} is marked as having unseen output")]
+fn tab_is_marked(world: &mut VardeWorld, label: String) {
+    assert!(tab(world, &label).unseen);
+}
+
+#[then(expr = "the Group tab {string} is not marked as having unseen output")]
+fn tab_is_not_marked(world: &mut VardeWorld, label: String) {
+    assert!(!tab(world, &label).unseen);
+}
+
+#[then(expr = "the {string} Chip is marked as having unseen output")]
+fn chip_is_marked(world: &mut VardeWorld, chip: String) {
+    let offered = varde::debug::strip_transport(&world.state)
+        .into_iter()
+        .find(|offered| offered.name == chip)
+        .unwrap_or_else(|| panic!("no {chip:?} Chip"));
+    assert_eq!(offered.tone, varde::Tone::Marked);
+}
+
+#[then(expr = "the Program output pty was never stopped")]
+fn output_pty_never_stopped(world: &mut VardeWorld) {
+    assert!(world.output_pty.is_some());
+    assert_eq!(world.program.len(), 1, "the program was started again");
+}
+
+#[then(expr = "the Program output's pty is at least {int} rows by {int} column")]
+fn output_pty_is_at_least(world: &mut VardeWorld, rows: u16, columns: u16) {
+    let (held_rows, held_columns) = world.output_pty.expect("a Program output pty");
+    assert!(
+        held_rows >= rows && held_columns >= columns,
+        "{held_rows}x{held_columns}"
+    );
+}
+
+#[then(expr = "the Program output received the key {string}")]
+fn output_received_key(world: &mut VardeWorld, key: String) {
+    let expected: &[u8] = match key.as_str() {
+        "Space" => b" ",
+        other => panic!("no bytes are pinned for {other:?}"),
+    };
+    assert_eq!(
+        world.keys_sent,
+        vec![(Pane::Output, expected.to_vec())],
+        "keys sent: {:?}",
+        world.keys_sent
+    );
+}
+
+#[then(expr = "nothing reached the Program output")]
+fn nothing_reached_the_output(world: &mut VardeWorld) {
+    assert!(
+        !world
+            .keys_sent
+            .iter()
+            .any(|(pane, _)| *pane == Pane::Output),
+        "keys sent: {:?}",
+        world.keys_sent
+    );
+}
+
+// ---- #56: the debug Transport ----
+
+/// The spawn `debug::start` asked the edge for, named by the command the
+/// adapter row gives — which is what a scenario means by "asked for": whether
+/// a process exists is the edge's to say.
+#[then(expr = "the Debug adapter for {string} is asked for")]
+#[then(expr = "a Debug adapter for {string} is asked for")]
+fn adapter_is_asked_for(world: &mut VardeWorld, language: String) {
+    let command = world
+        .state
+        .adapters
+        .get(&language)
+        .unwrap_or_else(|| panic!("no adapter configured for {language:?}"))
+        .command
+        .clone();
+    assert!(
+        world.dap.spawned.contains(&command),
+        "spawned: {:?}",
+        world.dap.spawned
+    );
+}
+
+#[then("no Debug adapter is asked for")]
+fn no_adapter_is_asked_for(world: &mut VardeWorld) {
+    assert_eq!(world.dap.spawned, Vec::<String>::new());
+}
+
+/// The program ended, which is the state restart is reached for from.
+#[given("the Debug session has ended")]
+#[when("the Debug session has ended")]
+fn session_has_ended(world: &mut VardeWorld) {
+    adapter_sends_event(world, "terminated".to_string());
+    assert!(world.state.debug.is_none(), "the session is still going");
+    world.dap.spawned.clear();
+}
+
+/// What the named Launch configuration carries, as configuration gave it —
+/// so a restart that reran a different one, or reached the adapter with
+/// arguments of its own, fails here.
+#[then(expr = "the Debug adapter's launch arguments are those of {string}")]
+fn launch_arguments_are_those_of(world: &mut VardeWorld, name: String) {
+    let expected = world
+        .state
+        .launches
+        .get(&name)
+        .unwrap_or_else(|| panic!("no Launch configuration {name:?}"))
+        .args
+        .clone();
+    assert_eq!(
+        last_request(world, "launch")["arguments"],
+        Value::Object(expected)
+    );
+}
+
+/// The Variables' Transport, by the names that say what pressing each Chip
+/// does — never the glyphs or the colours, which are `ui`'s.
+#[then("the Transport's Chips are:")]
+fn transport_chips_are(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("a table of Chips")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let drawn: Vec<&str> = varde::debug::strip_transport(&world.state)
+        .iter()
+        .map(|chip| chip.name)
+        .collect();
+    assert_eq!(drawn, expected);
+}
+
+#[then(expr = "the Transport's first Chip is {string}")]
+fn transport_first_chip_is(world: &mut VardeWorld, name: String) {
+    let chips = varde::debug::strip_transport(&world.state);
+    assert_eq!(chips.first().expect("a Chip").name, name);
+}
+
+/// Every key the Chip teaches, in the spelling the cheatsheet uses: a Chip
+/// that named one of its two routes would say the other is not there.
+#[then(expr = "the {string} Chip names the keys:")]
+fn chip_names_the_keys(world: &mut VardeWorld, name: String, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("a table of keys")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let named: Vec<String> = chip(world, &name)
+        .keys
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(named, expected);
+}
+
+/// The Chip that says what pressing it does, found by that name — on the
+/// Variables' Transport, the Breakpoint list's, or on the row the keyboard is
+/// on, since all are Chips and a scenario names one by what pressing it does.
+fn chip(world: &VardeWorld, name: &str) -> varde::Chip {
+    varde::debug::strip_transport(&world.state)
+        .into_iter()
+        .chain(varde::debug::transport(&world.state))
+        .find(|offered| offered.name == name)
+        .or_else(|| row_chip(world, name))
+        .unwrap_or_else(|| panic!("no {name:?} Chip"))
+}
+
+/// The named Chip on the Variables row the keyboard is on, if it carries one.
+fn row_chip(world: &VardeWorld, name: &str) -> Option<varde::Chip> {
+    varde::debug::row_chips(&world.state, world.state.variables_selection)
+        .into_iter()
+        .find(|offered| offered.name == name)
+}
+
+#[when(expr = "I click the row's {string} Chip")]
+fn click_the_rows_chip(world: &mut VardeWorld, name: String) {
+    click_variables_row_chip(world, &name);
+}
+
+/// Through the hit-test, on the row's own line and at the columns `ui` draws
+/// the Chips into — never driven as an event, so a Chip no pointer could
+/// reach fails here.
+fn click_variables_row_chip(world: &mut VardeWorld, name: &str) {
+    let index = world.state.variables_selection;
+    let chips = varde::debug::row_chips(&world.state, index);
+    let at = chips
+        .iter()
+        .position(|offered| offered.name == name)
+        .unwrap_or_else(|| panic!("no {name:?} Chip on the row"));
+    let strip = world.panes().terminal;
+    let row = strip.y + 1 + (index - world.state.variables_scroll) as u16;
+    let column = strip.x + strip.width - 1 - 2 * (chips.len() - at) as u16;
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, row);
+    world.report(mouse::Kind::LeftUp, column, row);
+}
+
+#[then(expr = "the {string} Chip is dimmed")]
+fn chip_is_dimmed(world: &mut VardeWorld, name: String) {
+    assert_eq!(chip(world, &name).tone, varde::Tone::Dimmed);
+}
+
+#[then(expr = "the {string} Chip is not dimmed")]
+fn chip_is_not_dimmed(world: &mut VardeWorld, name: String) {
+    assert_ne!(chip(world, &name).tone, varde::Tone::Dimmed);
+}
+
+#[then(expr = "the {string} Chip is lit")]
+fn chip_is_lit(world: &mut VardeWorld, name: String) {
+    assert_eq!(chip(world, &name).tone, varde::Tone::Lit);
+}
+
+#[then(expr = "the {string} Chip is not lit")]
+fn chip_is_not_lit(world: &mut VardeWorld, name: String) {
+    assert_ne!(chip(world, &name).tone, varde::Tone::Lit);
+}
+
+/// Time passing is the ticks that would have arrived — the one event nobody
+/// pressed, on `main`'s own 80ms cadence. Nothing else can pass here, which
+/// is the assertion: a lit Chip that faded would need a timer, and ADR 0009
+/// allows a Tick only while work is in flight.
+#[when(expr = "{int} seconds pass")]
+fn seconds_pass(world: &mut VardeWorld, seconds: u64) {
+    for _ in 0..(seconds * 1_000 / 80) {
+        world.send(Event::Tick);
+    }
+}
+
+/// The Transport is drawn across the Strip's top border, so the Variables'
+/// width is the room its Chips have. Driven by the screen rather than set: the
+/// panes are the layout's to decide, and a width written into `State` would be
+/// a width nothing draws.
+#[when(expr = "the Variables are {int} columns wide")]
+fn variables_are_wide(world: &mut VardeWorld, columns: u16) {
+    let (width, height) = world.screen();
+    let wanted = width + columns - world.panes().terminal.width;
+    world.send(Event::Resized {
+        width: wanted,
+        height,
+    });
+    assert_eq!(world.panes().terminal.width, columns);
+}
+
+/// The labels `ui` draws and `mouse` hit-tests, at the width the Transport
+/// really has.
+fn transport_labels(world: &VardeWorld) -> Vec<String> {
+    let chips = varde::debug::strip_transport(&world.state);
+    let area = varde::transport_area(&world.state, world.panes().strip());
+    layout::chip_labels(&chips, area.width, layout::CORNER_TITLE)
+}
+
+/// Each label pinned exactly, never "contains its keys": a Chip that names no
+/// key yet would pass a containment test whichever shape it was drawn in, and
+/// a `Then` that cannot fail is worse than no `Then`.
+#[then("every Chip shows its keys")]
+fn every_chip_shows_its_keys(world: &mut VardeWorld) {
+    let chips = varde::debug::strip_transport(&world.state);
+    for (chip, label) in chips.iter().zip(transport_labels(world)) {
+        assert_eq!(
+            label,
+            format!(" {} {} ", chip.glyph, chip.keys),
+            "{:?}",
+            chip.name
+        );
+    }
+}
+
+#[then("no Chip shows its keys")]
+fn no_chip_shows_its_keys(world: &mut VardeWorld) {
+    let chips = varde::debug::strip_transport(&world.state);
+    for (chip, label) in chips.iter().zip(transport_labels(world)) {
+        assert_eq!(label, format!(" {} ", chip.glyph), "{:?}", chip.name);
+    }
+}
+
+/// None dropped, none cut and none wrapped: every Chip still has a label, and
+/// each one holds that Chip's whole glyph and nothing of another's.
+#[then("every Chip is drawn whole")]
+fn every_chip_is_drawn_whole(world: &mut VardeWorld) {
+    let chips = varde::debug::strip_transport(&world.state);
+    let labels = transport_labels(world);
+    assert_eq!(labels.len(), chips.len());
+    for (chip, label) in chips.iter().zip(&labels) {
+        assert!(
+            label.starts_with(&format!(" {} ", chip.glyph)),
+            "{:?} is drawn {label:?}",
+            chip.name
+        );
+    }
+}
+
+// ---- #57: the Variables' row Chips, and the Watches ----
+
+/// The row a scenario names, by the expression that reaches it — `orders[0].id`
+/// rather than the `id` the row is labelled with — falling back to the label,
+/// which is how a scope and the exception row are named.
+fn variables_index(world: &VardeWorld, named: &str) -> usize {
+    let rows = varde::debug::variables(&world.state);
+    rows.iter()
+        .position(|row| row.expression == named)
+        .or_else(|| rows.iter().position(|row| row.name == named))
+        .unwrap_or_else(|| {
+            panic!(
+                "no Variables row {named:?}; rows are {:?}",
+                rows.iter()
+                    .map(|row| row.expression.clone())
+                    .collect::<Vec<String>>()
+            )
+        })
+}
+
+/// By the arrows, from wherever the selection is — the gesture a reader makes,
+/// so a row the motion cannot reach fails here rather than being set into
+/// place behind the keyboard's back.
+#[given(expr = "the Variables selection is the row {string}")]
+#[given(expr = "the Variables selection is the Watch {string}")]
+#[when(expr = "I move the Variables selection to the row {string}")]
+fn variables_selection_is(world: &mut VardeWorld, named: String) {
+    let index = variables_index(world, &named);
+    world.state.focus = Pane::Variables;
+    while world.state.variables_selection > index {
+        world.send(Event::MoveSelection(Direction::Up));
+    }
+    while world.state.variables_selection < index {
+        world.send(Event::MoveSelection(Direction::Down));
+    }
+    assert_eq!(world.state.variables_selection, index);
+}
+
+/// The row's Chips by the names that say what pressing each does, never the
+/// glyphs or the colours, exactly as the Transport's are read.
+#[then(expr = "the row {string} carries the Chips:")]
+fn row_carries_chips(world: &mut VardeWorld, named: String, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("a table of Chips")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let index = variables_index(world, &named);
+    let drawn: Vec<&str> = varde::debug::row_chips(&world.state, index)
+        .iter()
+        .map(|chip| chip.name)
+        .collect();
+    assert_eq!(drawn, expected);
+}
+
+#[then(expr = "the row {string} carries no Chips")]
+fn row_carries_no_chips(world: &mut VardeWorld, named: String) {
+    let index = variables_index(world, &named);
+    assert_eq!(varde::debug::row_chips(&world.state, index), Vec::new());
+}
+
+/// The adapter's own word about itself, as the `capabilities` event carries
+/// it — never assumed, and never found out by trying the request.
+#[given(expr = "the Debug adapter reported it can set variables")]
+#[given(expr = "the Debug adapter reported it cannot set variables")]
+fn adapter_reported_set_variables(world: &mut VardeWorld, step: &Step) {
+    let can = !step.value.contains("cannot");
+    adapter_event(
+        world,
+        json!({
+            "type": "event",
+            "event": "capabilities",
+            "body": { "capabilities": { "supportsSetVariable": can } },
+        }),
+    );
+}
+
+/// Through the box the set-value Chip opens: the key, the characters, Enter —
+/// the gesture a reader makes, so a box that never opened fails here.
+#[given(expr = "I set the value of the row to {string}")]
+#[when(expr = "I set the value of the row to {string}")]
+fn set_the_value_of_the_row(world: &mut VardeWorld, value: String) {
+    world.state.focus = Pane::Variables;
+    route_key(world, "s", 0);
+    assert_eq!(
+        world.state.modal,
+        Modal::SetValue,
+        "the set-value box did not open"
+    );
+    for character in value.chars() {
+        route_key(world, &character.to_string(), 0);
+    }
+    route_key(world, "Enter", 0);
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for {string} with the value {string}")]
+fn adapter_sent_set_variable(world: &mut VardeWorld, command: String, name: String, value: String) {
+    let request = last_request(world, &command);
+    assert_eq!(request["arguments"]["name"], json!(name));
+    assert_eq!(request["arguments"]["value"], json!(value));
+}
+
+#[when(expr = "the Debug adapter answers {string} with the value {string}")]
+fn adapter_answers_with_value(world: &mut VardeWorld, command: String, value: String) {
+    let seq = last_request(world, &command)["seq"].clone();
+    adapter_event(
+        world,
+        json!({
+            "type": "response",
+            "request_seq": seq,
+            "success": true,
+            "command": command,
+            "body": { "value": value },
+        }),
+    );
+}
+
+#[given(expr = "the Variables row {string} shows the value {string}")]
+fn variables_row_shows_value(world: &mut VardeWorld, name: String, value: String) {
+    plant_member(world, json!({ "name": name, "value": value }));
+}
+
+#[then(expr = "the Variables row {string} shows the value {string}")]
+fn variables_row_should_show_value(world: &mut VardeWorld, named: String, value: String) {
+    let index = variables_index(world, &named);
+    assert_eq!(varde::debug::variables(&world.state)[index].value, value);
+}
+
+/// A nested row planted and walked open, a level at a time — the members
+/// above it have to exist and be open for the row to be drawn at all.
+#[given(expr = "the Variables row {string} is open")]
+fn variables_row_is_open(world: &mut VardeWorld, path: String) {
+    let names = expression_parts(&path);
+    let mut reference = LOCALS;
+    for (depth, name) in names.iter().enumerate() {
+        let leaf = depth + 1 == names.len();
+        let child = match leaf {
+            true => 0,
+            false => 7000 + depth as i64,
+        };
+        let member = json!({ "name": name, "value": "…", "variablesReference": child });
+        match depth {
+            0 => plant_member(world, member),
+            _ => {
+                world.dap.members.entry(reference).or_default().push(member);
+                repause(world);
+            }
+        }
+        reference = child;
+    }
+    for depth in 1..names.len() {
+        let so_far = names[..depth].iter().fold(String::new(), |path, name| {
+            match (path.is_empty(), name.starts_with('[')) {
+                (true, _) => name.to_string(),
+                (false, true) => format!("{path}{name}"),
+                (false, false) => format!("{path}.{name}"),
+            }
+        });
+        let index = variables_index(world, &so_far);
+        open_variables_row(world, index);
+    }
+}
+
+/// An expression split into the members it walks through: `orders[0].id` is
+/// three of them, and an index is a member of its own.
+fn expression_parts(path: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut held = String::new();
+    for character in path.chars() {
+        match character {
+            '.' => {
+                if !held.is_empty() {
+                    parts.push(std::mem::take(&mut held));
+                }
+            }
+            '[' => {
+                if !held.is_empty() {
+                    parts.push(std::mem::take(&mut held));
+                }
+                held.push('[');
+            }
+            other => held.push(other),
+        }
+    }
+    if !held.is_empty() {
+        parts.push(held);
+    }
+    parts
+}
+
+#[when(expr = "I copy the row as an expression")]
+fn copy_the_row_as_an_expression(world: &mut VardeWorld) {
+    world.state.focus = Pane::Variables;
+    route_key(world, "Y", 0);
+}
+
+/// Through the box `a` opens on the Variables, typed and entered — the other
+/// half of "added from a row or typed", and the gesture a reader makes, so a
+/// box that never opened fails here.
+#[given(expr = "the Watches are {string}")]
+#[given(expr = "the Watches are {string} and {string}")]
+fn the_watches_are(world: &mut VardeWorld, step: &Step) {
+    world.state.focus = Pane::Variables;
+    for expression in step
+        .value
+        .trim_start_matches("Given ")
+        .trim_start_matches("the Watches are ")
+        .split(" and ")
+    {
+        route_key(world, "a", 0);
+        assert_eq!(
+            world.state.modal,
+            Modal::NewWatch,
+            "the Watch box did not open"
+        );
+        for character in expression.trim_matches('"').chars() {
+            route_key(world, &character.to_string(), 0);
+        }
+        route_key(world, "Enter", 0);
+    }
+}
+
+#[then("the Watches are:")]
+fn the_watches_should_be(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("a table of Watches")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let held: Vec<String> = world
+        .state
+        .watches
+        .iter()
+        .map(|watch| watch.expression.clone())
+        .collect();
+    assert_eq!(held, expected);
+}
+
+#[then("the Variables' first rows are the Watches")]
+fn variables_first_rows_are_the_watches(world: &mut VardeWorld) {
+    let expected: Vec<String> = world
+        .state
+        .watches
+        .iter()
+        .map(|watch| watch.expression.clone())
+        .collect();
+    assert!(!expected.is_empty(), "no Watches to be the first rows");
+    let rows = varde::debug::variables(&world.state);
+    let first: Vec<String> = rows
+        .iter()
+        .take(expected.len())
+        .map(|row| row.expression.clone())
+        .collect();
+    assert_eq!(first, expected);
+    assert!(
+        rows.iter()
+            .take(expected.len())
+            .all(|row| matches!(row.of, varde::debug::Of::Watch { .. })),
+        "a first row is not a Watch"
+    );
+}
+
+#[then(
+    expr = "the Debug adapter was sent an {string} request for {string} in the {string} context"
+)]
+fn adapter_sent_evaluate(
+    world: &mut VardeWorld,
+    command: String,
+    expression: String,
+    context: String,
+) {
+    let asked: Vec<&Value> = dap_requests(world, &command)
+        .into_iter()
+        .filter(|message| {
+            message["arguments"]["expression"] == json!(expression)
+                && message["arguments"]["context"] == json!(context)
+        })
+        .collect();
+    assert!(!asked.is_empty(), "sent: {:?}", world.dap.sent);
+}
+
+/// The Watch row, by the expression it holds.
+fn watch_row(world: &VardeWorld, expression: &str) -> varde::debug::Row {
+    varde::debug::variables(&world.state)
+        .into_iter()
+        .find(|row| {
+            matches!(row.of, varde::debug::Of::Watch { .. }) && row.expression == expression
+        })
+        .unwrap_or_else(|| panic!("no Watch row {expression:?}"))
+}
+
+#[then(expr = "the Watch {string} is marked as calling")]
+fn watch_is_marked_as_calling(world: &mut VardeWorld, expression: String) {
+    assert!(matches!(
+        watch_row(world, &expression).of,
+        varde::debug::Of::Watch { calling: true, .. }
+    ));
+}
+
+#[then(expr = "the Watch {string} is not marked as calling")]
+fn watch_is_not_marked_as_calling(world: &mut VardeWorld, expression: String) {
+    assert!(matches!(
+        watch_row(world, &expression).of,
+        varde::debug::Of::Watch { calling: false, .. }
+    ));
+}
+
+#[when(expr = "the Debug adapter answers the {string} for {string} with the error {string}")]
+fn adapter_answers_evaluate_with_error(
+    world: &mut VardeWorld,
+    command: String,
+    expression: String,
+    error: String,
+) {
+    let seq = dap_requests(world, &command)
+        .into_iter()
+        .rev()
+        .find(|message| message["arguments"]["expression"] == json!(expression))
+        .unwrap_or_else(|| panic!("no {command:?} for {expression:?}"))["seq"]
+        .clone();
+    adapter_event(
+        world,
+        json!({
+            "type": "response",
+            "request_seq": seq,
+            "success": false,
+            "command": command,
+            "message": error,
+        }),
+    );
+}
+
+#[then(expr = "the Watch {string} shows an error")]
+fn watch_shows_an_error(world: &mut VardeWorld, expression: String) {
+    assert!(matches!(
+        watch_row(world, &expression).of,
+        varde::debug::Of::Watch { failed: true, .. }
+    ));
+}
+
+// ---- #58: Inline values ----
+
+/// The Inline values the editor draws, off the same tokens the edge caches for
+/// it and hands `ui`.
+fn inline_values(world: &VardeWorld) -> BTreeMap<usize, Vec<varde::debug::Inline>> {
+    let (name, source) = match world.state.current_buffer.as_ref() {
+        Some(path) => (
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            current_buffer(world).shown().to_string(),
+        ),
+        None => return BTreeMap::new(),
+    };
+    // The columns the renderer drew, off the same rectangles the mouse is
+    // hit-tested against — a scenario that never said how big the screen is
+    // gets the plain window `screen` falls back to.
+    let columns = varde::fits_in(&world.state, &world.panes()).2;
+    varde::debug::inline(
+        &world.state,
+        &varde::highlight::highlight(&name, &source),
+        columns,
+    )
+}
+
+/// One Inline value wherever it is drawn, by the name it stands for.
+fn inline_value(world: &VardeWorld, name: &str) -> varde::debug::Inline {
+    inline_values(world)
+        .into_values()
+        .flatten()
+        .find(|value| value.name == name)
+        .unwrap_or_else(|| panic!("no Inline value for {name:?}"))
+}
+
+/// The Locals the scripted adapter answers with, replacing whatever a pause
+/// would otherwise plant. One set for every Frame: the fake answers `scopes`
+/// the same whichever Frame asked, so a scenario naming one is saying which
+/// call's values it is describing, not scripting a second set.
+fn plant_locals(world: &mut VardeWorld, values: &[(String, String)]) {
+    world.dap.scopes = vec![("Locals".to_string(), LOCALS)];
+    world.dap.members.insert(
+        LOCALS,
+        values
+            .iter()
+            .map(|(name, value)| json!({ "name": name, "value": value }))
+            .collect(),
+    );
+}
+
+#[given(expr = "the Debug adapter's Locals are {string} = {string}")]
+fn locals_are(world: &mut VardeWorld, name: String, value: String) {
+    plant_locals(world, &[(name, value)]);
+}
+
+#[given(expr = "the Debug adapter's Locals are {string} = {string} and {string} = {string}")]
+fn locals_are_two(
+    world: &mut VardeWorld,
+    first: String,
+    first_value: String,
+    second: String,
+    second_value: String,
+) {
+    plant_locals(world, &[(first, first_value), (second, second_value)]);
+}
+
+#[given(
+    expr = "the Debug adapter's Locals for {string} are {string} = {string} and {string} = {string}"
+)]
+fn locals_for_frame(
+    world: &mut VardeWorld,
+    _frame: String,
+    first: String,
+    first_value: String,
+    second: String,
+    second_value: String,
+) {
+    plant_locals(world, &[(first, first_value), (second, second_value)]);
+}
+
+#[given(expr = "a Debug session is Paused at {string} line {int} with {string} = {string}")]
+fn paused_with_local(
+    world: &mut VardeWorld,
+    file: String,
+    line: usize,
+    name: String,
+    value: String,
+) {
+    plant_locals(world, &[(name, value)]);
+    debug_session_is_paused(world, file, line);
+}
+
+#[given(
+    expr = "the Debug adapter sends the {string} event for thread {int} at {string} line {int} with reason {string} and {string} = {string} and {string} = {string}"
+)]
+#[when(
+    expr = "the Debug adapter sends the {string} event for thread {int} at {string} line {int} with reason {string} and {string} = {string} and {string} = {string}"
+)]
+// One parameter per value the step names, which is what the step text has:
+// a struct to carry them would be a struct nothing else reads.
+#[allow(clippy::too_many_arguments)]
+fn adapter_sends_stopped_with_locals(
+    world: &mut VardeWorld,
+    event: String,
+    thread: i64,
+    file: String,
+    line: usize,
+    reason: String,
+    first: String,
+    first_value: String,
+    second: String,
+    second_value: String,
+) {
+    assert_eq!(event, "stopped");
+    plant_locals(world, &[(first, first_value), (second, second_value)]);
+    stopped_at(world, thread, &file, line, &reason);
+}
+
+/// The editor's **text** width rather than its rectangle: what a line has to
+/// fit in is what is left once the borders, the gutter and the mirror have
+/// taken theirs, and that is the width an Inline value is trimmed to. Not the
+/// same question as "the editor **pane** is N columns wide", which sets the
+/// rectangle — the two differ by the chrome. Solved for by screen size, for
+/// the reason that step solves for one.
+#[given(expr = "the editor is {int} columns wide")]
+fn editor_is_columns_wide(world: &mut VardeWorld, columns: usize) {
+    let (_, height) = world.screen();
+    let width = (columns as u16..600)
+        .find(|width| {
+            let mut wider = world.state.clone();
+            wider.screen_width = *width;
+            wider.screen_height = height;
+            varde::fits(&wider).2 == columns
+        })
+        .unwrap_or_else(|| panic!("no screen width leaves the editor {columns} columns of text"));
+    world.send(Event::Resized { width, height });
+}
+
+#[then(expr = "line {int} carries the Inline value {string} = {string}")]
+fn line_carries_inline_value(world: &mut VardeWorld, line: usize, name: String, value: String) {
+    let drawn = inline_values(world);
+    let row = drawn
+        .get(&line)
+        .unwrap_or_else(|| panic!("line {line} carries no Inline value; drawn: {drawn:?}"));
+    let shown = row
+        .iter()
+        .find(|shown| shown.name == name)
+        .unwrap_or_else(|| panic!("line {line} carries nothing for {name:?}; drawn: {row:?}"));
+    assert_eq!(shown.text.trim(), format!("{name} = {value}"));
+}
+
+#[then(expr = "line {int} carries no Inline value")]
+fn line_carries_no_inline_value(world: &mut VardeWorld, line: usize) {
+    let drawn = inline_values(world);
+    assert!(
+        !drawn.contains_key(&line),
+        "line {line} carries {:?}",
+        drawn.get(&line)
+    );
+}
+
+#[then(expr = "no line carries an Inline value")]
+fn no_line_carries_an_inline_value(world: &mut VardeWorld) {
+    assert!(inline_values(world).is_empty(), "values are still drawn");
+}
+
+/// A file other than the one the pause is in, looked at the only way there is
+/// to look at one: brought on screen, since Inline values are derived for the
+/// Buffer the editor is drawing.
+#[then(expr = "{string} carries no Inline values")]
+fn file_carries_no_inline_values(world: &mut VardeWorld, path: String) {
+    let path = abs(world, &path);
+    world.apply(vec![Effect::OpenAt {
+        path,
+        at: Place { line: 1, column: 1 },
+    }]);
+    assert!(inline_values(world).is_empty(), "values are still drawn");
+}
+
+/// The last pause's values, still drawn and nothing among them highlighted:
+/// a highlight says *this pause* moved a value, and while the program runs
+/// there is no such pause, so the whole run is the faint layer. Dimmed by the
+/// same fact the Frames and the Variables are dimmed by, so there is one
+/// author for it.
+#[then(expr = "the Inline values are drawn dimmed")]
+fn inline_values_are_dimmed(world: &mut VardeWorld) {
+    let drawn = inline_values(world);
+    assert!(!drawn.is_empty(), "no values are drawn");
+    assert!(varde::debug::stale(&world.state), "not running");
+    let marked: Vec<String> = drawn
+        .into_values()
+        .flatten()
+        .filter(|value| value.changed)
+        .map(|value| value.name)
+        .collect();
+    assert!(marked.is_empty(), "still highlighted: {marked:?}");
+}
+
+#[then(expr = "the Inline value {string} is highlighted")]
+fn inline_value_is_highlighted(world: &mut VardeWorld, name: String) {
+    assert!(inline_value(world, &name).changed, "{name} is not marked");
+}
+
+#[then(expr = "the Inline value {string} is not highlighted")]
+fn inline_value_is_not_highlighted(world: &mut VardeWorld, name: String) {
+    assert!(!inline_value(world, &name).changed, "{name} is marked");
+}
+
+#[then(expr = "line {int}'s Inline values end within the editor's width")]
+fn inline_values_end_within_the_width(world: &mut VardeWorld, line: usize) {
+    let columns = varde::fits_in(&world.state, &world.panes()).2;
+    let drawn = inline_values(world);
+    let values = drawn
+        .get(&line)
+        .unwrap_or_else(|| panic!("line {line} carries no Inline value"));
+    // Display columns, which is what the pane has: the editor is measured in
+    // screen cells and a wide glyph takes two of them.
+    let text = unicode_width::UnicodeWidthStr::width(
+        current_buffer(world)
+            .shown()
+            .split('\n')
+            .nth(line - 1)
+            .unwrap_or_default(),
+    );
+    let drawn: usize = values
+        .iter()
+        .map(|value| unicode_width::UnicodeWidthStr::width(value.text.as_str()))
+        .sum();
+    assert!(
+        text + drawn <= columns,
+        "{text} + {drawn} columns drawn in {columns}",
+    );
+}
+
+// ---- #59: a Hover while Paused ----
+
+#[then("the hover's first section is the value")]
+fn hover_first_section_is_the_value(world: &mut VardeWorld) {
+    assert!(
+        matches!(
+            varde::lsp::sections(&world.state).first(),
+            Some(varde::lsp::Said::Value(_) | varde::lsp::Said::Needs)
+        ),
+        "the box opens with {:?}",
+        varde::lsp::sections(&world.state).first()
+    );
+}
+
+/// Under the value and never interleaved with it: the two sections are one
+/// box, so "second" is a claim about every row above the first doc row.
+#[then("the hover's second section is the type and docs")]
+fn hover_second_section_is_the_type_and_docs(world: &mut VardeWorld) {
+    let said = varde::lsp::sections(&world.state);
+    let first = said
+        .iter()
+        .position(|row| matches!(row, varde::lsp::Said::Docs(_)))
+        .expect("no type and docs in the box");
+    assert!(first > 0, "the box has no value above the docs");
+    assert!(
+        said[first..]
+            .iter()
+            .all(|row| matches!(row, varde::lsp::Said::Docs(_))),
+        "the two sections interleave"
+    );
+}
+
+#[then(expr = "the hover's value section says {string}")]
+fn hover_value_section_says(world: &mut VardeWorld, expected: String) {
+    let says = match varde::lsp::sections(&world.state).first() {
+        Some(varde::lsp::Said::Needs) => "needs-evaluate",
+        Some(varde::lsp::Said::Value(_)) => "a-value",
+        _ => "nothing",
+    };
+    assert_eq!(says, expected);
+}
+
+#[then(expr = "the hover carries the {string} Chip")]
+fn hover_carries_the_chip(world: &mut VardeWorld, name: String) {
+    assert!(
+        varde::debug::hover_chips(&world.state)
+            .iter()
+            .any(|chip| chip.name == name),
+        "the box carries {:?}",
+        varde::debug::hover_chips(&world.state)
+            .iter()
+            .map(|chip| chip.name)
+            .collect::<Vec<&str>>()
+    );
+}
+
+/// Through the hit-test, on the box's own top border and at the columns `ui`
+/// draws the Chips into — never driven as an event, so a Chip no pointer
+/// could reach fails here.
+#[when(expr = "I click the hover's {string} Chip")]
+fn click_the_hovers_chip(world: &mut VardeWorld, name: String) {
+    let panes = world.panes();
+    let spot = varde::lsp::placement(&world.state)
+        .expect("a hover")
+        .spot(&world.state, &panes);
+    let chips = varde::debug::hover_chips(&world.state);
+    let at = chips
+        .iter()
+        .position(|chip| chip.name == name)
+        .unwrap_or_else(|| panic!("no {name:?} Chip on the hover"));
+    let labels = varde::debug::hover_labels(&world.state, spot.width);
+    let column = (spot.x..spot.right())
+        .find(|&column| layout::strip_at(spot, &labels, column) == Some(at))
+        .expect("the Chip on screen");
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, spot.y);
+    world.report(mouse::Kind::LeftUp, column, spot.y);
+}
+
+/// The box's first row of value, clicked where it is drawn.
+#[when("I open the hover's value")]
+fn open_the_hovers_value(world: &mut VardeWorld) {
+    let panes = world.panes();
+    let spot = varde::lsp::placement(&world.state)
+        .expect("a hover")
+        .spot(&world.state, &panes);
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, spot.x + 1, spot.y + 1);
+    world.report(mouse::Kind::LeftUp, spot.x + 1, spot.y + 1);
+}
+
+/// The span the editor washes, read back out of the buffer it names: a step
+/// that trusted the columns would pass on a span naming the wrong characters.
+#[then(expr = "the editor highlights {string} on line {int}")]
+fn editor_highlights_on_line(world: &mut VardeWorld, text: String, line: usize) {
+    let (at, width) = varde::debug::hover_span(&world.state).expect("nothing is highlighted");
+    assert_eq!(at.line, line, "highlighted on line {}", at.line);
+    let path = world.state.current_buffer.clone().expect("a buffer");
+    let source = world.state.buffers[&path].shown().to_string();
+    let held: String = source
+        .split('\n')
+        .nth(line - 1)
+        .expect("a line")
+        .chars()
+        .skip(at.column - 1)
+        .take(width)
+        .collect();
+    assert_eq!(held, text);
+}
+
+#[when(expr = "the Debug adapter answers the {string} for {string} with the value {string}")]
+fn adapter_answers_evaluate_with_value(
+    world: &mut VardeWorld,
+    command: String,
+    expression: String,
+    value: String,
+) {
+    answer_evaluate(world, &command, &expression, json!({ "result": value }));
+}
+
+#[given(expr = "the Debug adapter answers the {string} for {string} with reference {int}")]
+#[when(expr = "the Debug adapter answers the {string} for {string} with reference {int}")]
+fn adapter_answers_evaluate_with_reference(
+    world: &mut VardeWorld,
+    command: String,
+    expression: String,
+    reference: i64,
+) {
+    answer_evaluate(
+        world,
+        &command,
+        &expression,
+        json!({ "result": expression, "variablesReference": reference }),
+    );
+}
+
+/// The reply to the last request for that expression, which is the one the
+/// box is still waiting on.
+fn answer_evaluate(world: &mut VardeWorld, command: &str, expression: &str, body: Value) {
+    let seq = dap_requests(world, command)
+        .into_iter()
+        .rev()
+        .find(|message| message["arguments"]["expression"] == json!(expression))
+        .unwrap_or_else(|| panic!("no {command:?} for {expression:?}"))["seq"]
+        .clone();
+    adapter_event(
+        world,
+        json!({
+            "type": "response",
+            "request_seq": seq,
+            "success": true,
+            "command": command,
+            "body": body,
+        }),
+    );
+}
+
+#[then(expr = "the Debug adapter was sent no {string} request for {string}")]
+fn adapter_sent_no_request_for(world: &mut VardeWorld, command: String, expression: String) {
+    let asked: Vec<&Value> = dap_requests(world, &command)
+        .into_iter()
+        .filter(|message| message["arguments"]["expression"] == json!(expression))
+        .collect();
+    assert!(asked.is_empty(), "sent: {asked:?}");
+}
+
+// The Evaluator: the floating window that runs a Snippet inside the Paused
+// program. Its Snippet is a Buffer, so the editing steps above reach it once
+// it has focus; these are the steps about the window, the run and its output.
+
+fn evaluator(world: &VardeWorld) -> &varde::debug::Evaluator {
+    world
+        .state
+        .evaluator
+        .as_ref()
+        .expect("the Evaluator is open")
+}
+
+fn snippet(world: &VardeWorld) -> String {
+    evaluator(world).snippet.shown().to_string()
+}
+
+#[given(expr = "the Evaluator is open holding {string}")]
+fn evaluator_is_open_holding(world: &mut VardeWorld, expression: String) {
+    varde::debug::open_evaluator(&mut world.state, expression);
+}
+
+#[given("the Evaluator is open holding:")]
+fn evaluator_is_open_holding_block(world: &mut VardeWorld, step: &Step) {
+    let text = step
+        .docstring()
+        .expect("docstring")
+        .trim_matches('\n')
+        .to_string();
+    varde::debug::open_evaluator(&mut world.state, text);
+}
+
+/// Where the window is. A scenario that starts from a place sets it straight
+/// on the state, the way a rectangle recorded by the project arrives: the
+/// dragging is what the scenarios below are *about*, so using a drag to set
+/// one up would be a step that fails for the thing it is not testing.
+fn window(world: &VardeWorld) -> layout::Area {
+    world
+        .state
+        .evaluator_at
+        .expect("the Evaluator has a place on the screen")
+}
+
+/// The screen row an editor line is drawn on, which is what a window covering
+/// a line has to be placed over.
+fn editor_row(world: &VardeWorld, line: u16) -> u16 {
+    world.panes().editor.y + line
+}
+
+/// A drag of the window's chrome, as the edge reports one: press, one report
+/// where the pointer has got to, release. The pointer is made fresh, because
+/// a drag belongs to the pane its button went down in.
+fn drag_window(world: &mut VardeWorld, from: (u16, u16), to: (u16, u16)) {
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, from.0, from.1);
+    world.report(mouse::Kind::LeftDrag, to.0, to.1);
+    world.report(mouse::Kind::LeftUp, to.0, to.1);
+}
+
+/// The title bar, two columns in: the Chips are flush right, and a press on
+/// one of those is a Chip rather than a grab.
+fn title_bar(world: &VardeWorld) -> (u16, u16) {
+    let at = window(world);
+    (at.x + 2, at.y)
+}
+
+#[given("the Evaluator is open")]
+fn open_an_empty_evaluator(world: &mut VardeWorld) {
+    varde::debug::open_evaluator(&mut world.state, String::new());
+}
+
+#[given(expr = "the Evaluator is open at column {int} row {int}")]
+fn evaluator_open_at(world: &mut VardeWorld, column: u16, row: u16) {
+    open_an_empty_evaluator(world);
+    world.state.evaluator_at = Some(layout::Area {
+        x: column,
+        y: row,
+        ..window(world)
+    });
+}
+
+#[given(expr = "the Evaluator is open {int} columns by {int} rows")]
+fn evaluator_open_sized(world: &mut VardeWorld, columns: u16, rows: u16) {
+    open_an_empty_evaluator(world);
+    world.state.evaluator_at = Some(layout::Area {
+        width: columns,
+        height: rows,
+        ..window(world)
+    });
+}
+
+#[given(expr = "the Evaluator is open with a Snippet {int} rows tall")]
+fn evaluator_open_with_snippet_rows(world: &mut VardeWorld, rows: u16) {
+    open_an_empty_evaluator(world);
+    world
+        .state
+        .evaluator
+        .as_mut()
+        .expect("the Evaluator is open")
+        .snippet_rows = Some(rows);
+}
+
+/// Over the row that line is drawn on, so the stopped event that follows has
+/// something to shift the window off.
+#[given(expr = "the Evaluator is open over editor line {int}")]
+fn evaluator_open_over_line(world: &mut VardeWorld, line: u16) {
+    open_an_empty_evaluator(world);
+    let row = editor_row(world, line);
+    world.state.evaluator_at = Some(layout::Area {
+        y: row,
+        ..window(world)
+    });
+    assert!(
+        window(world).holds(window(world).x, row),
+        "not over line {line}"
+    );
+}
+
+/// Recorded by the project and read back through starting, so what is asserted
+/// is the restore and not a field the step wrote. The session the Background
+/// set up stays: only what a start recovers is taken from it.
+fn restored(world: &mut VardeWorld, saved: serde_json::Value) -> State {
+    world.startup.state_json = Some(saved.to_string());
+    world.startup.repo = world.state.repo.clone();
+    let (state, _, _) = startup::start(&world.startup).expect("Varde starts");
+    state
+}
+
+#[given(
+    expr = "the project {string} records the Evaluator at column {int} row {int} sized {int} by {int}"
+)]
+fn state_records_evaluator(
+    world: &mut VardeWorld,
+    path: String,
+    column: u16,
+    row: u16,
+    width: u16,
+    height: u16,
+) {
+    assert_eq!(path, ".varde/state.json");
+    let saved = serde_json::json!({
+        "evaluator": {
+            "column": column,
+            "row": row,
+            "width": width,
+            "height": height,
+        }
+    });
+    world.state.evaluator_at = restored(world, saved).evaluator_at;
+}
+
+#[given(expr = "the project {string} records the Snippets:")]
+fn state_records_snippets(world: &mut VardeWorld, path: String, step: &Step) {
+    assert_eq!(path, ".varde/state.json");
+    let snippets: Vec<String> = step
+        .table()
+        .expect("a table of Snippets")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let saved = serde_json::json!({ "snippets": snippets });
+    world.state.snippets = restored(world, saved).snippets;
+}
+
+#[when("I open the Evaluator")]
+fn i_open_the_evaluator(world: &mut VardeWorld) {
+    world.send(Event::OpenEvaluator);
+}
+
+#[when(expr = "I drag the Evaluator's title bar {int} columns right")]
+fn drag_title_bar_right(world: &mut VardeWorld, columns: u16) {
+    let (column, row) = title_bar(world);
+    drag_window(world, (column, row), (column + columns, row));
+}
+
+/// Onto the very row the Paused line is drawn on, which is the one place the
+/// window may not come to rest.
+#[when("I drag the Evaluator's title bar onto the Paused line")]
+fn drag_title_bar_onto_paused_line(world: &mut VardeWorld) {
+    let (column, row) = title_bar(world);
+    let paused = varde::debug::paused_row(&world.state).expect("a Paused line on screen");
+    drag_window(world, (column, row), (column, paused));
+}
+
+#[when(expr = "I drag the Evaluator's bottom-right corner {int} columns right and {int} rows down")]
+fn drag_bottom_right(world: &mut VardeWorld, columns: u16, rows: u16) {
+    let at = window(world);
+    let corner = (at.right() - 1, at.bottom() - 1);
+    drag_window(world, corner, (corner.0 + columns, corner.1 + rows));
+}
+
+#[when(expr = "I drag the Evaluator's right border {int} columns left")]
+fn drag_right_border(world: &mut VardeWorld, columns: u16) {
+    let at = window(world);
+    let border = (at.right() - 1, at.y + 2);
+    drag_window(world, border, (border.0 - columns, border.1));
+}
+
+#[when(expr = "I drag the border under the Snippet up {int} rows")]
+fn drag_snippet_border(world: &mut VardeWorld, rows: u16) {
+    let at = window(world);
+    let (snippet, _) = layout::evaluator_split(at, snippet_rows(world));
+    let rule = (at.x + 2, snippet.bottom());
+    drag_window(world, rule, (rule.0, rule.1 - rows));
+}
+
+fn snippet_rows(world: &VardeWorld) -> Option<u16> {
+    world
+        .state
+        .evaluator
+        .as_ref()
+        .and_then(|evaluator| evaluator.snippet_rows)
+}
+
+#[then("the Evaluator is centred on the screen")]
+fn evaluator_is_centred(world: &mut VardeWorld) {
+    let (width, height) = (world.state.screen_width, world.state.screen_height);
+    let at = window(world);
+    // The same room either side and above and below, rather than the number
+    // the layout produced: what centred *means* is what the reader sees.
+    assert_eq!(at.x, width - at.right(), "{at:?}");
+    assert_eq!(at.y, height - at.bottom(), "{at:?}");
+}
+
+#[then(expr = "the Evaluator is at column {int} row {int}")]
+fn evaluator_is_at(world: &mut VardeWorld, column: u16, row: u16) {
+    let at = window(world);
+    assert_eq!((at.x, at.y), (column, row), "{at:?}");
+}
+
+#[then(expr = "the Evaluator is {int} columns by {int} rows")]
+fn evaluator_is_sized(world: &mut VardeWorld, columns: u16, rows: u16) {
+    let at = window(world);
+    assert_eq!((at.width, at.height), (columns, rows), "{at:?}");
+}
+
+#[then(expr = "the Snippet is {int} rows tall")]
+fn snippet_is_rows_tall(world: &mut VardeWorld, rows: u16) {
+    let (snippet, _) = layout::evaluator_split(window(world), snippet_rows(world));
+    assert_eq!(snippet.height, rows);
+}
+
+#[then("the Evaluator lies wholly on the screen")]
+fn evaluator_lies_on_the_screen(world: &mut VardeWorld) {
+    let at = window(world);
+    let (width, height) = (world.state.screen_width, world.state.screen_height);
+    assert!(at.right() <= width && at.bottom() <= height, "{at:?}");
+    assert!(at.width > 0 && at.height > 0, "{at:?}");
+}
+
+#[then("the Evaluator does not cover the Paused line")]
+fn evaluator_does_not_cover_the_paused_line(world: &mut VardeWorld) {
+    let row = varde::debug::paused_row(&world.state).expect("a Paused line on screen");
+    let at = window(world);
+    assert!(
+        !(at.y..at.bottom()).contains(&row),
+        "{at:?} covers row {row}"
+    );
+}
+
+#[given("the Evaluator has focus")]
+fn the_evaluator_has_focus(world: &mut VardeWorld) {
+    world.state.focus = Pane::Evaluator;
+}
+
+#[then(expr = "the Evaluator is open holding {string}")]
+fn evaluator_holds(world: &mut VardeWorld, expected: String) {
+    assert_eq!(snippet(world), expected);
+}
+
+#[then("the Evaluator is open")]
+fn evaluator_is_open(world: &mut VardeWorld) {
+    assert!(world.state.evaluator.is_some(), "no Evaluator is open");
+}
+
+#[then("the Evaluator is not open")]
+fn evaluator_is_not_open(world: &mut VardeWorld) {
+    assert!(
+        world.state.evaluator.is_none(),
+        "the Evaluator is still open"
+    );
+}
+
+#[then(expr = "the Snippet is {string}")]
+fn the_snippet_is(world: &mut VardeWorld, expected: String) {
+    assert_eq!(snippet(world), expected);
+}
+
+#[then("the Snippet is:")]
+fn the_snippet_is_block(world: &mut VardeWorld, step: &Step) {
+    let expected = step.docstring().expect("docstring").trim_matches('\n');
+    assert_eq!(snippet(world), expected);
+}
+
+/// The Selection inside the Snippet, which is what a run sends instead of the
+/// whole block. Against the Snippet's own text, never the buffer behind the
+/// window.
+#[given(expr = "the selection in the Snippet covers {string}")]
+fn selection_in_the_snippet(world: &mut VardeWorld, text: String) {
+    let held = snippet(world);
+    let (index, line) = held
+        .split('\n')
+        .enumerate()
+        .find(|(_, line)| line.contains(&text))
+        .unwrap_or_else(|| panic!("no line of the Snippet holds {text:?}"));
+    let at = line.find(&text).expect("the column");
+    let column = line[..at].chars().count() + 1;
+    world.state.selection = Some(Selection::Buffer {
+        anchor: Place {
+            line: index + 1,
+            column,
+        },
+        cursor: Place {
+            line: index + 1,
+            column: column + text.chars().count() - 1,
+        },
+    });
+}
+
+/// The same, against a named line of the buffer on screen: what `␣e` reads
+/// when there is a Selection rather than a cursor.
+#[given(expr = "the selection covers {string} on line {int}")]
+fn selection_covers_on_line(world: &mut VardeWorld, text: String, line: usize) {
+    let held = current_buffer(world).shown().to_string();
+    let row = held
+        .split('\n')
+        .nth(line - 1)
+        .expect("the line")
+        .to_string();
+    let at = row
+        .find(&text)
+        .unwrap_or_else(|| panic!("line {line} has no {text:?}"));
+    let column = row[..at].chars().count() + 1;
+    world.state.selection = Some(Selection::Buffer {
+        anchor: Place { line, column },
+        cursor: Place {
+            line,
+            column: column + text.chars().count() - 1,
+        },
+    });
+}
+
+#[when(expr = "I click line {int} column {int} in the editor")]
+fn click_line_column_in_editor(world: &mut VardeWorld, line: usize, column: usize) {
+    world.click(Pane::Editor, (line, column), terminput::KeyModifiers::NONE);
+}
+
+/// Through the columns the Chip is drawn at, so a Chip the renderer would not
+/// show fails here — the Hover's Chip click, one window over.
+#[when(expr = "I click the Evaluator's {string} Chip")]
+fn click_evaluator_chip(world: &mut VardeWorld, name: String) {
+    let window = world.panes().evaluator;
+    let chips = varde::debug::evaluator_chips(&world.state);
+    let at = chips
+        .iter()
+        .position(|chip| chip.name == name)
+        .unwrap_or_else(|| panic!("no {name:?} Chip on the Evaluator"));
+    let labels = varde::debug::evaluator_labels(&world.state, window.width);
+    let column = (window.x..window.right())
+        .find(|&column| layout::strip_at(window, &labels, column) == Some(at))
+        .expect("the Chip on screen");
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, window.y);
+    world.report(mouse::Kind::LeftUp, column, window.y);
+}
+
+#[then(expr = "the Evaluator's {string} Chip is dimmed")]
+fn evaluator_chip_is_dimmed(world: &mut VardeWorld, name: String) {
+    let chip = varde::debug::evaluator_chips(&world.state)
+        .into_iter()
+        .find(|chip| chip.name == name)
+        .unwrap_or_else(|| panic!("no {name:?} Chip on the Evaluator"));
+    assert_eq!(chip.tone, varde::Tone::Dimmed);
+}
+
+/// The requests a Snippet's run goes out as, told from a Watch's and a
+/// Hover's by the context they carry.
+fn repl_requests<'a>(world: &'a VardeWorld, context: &str) -> Vec<&'a Value> {
+    dap_requests(world, "evaluate")
+        .into_iter()
+        .filter(|message| message["arguments"]["context"] == json!(context))
+        .collect()
+}
+
+#[then(expr = "the Debug adapter was sent an {string} request in the {string} context")]
+fn adapter_sent_evaluate_in_context(world: &mut VardeWorld, command: String, context: String) {
+    assert_eq!(command, "evaluate");
+    assert!(
+        !repl_requests(world, &context).is_empty(),
+        "sent: {:?}",
+        world.dap.sent
+    );
+}
+
+#[then(expr = "the Debug adapter was sent an {string} request in the {string} context holding:")]
+fn adapter_sent_evaluate_holding(
+    world: &mut VardeWorld,
+    command: String,
+    context: String,
+    step: &Step,
+) {
+    assert_eq!(command, "evaluate");
+    let expected = step.docstring().expect("docstring").trim_matches('\n');
+    let sent: Vec<String> = repl_requests(world, &context)
+        .iter()
+        .map(|message| {
+            message["arguments"]["expression"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    assert!(sent.iter().any(|held| held == expected), "sent: {sent:?}");
+}
+
+#[then(expr = "that request names the Frame {string}")]
+fn that_request_names_the_frame(world: &mut VardeWorld, name: String) {
+    let asked = last_request(world, "evaluate")["arguments"]["frameId"].clone();
+    let frames = varde::debug::frames(&world.state);
+    let frame = frames
+        .iter()
+        .find(|frame| json!(frame.id) == asked)
+        .unwrap_or_else(|| panic!("no Frame numbered {asked}"));
+    assert_eq!(frame.name, name);
+}
+
+/// The reply to the run still in flight, which is the last `evaluate` sent in
+/// the `repl` context.
+fn answer_the_run(world: &mut VardeWorld, success: bool, body: Value, message: &str) {
+    let seq = repl_requests(world, "repl")
+        .last()
+        .expect("a Snippet was run")["seq"]
+        .clone();
+    adapter_event(
+        world,
+        json!({
+            "type": "response",
+            "request_seq": seq,
+            "success": success,
+            "command": "evaluate",
+            "message": message,
+            "body": body,
+        }),
+    );
+}
+
+#[given(expr = "the Debug adapter answers the {string} with the value {string}")]
+#[when(expr = "the Debug adapter answers the {string} with the value {string}")]
+fn adapter_answers_the_run_with_value(world: &mut VardeWorld, command: String, value: String) {
+    assert_eq!(command, "evaluate");
+    answer_the_run(world, true, json!({ "result": value }), "");
+}
+
+#[given(expr = "the Debug adapter answers the {string} with reference {int}")]
+#[when(expr = "the Debug adapter answers the {string} with reference {int}")]
+fn adapter_answers_the_run_with_reference(world: &mut VardeWorld, command: String, reference: i64) {
+    assert_eq!(command, "evaluate");
+    answer_the_run(
+        world,
+        true,
+        json!({ "result": "", "variablesReference": reference }),
+        "",
+    );
+}
+
+#[when(expr = "the Debug adapter answers the {string} with the error {string}")]
+fn adapter_answers_the_run_with_error(world: &mut VardeWorld, command: String, why: String) {
+    assert_eq!(command, "evaluate");
+    answer_the_run(world, false, json!({}), &why);
+}
+
+#[given("the Debug adapter reported it supports cancelling")]
+fn adapter_supports_cancelling(world: &mut VardeWorld) {
+    adapter_event(
+        world,
+        json!({
+            "type": "event",
+            "event": "capabilities",
+            "body": { "capabilities": { "supportsCancelRequest": true } },
+        }),
+    );
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request for that evaluate")]
+fn adapter_sent_cancel_for_that_evaluate(world: &mut VardeWorld, command: String) {
+    assert_eq!(command, "cancel");
+    let evaluate = repl_requests(world, "repl")
+        .last()
+        .expect("a Snippet was run")["seq"]
+        .clone();
+    let cancelled: Vec<&Value> = dap_requests(world, "cancel")
+        .into_iter()
+        .filter(|message| message["arguments"]["requestId"] == evaluate)
+        .collect();
+    assert!(!cancelled.is_empty(), "sent: {:?}", world.dap.sent);
+}
+
+/// The Evaluator output as it is drawn, one row a kind and its text: what the
+/// program printed, then the value or the adapter's reason.
+fn evaluator_output(world: &VardeWorld) -> Vec<(String, String)> {
+    varde::debug::evaluator_output(&world.state)
+        .into_iter()
+        .map(|line| match line {
+            varde::debug::Said::Printed(text) => ("printed".to_string(), text),
+            varde::debug::Said::Failed(why) => ("error".to_string(), why),
+            varde::debug::Said::Running => ("running".to_string(), String::new()),
+            varde::debug::Said::Value(row) => ("value".to_string(), row.value),
+        })
+        .collect()
+}
+
+#[then("the Evaluator output is:")]
+fn the_evaluator_output_is(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<(String, String)> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| (row[0].trim().to_string(), row[1].trim().to_string()))
+        .collect();
+    assert_eq!(evaluator_output(world), expected);
+}
+
+#[then(expr = "the Evaluator output holds the print {string}")]
+fn the_evaluator_output_holds_the_print(world: &mut VardeWorld, text: String) {
+    let held = evaluator_output(world);
+    assert!(
+        held.contains(&("printed".to_string(), text.clone())),
+        "{held:?}"
+    );
+}
+
+#[then("the Evaluator output is running")]
+fn the_evaluator_output_is_running(world: &mut VardeWorld) {
+    let held = evaluator_output(world);
+    assert!(held.iter().any(|(kind, _)| kind == "running"), "{held:?}");
+}
+
+/// Through the row the value is drawn on, which is the row the mouse would
+/// click: the prints come first, so the value is not row zero.
+#[when("I open the Evaluator output's value")]
+fn open_the_evaluator_value(world: &mut VardeWorld) {
+    let at = evaluator_output(world)
+        .iter()
+        .position(|(kind, _)| kind == "value")
+        .expect("a value in the Evaluator output");
+    world.send(Event::OpenEvaluatedRow(at));
+}
+
+#[then(expr = "the project {string} records the Snippet {string}")]
+fn state_json_records_the_snippet(world: &mut VardeWorld, _file: String, expected: String) {
+    let saved: Value =
+        serde_json::from_str(world.startup.state_json.as_deref().expect("state saved"))
+            .expect("json");
+    let held: Vec<String> = saved["snippets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|snippet| Some(snippet.as_str()?.to_string()))
+        .collect();
+    assert!(held.contains(&expected), "{held:?}");
+}
+
+/// The run gesture without naming which of the three makes it: normal-mode
+/// Enter, the Run Chip and Ctrl+Enter are one event, so a scenario about what
+/// a run carries says only that one was made.
+#[when("I run the Snippet")]
+fn run_the_snippet(world: &mut VardeWorld) {
+    world.send(Event::RunSnippet);
+}
+
+#[then(expr = "the Debug adapter was sent an {string} request in the Frame {string}")]
+fn adapter_sent_evaluate_in_frame(world: &mut VardeWorld, command: String, name: String) {
+    assert_eq!(command, "evaluate");
+    adapter_sent_evaluate_in_context(world, command.clone(), "repl".to_string());
+    that_request_names_the_frame(world, name);
+}
+
+/// In the `initialize` answer for a session still to come, and in a
+/// `capabilities` event for one already running — the two places an adapter
+/// says what it can pause on.
+#[given("the Debug adapter reported the Exception filters:")]
+fn adapter_reported_exception_filters(world: &mut VardeWorld, step: &Step) {
+    let table = step.table().expect("a table of filters");
+    world.dap.filters = table.rows[1..]
+        .iter()
+        .map(|row| json!({ "filter": row[0], "label": row[1] }))
+        .collect();
+    if world.state.debug.is_some() {
+        let filters = world.dap.filters.clone();
+        adapter_event(
+            world,
+            json!({
+                "type": "event",
+                "event": "capabilities",
+                "body": { "capabilities": { "exceptionBreakpointFilters": filters } },
+            }),
+        );
+    }
+}
+
+#[then("the Breakpoint list switches are:")]
+fn breakpoint_list_switches_are(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("a list of filters")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let shown: Vec<String> = varde::debug::switches(&world.state)
+        .into_iter()
+        .map(|(filter, _)| filter.id.clone())
+        .collect();
+    assert_eq!(shown, expected);
+}
+
+/// The keyboard's route: along the Breakpoint list to the switch, and Enter.
+#[when(expr = "I switch the Exception filter {string} on")]
+fn switch_exception_filter_on(world: &mut VardeWorld, id: String) {
+    let at = varde::debug::switches(&world.state)
+        .iter()
+        .position(|(filter, _)| filter.id == id)
+        .unwrap_or_else(|| panic!("no {id:?} switch"));
+    assert!(
+        !varde::debug::switches(&world.state)[at].1,
+        "{id:?} is already on"
+    );
+    world.state.focus = Pane::Breakpoints;
+    while world.state.breakpoints_selection > at {
+        route_key(world, "k", 0);
+    }
+    while world.state.breakpoints_selection < at {
+        route_key(world, "j", 0);
+    }
+    route_key(world, "Enter", 0);
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request with the filters:")]
+fn adapter_sent_with_the_filters(world: &mut VardeWorld, command: String, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("a list of filters")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    assert_eq!(
+        last_request(world, &command)["arguments"]["filters"],
+        json!(expected)
+    );
+}
+
+#[given(expr = "the project {string} records the Exception filter {string} on for {string}")]
+fn state_records_exception_filter(
+    world: &mut VardeWorld,
+    path: String,
+    id: String,
+    adapter: String,
+) {
+    assert_eq!(path, ".varde/state.json");
+    let mut saved: Value = world
+        .startup
+        .state_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_else(|| json!({}));
+    saved["exception_filters"][adapter.as_str()] = json!([id]);
+    world.startup.state_json = Some(saved.to_string());
+}
+
+#[then(expr = "the project {string} records the Exception filter {string} on for {string}")]
+fn records_exception_filter(world: &mut VardeWorld, path: String, id: String, adapter: String) {
+    assert_eq!(path, ".varde/state.json");
+    let saved: Value =
+        serde_json::from_str(world.startup.state_json.as_deref().expect("state saved"))
+            .expect("json");
+    assert_eq!(saved["exception_filters"][adapter.as_str()], json!([id]));
+}
+
+#[given("the Debug adapter reported it supports exception options")]
+#[given("the Debug adapter reported it does not support exception options")]
+fn adapter_reported_exception_options(world: &mut VardeWorld, step: &Step) {
+    let supports = !step.value.contains("does not");
+    adapter_event(
+        world,
+        json!({
+            "type": "event",
+            "event": "capabilities",
+            "body": { "capabilities": { "supportsExceptionOptions": supports } },
+        }),
+    );
+}
+
+/// Through the box the exception-class Chip's key opens: the key, the name,
+/// Enter — so a box that never opened fails here.
+#[when(expr = "I pause on the exception class {string}")]
+fn pause_on_exception_class(world: &mut VardeWorld, class: String) {
+    corner_shows_breakpoint_list(world);
+    world.state.focus = Pane::Breakpoints;
+    route_key(world, "x", 0);
+    assert_eq!(
+        world.state.modal,
+        Modal::ExceptionClass,
+        "the exception-class box did not open"
+    );
+    for character in class.chars() {
+        route_key(world, &character.to_string(), 0);
+    }
+    route_key(world, "Enter", 0);
+}
+
+#[then(expr = "the Debug adapter was sent a {string} request naming {string}")]
+fn adapter_sent_naming(world: &mut VardeWorld, command: String, class: String) {
+    assert_eq!(
+        last_request(world, &command)["arguments"]["exceptionOptions"][0]["path"][0]["names"],
+        json!([class])
+    );
 }

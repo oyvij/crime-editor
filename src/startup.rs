@@ -41,6 +41,64 @@ max_iterations = 10
 # file a human writes (R35.7).
 [speech]
 speed = 1.0
+
+# What a Run mark stands beside and starts (F41): the files a row looks in, a
+# tree-sitter query whose `@run` capture is the line it marks, a command for a
+# shell whose prompt is waiting, and a Launch configuration for Debug. Each
+# `${…}` is filled from the query capture of that name, and `${file}` with the
+# file's path — quoted in `run`, since both are text from the folder.
+#
+# A row per kind of thing to start, because each runs its own way. Debugging a
+# Rust binary starts at its path, which cargo names only as it builds, so LLDB
+# builds it and reads the path out of cargo's own report.
+[run.rust_main]
+extensions = ["rs"]
+query = '((function_item name: (identifier) @name @run) (#eq? @name "main"))'
+run = "cargo run"
+debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo build --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"] } }
+
+# The first test binary cargo builds, which is the crate's own tests; a test
+# under `tests/` is in a binary of its own.
+[run.rust_test]
+extensions = ["rs"]
+query = '((attribute_item (attribute (identifier) @attribute)) . (function_item name: (identifier) @name @run) (#eq? @attribute "test"))'
+run = "cargo test ${name} -- --exact"
+debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo test --no-run --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"], args = ["${name}", "--exact"] } }
+
+# The same test inside a module, which `--exact` names by its path. Rows are
+# tried by name, so this one takes the line before `rust_test` can.
+[run.rust_module_test]
+extensions = ["rs"]
+query = '((mod_item name: (identifier) @module body: (declaration_list (attribute_item (attribute (identifier) @attribute)) . (function_item name: (identifier) @name @run))) (#eq? @attribute "test"))'
+run = "cargo test ${module}::${name} -- --exact"
+debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo test --no-run --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"], args = ["${module}::${name}", "--exact"] } }
+
+# The source-file launcher, which compiles the file it is handed: no build to
+# ask for a class path.
+[run.java_main]
+extensions = ["java"]
+query = '((method_declaration name: (identifier) @name @run) (#eq? @name "main"))'
+run = "java ${file}"
+debug = { adapter = "java", request = "launch", args = { mainClass = "${file}" } }
+
+# No `debug`: a test is started by its runner, which is on the class path the
+# project's build knows and Varde does not.
+[run.java_test]
+extensions = ["java"]
+query = '(class_declaration name: (identifier) @class body: (class_body (method_declaration (modifiers (marker_annotation name: (identifier) @annotation)) name: (identifier) @name @run) (#eq? @annotation "Test")))'
+run = "mvn test -Dtest=${class}#${name}"
+
+[run.javascript_test]
+extensions = ["js", "jsx", "mjs", "cjs"]
+query = '((call_expression function: (identifier) @function arguments: (arguments . (string (string_fragment) @name))) @run (#match? @function "^(test|it)$"))'
+run = "npx vitest run ${file} -t ${name}"
+debug = { adapter = "javascript", request = "launch", args = { type = "pwa-node", runtimeExecutable = "npx", runtimeArgs = ["vitest", "run", "${file}", "-t", "${name}"] } }
+
+[run.typescript_test]
+extensions = ["ts", "tsx", "mts", "cts"]
+query = '((call_expression function: (identifier) @function arguments: (arguments . (string (string_fragment) @name))) @run (#match? @function "^(test|it)$"))'
+run = "npx vitest run ${file} -t ${name}"
+debug = { adapter = "typescript", request = "launch", args = { type = "pwa-node", runtimeExecutable = "npx", runtimeArgs = ["vitest", "run", "${file}", "-t", "${name}"] } }
 "#;
 
 /// The Program rows the binary carries: the rows [`template`] seeds
@@ -92,6 +150,21 @@ marker = "node_modules/@vue/typescript-plugin"
 optional = true
 command = "vue-language-server"
 command_marker = "../node_modules/@vue/typescript-plugin"
+
+# The plugin `[dap.java]` loads into jdtls: java-debug is no program of its own.
+# Maven Central publishes the bundle, so the install fetches its newest release
+# into `~/.varde/java-debug`, with a script beside it that prints where it is
+# and a link to that on `PATH` — the command fallback reads the marker off the
+# script's real directory, which is the only way a fact reaches a file outside
+# the workspace. `optional` because jdtls starts without it: a Java server no
+# Debug session can be started in is still a Java server.
+[facts.java_debug_plugin]
+marker = "com.microsoft.java.debug.plugin.jar"
+optional = true
+command = "java-debug-plugin"
+command_marker = "com.microsoft.java.debug.plugin.jar"
+install.macos = "curl -sfL https://repo1.maven.org/maven2/com/microsoft/java/com.microsoft.java.debug.plugin/maven-metadata.xml | sed -n 's:.*<release>::; s:</release>.*::p' | { read v && curl -sfL --create-dirs https://repo1.maven.org/maven2/com/microsoft/java/com.microsoft.java.debug.plugin/$v/com.microsoft.java.debug.plugin-$v.jar -o ~/.varde/java-debug/com.microsoft.java.debug.plugin.jar; } && mkdir -p ~/.local/bin && printf '#!/bin/sh\\necho %s\\n' ~/.varde/java-debug/com.microsoft.java.debug.plugin.jar > ~/.varde/java-debug/java-debug-plugin && chmod +x ~/.varde/java-debug/java-debug-plugin && ln -sf ~/.varde/java-debug/java-debug-plugin ~/.local/bin/java-debug-plugin"
+install.linux = "curl -sfL https://repo1.maven.org/maven2/com/microsoft/java/com.microsoft.java.debug.plugin/maven-metadata.xml | sed -n 's:.*<release>::; s:</release>.*::p' | { read v && curl -sfL --create-dirs https://repo1.maven.org/maven2/com/microsoft/java/com.microsoft.java.debug.plugin/$v/com.microsoft.java.debug.plugin-$v.jar -o ~/.varde/java-debug/com.microsoft.java.debug.plugin.jar; } && mkdir -p ~/.local/bin && printf '#!/bin/sh\\necho %s\\n' ~/.varde/java-debug/com.microsoft.java.debug.plugin.jar > ~/.varde/java-debug/java-debug-plugin && chmod +x ~/.varde/java-debug/java-debug-plugin && ln -sf ~/.varde/java-debug/java-debug-plugin ~/.local/bin/java-debug-plugin"
 
 [lsp.rust]
 command = "rust-analyzer"
@@ -588,6 +661,50 @@ install.macos = "npm install -g prettier"
 install.linux = "npm install -g prettier"
 install.windows = "npm install -g prettier"
 
+# A Debug adapter per language, spoken to over its standard streams — or, where
+# its `args` name `${port}`, started listening on a port Varde fills in and
+# connected to over TCP — or, where it names a `server`, loaded into that
+# language server as a plugin and reached on the port the server answers its
+# `command` with
+# (`docs/adr/0021-a-debug-adapter-is-a-hosted-child-reached-three-ways.md`).
+# codelldb has spoken stdio since 1.11. It ships as a VS Code extension and
+# nothing packages it, so the install unpacks the release into
+# `~/.varde/codelldb` and puts a two-line script on `PATH` that runs it from
+# there: the adapter finds its own LLDB beside its real path, which a symlink
+# is not on every OS.
+[dap.rust]
+command = "codelldb"
+install.macos = "curl -sL --create-dirs https://github.com/vadimcn/codelldb/releases/latest/download/codelldb-darwin-$(uname -m | sed 's/x86_64/x64/').vsix -o ~/.varde/codelldb.vsix && unzip -qo ~/.varde/codelldb.vsix -d ~/.varde/codelldb && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec %s \"$@\"\\n' ~/.varde/codelldb/extension/adapter/codelldb > ~/.local/bin/codelldb && chmod +x ~/.local/bin/codelldb"
+install.linux = "curl -sL --create-dirs https://github.com/vadimcn/codelldb/releases/latest/download/codelldb-linux-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/').vsix -o ~/.varde/codelldb.vsix && unzip -qo ~/.varde/codelldb.vsix -d ~/.varde/codelldb && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec %s \"$@\"\\n' ~/.varde/codelldb/extension/adapter/codelldb > ~/.local/bin/codelldb && chmod +x ~/.local/bin/codelldb"
+
+# java-debug lives inside jdtls, where the classpath that maps a file and line to
+# a class is. `plugin` is merged into the `[lsp.java]` server's
+# `initializationOptions` when it starts, and `command` is what that server is
+# sent once a session begins; it answers with the port the adapter listens on.
+[dap.java]
+server = "java"
+command = "vscode.java.startDebugSession"
+plugin = { bundles = ["${java_debug_plugin}"] }
+
+# js-debug listens on the port it is given, and asks for a child session per
+# process and worker it attaches to, each over another connection to that port.
+# Nothing packages it and its release carries its version in the file name, so
+# the install asks GitHub which one is latest, unpacks it into `~/.varde/js-debug`
+# and puts a script on `PATH` that runs its server under node. One adapter for
+# both languages, as one server is for `[lsp.javascript]` and
+# `[lsp.typescript]`.
+[dap.javascript]
+command = "js-debug-adapter"
+args = ["${port}"]
+install.macos = "curl -sL --create-dirs $(curl -s https://api.github.com/repos/microsoft/vscode-js-debug/releases/latest | grep -o 'https://[^\"]*js-debug-dap-v[^\"]*[.]tar[.]gz' | head -1) -o ~/.varde/js-debug.tar.gz && tar xzf ~/.varde/js-debug.tar.gz -C ~/.varde && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec node %s \"$@\"\\n' ~/.varde/js-debug/src/dapDebugServer.js > ~/.local/bin/js-debug-adapter && chmod +x ~/.local/bin/js-debug-adapter"
+install.linux = "curl -sL --create-dirs $(curl -s https://api.github.com/repos/microsoft/vscode-js-debug/releases/latest | grep -o 'https://[^\"]*js-debug-dap-v[^\"]*[.]tar[.]gz' | head -1) -o ~/.varde/js-debug.tar.gz && tar xzf ~/.varde/js-debug.tar.gz -C ~/.varde && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec node %s \"$@\"\\n' ~/.varde/js-debug/src/dapDebugServer.js > ~/.local/bin/js-debug-adapter && chmod +x ~/.local/bin/js-debug-adapter"
+
+[dap.typescript]
+command = "js-debug-adapter"
+args = ["${port}"]
+install.macos = "curl -sL --create-dirs $(curl -s https://api.github.com/repos/microsoft/vscode-js-debug/releases/latest | grep -o 'https://[^\"]*js-debug-dap-v[^\"]*[.]tar[.]gz' | head -1) -o ~/.varde/js-debug.tar.gz && tar xzf ~/.varde/js-debug.tar.gz -C ~/.varde && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec node %s \"$@\"\\n' ~/.varde/js-debug/src/dapDebugServer.js > ~/.local/bin/js-debug-adapter && chmod +x ~/.local/bin/js-debug-adapter"
+install.linux = "curl -sL --create-dirs $(curl -s https://api.github.com/repos/microsoft/vscode-js-debug/releases/latest | grep -o 'https://[^\"]*js-debug-dap-v[^\"]*[.]tar[.]gz' | head -1) -o ~/.varde/js-debug.tar.gz && tar xzf ~/.varde/js-debug.tar.gz -C ~/.varde && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec node %s \"$@\"\\n' ~/.varde/js-debug/src/dapDebugServer.js > ~/.local/bin/js-debug-adapter && chmod +x ~/.local/bin/js-debug-adapter"
+
 # What reads a Selection aloud (F35). The synthesizer, the voice and the player
 # are named here and in no branch anywhere: a voice nobody has tried works for
 # the same reason an untried AI CLI does
@@ -740,6 +857,52 @@ const TEMPLATE_SETTINGS: &str = r#"# Varde reads this file on every start. A pro
 
 # How many times the Gate may hand a refactor back before it stops.
 # max_iterations = 10
+
+# What a Run mark stands beside and starts: the files a row looks in, a
+# tree-sitter query whose `@run` capture is the line it marks, a command for a
+# shell whose prompt is waiting, and a Launch configuration for Debug. Each
+# `${…}` is filled from the query capture of that name, and `${file}` with the
+# file's path. A row of your own gives a language one without a release.
+[run.rust_main]
+# extensions = ["rs"]
+# query = '((function_item name: (identifier) @name @run) (#eq? @name "main"))'
+# run = "cargo run"
+# debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo build --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"] } }
+
+[run.rust_test]
+# extensions = ["rs"]
+# query = '((attribute_item (attribute (identifier) @attribute)) . (function_item name: (identifier) @name @run) (#eq? @attribute "test"))'
+# run = "cargo test ${name} -- --exact"
+# debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo test --no-run --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"], args = ["${name}", "--exact"] } }
+
+[run.rust_module_test]
+# extensions = ["rs"]
+# query = '((mod_item name: (identifier) @module body: (declaration_list (attribute_item (attribute (identifier) @attribute)) . (function_item name: (identifier) @name @run))) (#eq? @attribute "test"))'
+# run = "cargo test ${module}::${name} -- --exact"
+# debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo test --no-run --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"], args = ["${module}::${name}", "--exact"] } }
+
+[run.java_main]
+# extensions = ["java"]
+# query = '((method_declaration name: (identifier) @name @run) (#eq? @name "main"))'
+# run = "java ${file}"
+# debug = { adapter = "java", request = "launch", args = { mainClass = "${file}" } }
+
+[run.java_test]
+# extensions = ["java"]
+# query = '(class_declaration name: (identifier) @class body: (class_body (method_declaration (modifiers (marker_annotation name: (identifier) @annotation)) name: (identifier) @name @run) (#eq? @annotation "Test")))'
+# run = "mvn test -Dtest=${class}#${name}"
+
+[run.javascript_test]
+# extensions = ["js", "jsx", "mjs", "cjs"]
+# query = '((call_expression function: (identifier) @function arguments: (arguments . (string (string_fragment) @name))) @run (#match? @function "^(test|it)$"))'
+# run = "npx vitest run ${file} -t ${name}"
+# debug = { adapter = "javascript", request = "launch", args = { type = "pwa-node", runtimeExecutable = "npx", runtimeArgs = ["vitest", "run", "${file}", "-t", "${name}"] } }
+
+[run.typescript_test]
+# extensions = ["ts", "tsx", "mts", "cts"]
+# query = '((call_expression function: (identifier) @function arguments: (arguments . (string (string_fragment) @name))) @run (#match? @function "^(test|it)$"))'
+# run = "npx vitest run ${file} -t ${name}"
+# debug = { adapter = "typescript", request = "launch", args = { type = "pwa-node", runtimeExecutable = "npx", runtimeArgs = ["vitest", "run", "${file}", "-t", "${name}"] } }
 
 "#;
 
@@ -1081,6 +1244,79 @@ pub struct Formatter {
     pub extensions: Vec<String>,
 }
 
+/// What runs a language's Debug adapter, as configuration named it — the
+/// `[dap.*]` row ADR 0021 puts every adapter in, so no arm names one. Spoken
+/// to over its standard streams, over TCP where `args` name `${port}`, or —
+/// where it names a `server` — over TCP on the port that language server
+/// answers `command` with.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Adapter {
+    /// Defaulted and held to being named by the merged table, for the reason
+    /// [`Server::command`] is. For a hosted adapter it is not a program but
+    /// the command sent to its `server`.
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub install: BTreeMap<String, String>,
+    /// The `[lsp.*]` row whose server hosts this adapter as a plugin.
+    #[serde(default)]
+    pub server: Option<String>,
+    /// Merged into that server's `initializationOptions` when it starts,
+    /// which is how a server is told what to load: what the keys mean is the
+    /// server's business, for the reason its own options are.
+    #[serde(default)]
+    pub plugin: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// A named way to start a Debug session: which adapter, whether it launches
+/// or attaches, and the arguments that request carries. Allowed in either
+/// layer, and the project's beats the global one of the same name because the
+/// merge is key by key.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Launch {
+    #[serde(default)]
+    pub adapter: String,
+    /// `launch` or `attach`, sent as the request's own name: the protocol has
+    /// the two, and a Scenario naming a third reaches an adapter that says no.
+    #[serde(default)]
+    pub request: String,
+    /// Handed to the adapter untouched, for the reason a server's
+    /// `initialization_options` are: what an adapter needs to be told is its
+    /// own business. Varde reads one thing in it and writes nothing: the
+    /// `hostName` and `port` an attach session watches to attach again.
+    #[serde(default)]
+    pub args: serde_json::Map<String, serde_json::Value>,
+    /// Whether an attach session whose program went away waits for it to
+    /// answer again. On unless said otherwise: a remote machine that is not
+    /// coming back is the case for saying so.
+    #[serde(default = "attaches_again")]
+    pub reattach: bool,
+}
+
+fn attaches_again() -> bool {
+    true
+}
+
+/// What a Run mark stands beside and what it starts: the files it looks in, a
+/// syntax-tree query whose `@run` capture is the line it marks, and the two
+/// commands it fills from the query's other captures — `${name}` from `@name`
+/// — and from `${file}`. Named freely rather than by language, since a
+/// language has more than one kind of thing to start and each runs its own
+/// way; `debug` names its adapter the way a Launch configuration does.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Run {
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub run: String,
+    #[serde(default)]
+    pub debug: Option<Launch>,
+}
+
 /// A path on this machine a server's configuration may name, and how to find
 /// it. Data for the reason a command is data: which marker file means "this
 /// directory configures the language" is the whole of what differs between
@@ -1153,7 +1389,7 @@ pub enum FactValue {
 /// them is a deserialize the `toml` crate can fault with a span rather than a
 /// walk over `Value`s that has to decide what to do about each wrong shape
 /// itself.
-#[derive(serde::Deserialize)]
+#[derive(Default, serde::Deserialize)]
 struct Layer {
     #[serde(default)]
     lsp: BTreeMap<String, Server>,
@@ -1161,6 +1397,12 @@ struct Layer {
     formatter: BTreeMap<String, Formatter>,
     #[serde(default)]
     facts: BTreeMap<String, Fact>,
+    #[serde(default)]
+    dap: BTreeMap<String, Adapter>,
+    #[serde(default)]
+    launch: BTreeMap<String, Launch>,
+    #[serde(default)]
+    run: BTreeMap<String, Run>,
 }
 
 /// The same two tables read off a layer's source text, keeping where each entry
@@ -1176,6 +1418,12 @@ struct SourceLayer {
     formatter: BTreeMap<String, toml::Spanned<Formatter>>,
     #[serde(default)]
     facts: BTreeMap<String, toml::Spanned<Fact>>,
+    #[serde(default)]
+    dap: BTreeMap<String, toml::Spanned<Adapter>>,
+    #[serde(default)]
+    launch: BTreeMap<String, toml::Spanned<Launch>>,
+    #[serde(default)]
+    run: BTreeMap<String, toml::Spanned<Run>>,
 }
 
 /// Where each layer named an `[lsp.*]` or `[facts.*]` entry: the dotted name
@@ -1200,20 +1448,14 @@ impl Config {
     /// deciding what to do about each wrong shape it meets, and why every
     /// `command` it returns is non-empty.
     pub fn servers(&self) -> BTreeMap<String, Server> {
-        toml::Value::Table(self.0.clone())
-            .try_into::<Layer>()
-            .map(|layer| layer.lsp)
-            .unwrap_or_default()
+        self.layer().lsp
     }
 
     /// And which command lays each language out, read the same way and for the
     /// same reasons: a project that formats its own files with its own tool is
     /// a row in a file rather than a release.
     pub fn formatters(&self) -> BTreeMap<String, Formatter> {
-        toml::Value::Table(self.0.clone())
-            .try_into::<Layer>()
-            .map(|layer| layer.formatter)
-            .unwrap_or_default()
+        self.layer().formatter
     }
 
     /// Which paths on this machine configuration lets a server name, and how
@@ -1221,9 +1463,29 @@ impl Config {
     /// reasons: a project declaring a fact its own toolchain needs is a row in
     /// a file rather than a release.
     pub fn facts(&self) -> BTreeMap<String, Fact> {
+        self.layer().facts
+    }
+
+    /// Which languages have a Debug adapter, and what runs each one.
+    pub fn adapters(&self) -> BTreeMap<String, Adapter> {
+        self.layer().dap
+    }
+
+    /// The Launch configurations both layers name, by name.
+    pub fn launches(&self) -> BTreeMap<String, Launch> {
+        self.layer().launch
+    }
+
+    /// What Run marks stand beside, by row.
+    pub fn runs(&self) -> BTreeMap<String, Run> {
+        self.layer().run
+    }
+
+    /// The typed tables of the merged config. Nothing here can fail for a
+    /// config Varde started on, for the reason `servers` gives.
+    fn layer(&self) -> Layer {
         toml::Value::Table(self.0.clone())
             .try_into::<Layer>()
-            .map(|layer| layer.facts)
             .unwrap_or_default()
     }
 
@@ -1313,6 +1575,14 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
     let buffers = saved_buffers(&input.root, input.state_json.as_deref());
     state.restoring = buffers.len();
     effects.extend(buffers.into_iter().map(Effect::OpenBuffer));
+    // Each file a remembered Breakpoint is in is read once, open or not, so a
+    // Breakpoint whose line has moved on is Stale from the start.
+    let files: std::collections::BTreeSet<PathBuf> = state
+        .breakpoints
+        .iter()
+        .map(|breakpoint| breakpoint.file.clone())
+        .collect();
+    effects.extend(files.into_iter().map(Effect::ReadBreakpointFile));
 
     // Measuring starts without being asked: the figure is there when the user
     // wants it rather than after they remember to ask for it. Unless the cache
@@ -1382,7 +1652,27 @@ pub(crate) fn merged_config(
     }
     refuse_incomplete(&table, &origins)?;
     refuse_claimed_twice(&table, &origins)?;
+    refuse_unusable_runs(&table, &origins)?;
     Ok(table)
+}
+
+/// A `[run.*]` row that could never mark a line, refused rather than left to
+/// read as configured (R41.1): its query is compiled against the grammar of
+/// every extension it claims.
+fn refuse_unusable_runs(table: &Table, origins: &Origins) -> Result<(), ConfigError> {
+    let runs = Config(table.clone()).runs();
+    for (name, row) in &runs {
+        if let Some(why) = crate::run::unusable(row) {
+            let entry = format!("run.{name}");
+            let (file, line) = origins.get(&entry).cloned().unwrap_or_default();
+            return Err(ConfigError {
+                file,
+                line,
+                fault: ConfigFault::WrongType(format!("[{entry}] {why}")),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The merged table is what must be complete. The one key an entry cannot be
@@ -1401,6 +1691,9 @@ fn refuse_incomplete(table: &Table, origins: &Origins) -> Result<(), ConfigError
         ("lsp", "command"),
         ("formatter", "command"),
         ("facts", "marker"),
+        ("dap", "command"),
+        ("launch", "adapter"),
+        ("launch", "request"),
     ] {
         let Some(entries) = table.get(section).and_then(toml::Value::as_table) else {
             continue;
@@ -1496,6 +1789,21 @@ fn initial_state(
         // Absent until the AI pane's edge has been dragged, which is what the
         // layout reads as its share of the screen.
         ai_width: saved_number(input.state_json.as_deref(), "ai_width"),
+        strip_height: saved_number(input.state_json.as_deref(), "strip_height"),
+        output_width: saved_number(input.state_json.as_deref(), "output_width"),
+        breakpoints: saved_breakpoints(&input.root, input.state_json.as_deref()),
+        // The Snippets this project has run, oldest first, and where it last
+        // left the Evaluator's window. Both outlive the session they were
+        // made in, which is what makes them the project's rather than the
+        // Debug adapter's.
+        snippets: saved_list(input.state_json.as_deref(), "snippets"),
+        evaluator_at: saved_window(input.state_json.as_deref()),
+        exception_filters: input
+            .state_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|mut parsed| serde_json::from_value(parsed["exception_filters"].take()).ok())
+            .unwrap_or_default(),
         // Beside the editor unless the project was last worked in the tall
         // shape — including state recorded before `:tall` existed, which names
         // no shape at all.
@@ -1515,6 +1823,7 @@ fn initial_state(
             Some("Risk") => crate::layout::Corner::Risk,
             Some("Buffers") => crate::layout::Corner::Buffers,
             Some("History") => crate::layout::Corner::History,
+            Some("Breakpoints") => crate::layout::Corner::Breakpoints,
             Some(_) => crate::layout::Corner::Hidden,
             None => match saved_text(input.state_json.as_deref(), "risk_list").as_deref() {
                 Some("Shown") => crate::layout::Corner::Risk,
@@ -1572,6 +1881,9 @@ fn initial_state(
         // And which paths a server may name, which is data for the same
         // reason: the edge searches, the library decides nothing (R31.27).
         facts: config.facts(),
+        adapters: config.adapters(),
+        launches: config.launches(),
+        runs: config.runs(),
         speech: speech(config, &input.os),
         os: input.os.clone(),
         arch: input.arch.clone(),
@@ -1621,7 +1933,7 @@ pub struct Dep {
     pub install: Option<String>,
 }
 
-/// The `[lsp.*]`, `[formatter.*]` and `[speech]` rows `~/.varde/config.toml`
+/// The `[lsp.*]`, `[formatter.*]`, `[dap.*]` and `[speech]` rows `~/.varde/config.toml`
 /// names — or the [`template`], when there is no file, since that is what the
 /// next start runs — read by the same merge startup does, so what `install.sh`
 /// offers is what Varde would start. A file Varde would refuse to start on is
@@ -1639,6 +1951,7 @@ pub fn deps(global_config: Option<&str>, os: &str) -> Result<Vec<Dep>, ConfigErr
     };
     let speech = speech(&config, os);
     let install = (!speech.install.is_empty()).then_some(&speech.install);
+    let servers = config.servers();
     Ok(config
         .servers()
         .iter()
@@ -1649,6 +1962,17 @@ pub fn deps(global_config: Option<&str>, os: &str) -> Result<Vec<Dep>, ConfigErr
                 .iter()
                 .map(|(name, f)| row("formatter", name, &f.command, f.install.get(os))),
         )
+        .chain(config.adapters().iter().map(|(name, a)| {
+            // A hosted adapter is there when the server it is loaded into is,
+            // as Tools reads it.
+            let command = match &a.server {
+                Some(server) => servers
+                    .get(server)
+                    .map_or_else(|| server.clone(), |server| server.command.clone()),
+                None => a.command.clone(),
+            };
+            row("dap", name, &command, a.install.get(os))
+        }))
         .chain([
             row("speech", "speech", &speech.command, install),
             row("player", "speech", &speech.player, None),
@@ -1764,6 +2088,24 @@ fn parse(source: &str, label: &str) -> Result<(Table, Origins), ConfigError> {
                 .iter()
                 .map(|(name, entry)| (format!("facts.{name}"), entry.span())),
         )
+        .chain(
+            layer
+                .dap
+                .iter()
+                .map(|(name, entry)| (format!("dap.{name}"), entry.span())),
+        )
+        .chain(
+            layer
+                .launch
+                .iter()
+                .map(|(name, entry)| (format!("launch.{name}"), entry.span())),
+        )
+        .chain(
+            layer
+                .run
+                .iter()
+                .map(|(name, entry)| (format!("run.{name}"), entry.span())),
+        )
         .map(|(entry, span)| (entry, (label.to_string(), line(span.start))))
         .collect();
     Ok((table, origins))
@@ -1801,6 +2143,78 @@ fn saved_buffers(root: &Path, state_json: Option<&str>) -> Vec<PathBuf> {
         paths.push(current);
     }
     paths
+}
+
+fn saved_breakpoints(root: &Path, state_json: Option<&str>) -> Vec<crate::debug::Breakpoint> {
+    let Some(parsed) = state_json.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+    else {
+        return Vec::new();
+    };
+    let Some(saved) = parsed.get("breakpoints").and_then(|value| value.as_array()) else {
+        return Vec::new();
+    };
+    saved
+        .iter()
+        .filter_map(|breakpoint| {
+            let text = |key: &str| {
+                breakpoint
+                    .get(key)
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            Some(crate::debug::Breakpoint {
+                file: root.join(breakpoint.get("file")?.as_str()?),
+                line: usize::try_from(breakpoint.get("line")?.as_u64()?).ok()?,
+                text: breakpoint.get("text")?.as_str()?.to_string(),
+                stale: false,
+                properties: crate::debug::Properties {
+                    condition: text("condition"),
+                    hit_count: text("hit_count"),
+                    log_message: text("log_message"),
+                    suspend: match breakpoint.get("suspend").and_then(|value| value.as_str()) {
+                        Some("all") => crate::debug::Suspend::All,
+                        _ => crate::debug::Suspend::Thread,
+                    },
+                },
+            })
+        })
+        .collect()
+}
+
+/// A recorded list of strings — the Snippets — in the order it was written.
+fn saved_list(state_json: Option<&str>, key: &str) -> Vec<String> {
+    let Some(parsed) = state_json.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+    else {
+        return Vec::new();
+    };
+    parsed
+        .get(key)
+        .and_then(|value| value.as_array())
+        .map(|held| {
+            held.iter()
+                .filter_map(|text| Some(text.as_str()?.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Where the project last left the Evaluator's window, and `None` where it
+/// never opened one. Read whole or not at all: three of four numbers is a
+/// rectangle nobody drew, and the centred one is the better answer than a
+/// guess at the fourth. The screen it is placed on is `update`'s to say — a
+/// rectangle recorded on a bigger screen is clamped onto this one there,
+/// which is why nothing here asks how wide the terminal is.
+fn saved_window(state_json: Option<&str>) -> Option<crate::layout::Area> {
+    let parsed: serde_json::Value = serde_json::from_str(state_json?).ok()?;
+    let at = parsed.get("evaluator")?;
+    let number = |key: &str| u16::try_from(at.get(key)?.as_u64()?).ok();
+    Some(crate::layout::Area {
+        x: number("column")?,
+        y: number("row")?,
+        width: number("width")?,
+        height: number("height")?,
+    })
 }
 
 fn saved_text(state_json: Option<&str>, key: &str) -> Option<String> {
@@ -1856,6 +2270,77 @@ mod tests {
             .join("\n")
             .parse()
             .expect("valid TOML uncommented")
+    }
+
+    /// The Corner's occupant persists, as it does for every occupant — the
+    /// Breakpoint list too, which needs no session to be shown.
+    #[test]
+    fn the_breakpoint_list_is_back_in_the_corner_after_a_restart() {
+        let (state, _, _) = start(&Startup {
+            state_json: Some(r#"{"corner": "Breakpoints"}"#.to_string()),
+            ..Startup::default()
+        })
+        .expect("started");
+        assert_eq!(state.corner, crate::layout::Corner::Breakpoints);
+    }
+
+    /// A Breakpoint's properties, written by `state_json` and read back by a
+    /// start — both halves in one test, for the reason the Evaluator's are.
+    #[test]
+    fn a_breakpoints_properties_survive_a_restart() {
+        let properties = crate::debug::Properties {
+            condition: "count > 1".to_string(),
+            hit_count: "10".to_string(),
+            log_message: "count is {count}".to_string(),
+            suspend: crate::debug::Suspend::All,
+        };
+        let saved = crate::State {
+            breakpoints: vec![crate::debug::Breakpoint {
+                file: std::path::PathBuf::from("src/main.rs"),
+                line: 3,
+                text: "let count = 3;".to_string(),
+                stale: false,
+                properties: properties.clone(),
+            }],
+            ..crate::State::default()
+        };
+        let (state, _, _) = start(&Startup {
+            state_json: Some(crate::state_json(&saved)),
+            ..Startup::default()
+        })
+        .expect("started");
+        assert_eq!(state.breakpoints[0].properties, properties);
+    }
+
+    /// What a project keeps of the Evaluator, written by `state_json` and read
+    /// back by a start. Both halves in one test because a key spelled one way
+    /// in the writer and another in the reader is a window that silently
+    /// reopens centred every time, and nothing else in the suite compares the
+    /// two spellings: a scenario that records a rectangle writes the JSON
+    /// itself.
+    #[test]
+    fn the_evaluators_place_and_snippets_survive_a_restart() {
+        let saved = crate::State {
+            evaluator_at: Some(crate::layout::Area {
+                x: 30,
+                y: 4,
+                width: 50,
+                height: 10,
+            }),
+            snippets: vec!["orders.len()".to_string(), "count + 1".to_string()],
+            ..crate::State::default()
+        };
+        let (state, _, _) = start(&Startup {
+            state_json: Some(crate::state_json(&saved)),
+            ..Startup::default()
+        })
+        .expect("started");
+        assert_eq!(state.evaluator_at, saved.evaluator_at);
+        assert_eq!(state.snippets, saved.snippets);
+        // A project that never opened one opens centred, which is `None` and
+        // not a rectangle of zeroes.
+        let (fresh, _, _) = start(&Startup::default()).expect("started");
+        assert_eq!(fresh.evaluator_at, None);
     }
 
     /// The refusal a project layer earns, so that the tests below assert the
@@ -2036,8 +2521,29 @@ mod tests {
             let config = fresh();
             assert_eq!(
                 table.len(),
-                config.servers().len() + config.formatters().len(),
+                config.servers().len() + config.formatters().len() + config.adapters().len(),
                 "{os}"
+            );
+            // The Debug adapter's row, installable on both.
+            let codelldb = table
+                .iter()
+                .find(|dep| (dep.kind, dep.name.as_str()) == ("dap", "rust"))
+                .expect("the rust adapter");
+            assert_eq!(codelldb.command, "codelldb");
+            let java = table
+                .iter()
+                .find(|dep| (dep.kind, dep.name.as_str()) == ("dap", "java"))
+                .expect("the java adapter");
+            assert_eq!(java.command, "jdtls");
+            assert!(
+                codelldb
+                    .install
+                    .as_deref()
+                    .is_some_and(|install| install.contains(&format!(
+                        "codelldb-{}-",
+                        if os == "macos" { "darwin" } else { os }
+                    ))),
+                "{os}: {codelldb:?}"
             );
             for dep in expected {
                 assert!(table.contains(&dep), "{os}: {dep:?}");
@@ -2451,6 +2957,31 @@ mod tests {
         );
     }
 
+    /// A Run row that could never mark a line is refused where it was
+    /// written, rather than read as configured and silently marking nothing.
+    #[test]
+    fn a_run_row_whose_query_cannot_mark_anything_is_refused_at_its_line() {
+        let claims_nothing = merged_config(Some("[run.bare]\nquery = \"(x) @run\"\n"), None)
+            .expect_err("a row claiming no files");
+        assert_eq!(
+            claims_nothing.fault,
+            ConfigFault::WrongType("[run.bare] claims no extensions".to_string())
+        );
+        let refused = merged_config(
+            Some("[view]\n\n[run.zig]\nextensions = [\"zig\"]\nquery = \"(test_declaration) @run\"\n"),
+            None,
+        )
+        .expect_err("a row no grammar can parse");
+        assert_eq!(
+            refused,
+            ConfigError {
+                file: GLOBAL_LABEL.to_string(),
+                line: 3,
+                fault: ConfigFault::WrongType("[run.zig] no grammar parses .zig".to_string()),
+            }
+        );
+    }
+
     /// Each seed is decided by one fact: its layer is `None`. The edge
     /// hands `Some("")` for a file it found and could not read — not UTF-8, or
     /// write-only — because an empty layer merges nothing and still says "a
@@ -2547,18 +3078,23 @@ mod tests {
         let mut live: toml::Table = template().parse().expect("valid TOML");
         let programs: toml::Table = PROGRAMS.parse().expect("valid TOML");
         let settings: toml::Table = DEFAULTS.parse().expect("valid TOML");
+        // A header over commented keys, which is how a Setting that is a
+        // table of tables — a `[run.*]` row — is named and left unset.
+        fn blank(value: &toml::Value) -> bool {
+            value
+                .as_table()
+                .is_some_and(|table| table.values().all(blank))
+        }
         for (table, keys) in &settings {
             for key in keys.as_table().expect("a table").keys() {
                 assert!(
-                    live[table].get(key).is_none(),
+                    live[table].get(key).is_none_or(blank),
                     "a live Setting in the template: {table}.{key}"
                 );
             }
         }
         assert_eq!(uncommented(&template()), fresh().0);
-        live.retain(|table, keys| {
-            programs.contains_key(table) || !keys.as_table().is_some_and(toml::Table::is_empty)
-        });
+        live.retain(|table, keys| programs.contains_key(table) || !blank(keys));
         assert_eq!(live, programs);
     }
 

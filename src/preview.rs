@@ -150,6 +150,28 @@ pub enum Refusal {
     /// A Tools row taken whose install starts with a program this machine
     /// lacks. Nothing is written and nothing runs; the program is named.
     NeedsInstaller(String),
+    /// A Launch configuration started while a Debug session exists: there is
+    /// one session, and a second would be the session picker the spec declines.
+    SessionRunning,
+    /// No command runs the adapter a Launch configuration names — no
+    /// `[dap.*]` row, or a row whose command is not on this machine. Named.
+    NoDebugAdapter(String),
+    /// The language server that hosts the adapter has not finished starting,
+    /// so there is nobody to ask for it. Named.
+    NoLanguageServer(String),
+    DebugAdapterFailed,
+    /// The adapter went away with a session still going.
+    DebugAdapterExited,
+    /// The adapter said no to starting the program, in its own words.
+    LaunchFailed(String),
+    /// Restart with nothing to rerun: no Launch configuration has been
+    /// started this session, so there is no last one.
+    NoLastSession,
+    /// `␣x` on a line no Run mark stands on.
+    NoRunMark,
+    /// The adapter would not write a member back, in its own words: a value
+    /// the program's language will not take, or one its type will not hold.
+    SetValueFailed(String),
 }
 
 impl Refusal {
@@ -162,6 +184,15 @@ impl Refusal {
             Refusal::ToolAlreadyInstalled => "tool-already-installed",
             Refusal::BrokenConfig(_) => "broken-config",
             Refusal::NeedsInstaller(_) => "needs-installer",
+            Refusal::SessionRunning => "debug-session-running",
+            Refusal::NoDebugAdapter(_) => "no-debug-adapter",
+            Refusal::NoLanguageServer(_) => "no-language-server",
+            Refusal::DebugAdapterFailed => "debug-adapter-failed",
+            Refusal::DebugAdapterExited => "debug-adapter-exited",
+            Refusal::LaunchFailed(_) => "launch-failed",
+            Refusal::NoLastSession => "no-last-session",
+            Refusal::NoRunMark => "no-run-mark",
+            Refusal::SetValueFailed(_) => "set-value-failed",
         }
     }
 }

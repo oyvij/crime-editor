@@ -3548,7 +3548,7 @@ dependencies = [
 
 [[package]]
 name = "varde"
-version = "0.163.0"
+version = "0.188.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3583,6 +3583,12 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit",
+ "tree-sitter",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
  "two-face",
  "unicode-segmentation",
  "unicode-width",

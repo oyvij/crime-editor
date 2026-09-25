@@ -15,6 +15,7 @@
 //! touches the terminal, the pty, the filesystem or git.
 
 pub mod authorship;
+pub mod debug;
 pub mod editor;
 pub mod filter;
 pub mod fold;
@@ -31,6 +32,7 @@ pub mod queries;
 pub mod reading;
 pub mod review;
 pub mod risk;
+pub mod run;
 pub mod search;
 pub mod startup;
 pub mod story;
@@ -105,6 +107,66 @@ pub enum Pane {
     /// else, and a click in this one names a place to go back to rather than a
     /// buffer or a Function.
     History,
+    /// The Breakpoint list, in the same corner, for the same reason again: a
+    /// row names a Breakpoint, which is a line to go to and a thing to remove.
+    Breakpoints,
+    /// The Frames of a Paused Debug session, in the same corner: a row names a
+    /// call to inspect.
+    Frames,
+    /// The Variables of the chosen Frame, in the Strip's Debug group — the
+    /// one place a pane takes the Strip's rectangle from the shells. Its own
+    /// variant for the reason the corner's four are each their own: a click in
+    /// it names a member to open, which is nothing a shell's grid holds.
+    Variables,
+    /// The debugged program's own terminal, beside the Variables in the Debug
+    /// group. A hosted pane like the shells and the AI: its child owns the
+    /// keyboard, and Varde is the terminal answering its queries.
+    Output,
+    /// The Evaluator's Snippet, in the floating window over the editor. Its
+    /// own variant rather than a mode of the editor's: the editor goes on
+    /// showing its file behind it, so a click lands in one or the other and
+    /// the keys reach whichever holds the caret.
+    Evaluator,
+}
+
+/// One control in a Transport (`docs/adr/0022-every-action-has-a-chip.md`):
+/// what a click on it routes, what pressing it does now, the glyph, the keys
+/// that do the same, and how it is drawn. `action` and `name` part ways on a
+/// Chip that says what pressing it does — play and pause are one control, so
+/// one action, lit as one whichever it read when it was pressed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Chip {
+    pub action: &'static str,
+    pub name: &'static str,
+    pub glyph: String,
+    pub keys: &'static str,
+    pub hue: Hue,
+    pub tone: Tone,
+}
+
+/// What a Chip's colour says, named for its meaning so `ui` maps each to one
+/// of the theme's named colours and never to a fixed one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hue {
+    Go,
+    Hold,
+    Step,
+    Halt,
+    Plain,
+}
+
+/// Dimmed and lit come from state, never from a timer: ADR 0009 allows a Tick
+/// only while work is in flight, and a lit Chip that faded would need one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Dimmed,
+    Plain,
+    Lit,
+    /// Something arrived that the reader has not seen — the Program output
+    /// printing while it is out of sight. Its own tone rather than Lit: lit is
+    /// "this is what you just did", and a mark is "this happened without you",
+    /// which is the opposite claim.
+    Marked,
 }
 
 /// What one of the terminal strip's shells is doing, told by the edge: a
@@ -190,6 +252,7 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
             // because "History" alone reads as shell history in a workspace
             // that hosts a shell.
             ('y', "Cursor history"),
+            ('b', "Breakpoints"),
             ('a', "AI"),
             ('l', "  Tall"),
         ],
@@ -205,6 +268,9 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
             // "language" is already spent, and it must be reachable with no
             // modifier (R31.11).
             ('v', "Tools"),
+            // The palette's third face: the Launch configurations. `n` is the
+            // free letter in "launch".
+            ('n', "Launch"),
             ('c', "Collapse"),
         ],
     ),
@@ -250,15 +316,20 @@ pub fn palette_rows(screen: u16) -> Vec<(Option<char>, String)> {
     // The gaps between the groups carry nothing at all. The cancel line goes
     // next — Escape closes every box Varde has, so it is the one row a reader
     // can guess, which is the same argument that keeps it out of the
-    // cheatsheet. Only then is an entry dropped, and the last row says so: a
-    // command nobody can see is a command nobody uses, so losing one is
-    // announced rather than clipped in silence.
+    // cheatsheet. The headings after it. Only then is an entry dropped, and
+    // the last row says so: a command nobody can see is a command nobody uses,
+    // so losing one is announced rather than clipped in silence.
     let budget = screen.saturating_sub(2) as usize;
     if rows.len() > budget {
         rows.retain(|(key, row)| key.is_some() || !row.is_empty());
     }
     if rows.len() > budget {
         rows.pop();
+    }
+    // Then the headings: the letters still say what each entry is, and a
+    // heading is a label for rows rather than a thing to do.
+    if rows.len() > budget {
+        rows.retain(|(key, _)| key.is_some());
     }
     if rows.len() > budget {
         rows.truncate(budget);
@@ -290,8 +361,21 @@ pub enum Modal {
         dir: PathBuf,
     },
     Palette,
+    /// A tapped Space waiting for its second key, with the Chord hint naming
+    /// every key that can follow it. Gone at the second key or Escape.
+    Chord,
     /// Picking the type and body for the selected diff lines.
     Comment,
+    /// A box on the Variables row the keyboard is on, typed in the program's
+    /// language rather than in Varde's: the row's new value, or a Watch being
+    /// written from scratch. Two variants and not a flag, because Enter means
+    /// two different things and a box that had to remember which is a box
+    /// with two authors.
+    SetValue,
+    NewWatch,
+    /// The one exception class to pause on, typed in the program's own
+    /// spelling and never checked by Varde.
+    ExceptionClass,
     /// Submitting clears whatever the AI's CLI is showing, which can be a
     /// half-written message. It cannot be read back, so it is announced.
     ConfirmSubmit,
@@ -331,6 +415,28 @@ pub enum Modal {
     /// is a selection in a list nobody can see.
     Tools {
         row: usize,
+    },
+    /// The Launch configurations both config layers name, and which row Enter
+    /// starts — carried here for the reason [`Modal::Tools`] carries its row.
+    Launches {
+        row: usize,
+    },
+    /// A Run mark's offer of Run and Debug, on the line it stands on, holding
+    /// what the mark captured: finding it is a parse, which a frame drawing
+    /// the offer must not pay, and the offer answers every key so the buffer
+    /// cannot change under it.
+    RunMark {
+        line: usize,
+        mark: run::Mark,
+    },
+    /// The Breakpoint box: which Breakpoint, which row the keys type into,
+    /// and what has been written so far — held here rather than on the
+    /// Breakpoint until Enter, so Escape leaves it as it was.
+    Breakpoint {
+        file: PathBuf,
+        line: usize,
+        field: debug::Field,
+        draft: debug::Properties,
     },
     /// The branch picker `:story?` opens: the repository's branches, and which
     /// row Enter acts on. One variant serves whatever repository was listed —
@@ -428,6 +534,31 @@ pub enum Event {
     /// second mapping can disagree with it — the click used to answer only the
     /// three views, and every other row it landed on did nothing.
     ClickPaletteEntry(char),
+    /// Set or remove a Breakpoint on this line of the buffer on screen: a click
+    /// in the gutter's Breakpoint column, or `␣b` on the cursor's line.
+    ToggleBreakpoint(usize),
+    /// Open the Breakpoint box for the Breakpoint on this line of the buffer
+    /// on screen, setting one first if the line has none: `␣B`, or the `✎`
+    /// Chip on the cursor's line.
+    EditBreakpoint(usize),
+    /// Offer Run and Debug for the Run mark on this line of the buffer on
+    /// screen: a click on it, or `␣x` on its line.
+    OfferRun(usize),
+    /// Run or Debug, chosen on the offer: its key or its Chip.
+    ChooseRun(&'static str),
+    /// What the Breakpoint box's focused row reads now.
+    BreakpointDraft(String),
+    BreakpointField(debug::Field),
+    /// The box's one switch. Applied as it is flipped rather than at Enter:
+    /// a switch is not something written, so there is nothing to discard.
+    SwitchSuspend,
+    ConfirmBreakpoint,
+    /// What a file holding remembered Breakpoints holds now, read by the edge
+    /// because the core reads no files. Answers [`Effect::ReadBreakpointFile`].
+    BreakpointFileRead {
+        path: PathBuf,
+        contents: String,
+    },
     /// Files appeared on disk from somewhere that is not a tree action, each
     /// with what the edge saw it to be.
     FilesAppeared(Vec<(PathBuf, tree::Kind)>),
@@ -502,6 +633,12 @@ pub enum Event {
     /// A shell that had printed nothing has printed something, so it is
     /// reading its input — what a held command waits for (R38.5).
     ShellSpoke(usize),
+    /// The debugged program printed something. Out of sight that marks the
+    /// `Debug` Group tab and the Chip that shows it again; on screen it is
+    /// already read, so it marks nothing.
+    OutputSpoke,
+    /// Hide the Program output, or show it again — `␣h` and the show Chip.
+    ToggleOutput,
     ClickPane(Pane),
     /// A press and release in a pane with no drag between them: a click the
     /// pane's child may want, unlike the press, which is ours. `at` is the cell
@@ -531,6 +668,17 @@ pub enum Event {
     /// screen. Straight through the arm Enter takes, for the reason
     /// [`Event::ClickRiskRow`] is.
     ClickHistoryRow(usize),
+    /// A click on a row of the Breakpoint list, by index into the list on
+    /// screen. Straight through the arm Enter takes, for the reason
+    /// [`Event::ClickRiskRow`] is.
+    ClickBreakpointRow(usize),
+    /// A click on a row of the Frames, the same shape again.
+    ClickFrameRow(usize),
+    /// A click on a row of the Variables, the same shape again.
+    ClickVariablesRow(usize),
+    /// A Group tab on the Strip's top border, clicked or reached by its chord:
+    /// the Strip shows that group and nothing stops running in the other.
+    ShowGroup(layout::Group),
     Scroll {
         pane: Pane,
         direction: Direction,
@@ -538,12 +686,20 @@ pub enum Event {
         /// child reads it; the tree and the editor scroll by rows.
         at: Place,
     },
+    /// The Hover box moved a row, by the wheel over it or by `j`/`k` with the
+    /// keyboard in it — never the editor underneath.
+    ScrollHover(Direction),
     RightClick(Pane),
     DragDivider(u32),
     /// The AI pane's left edge was dragged: how many columns wide it is now.
     /// A width rather than a column, because the tree's divider moves either
     /// side of it and the pane is meant to keep the size it was given.
     DragAiDivider(u32),
+    /// The border between the Variables and the Program output, as a width for
+    /// the Program output.
+    DragOutput(u32),
+    /// The border above the Strip was dragged: how many rows tall it asks to be.
+    DragStrip(u32),
     Copy,
     /// Ctrl+V or Command+V: paste whatever the clipboard holds. The text is not
     /// here because only the edge can read it — the core answers with
@@ -566,6 +722,41 @@ pub enum Event {
     Pasted(String),
     /// An action icon on the selected row, or its keyboard shortcut.
     RowAction(&'static str),
+    /// A Chip on the Hover box, by what pressing it does. Its own event and
+    /// not the Variables row's: the two act on different expressions, and one
+    /// event reading the row under the keyboard would watch whatever the
+    /// Variables happened to be on.
+    HoverChip(&'static str),
+    /// A row of the Hover's value section, opened or closed.
+    OpenHoverRow(usize),
+    /// `␣e`: the Evaluator opens on the expression the cursor is in or the
+    /// Selection covers. The expression is the core's to read, so the chord
+    /// carries nothing — where the Hover's Chip and a Variables row's each
+    /// name one of their own.
+    OpenEvaluator,
+    /// Run the Snippet: normal-mode Enter, the Run Chip and Ctrl+Enter, which
+    /// are one gesture and so one event.
+    RunSnippet,
+    /// A row of the Evaluator output's value, opened or closed.
+    OpenEvaluatedRow(usize),
+    /// Where the Evaluator's window goes, as a drag of its title bar, its
+    /// border or one of its corners leaves it. Unclamped, the way a dragged
+    /// divider's width is: where a window *may* be is `update`'s to answer,
+    /// and the mouse only says where the pointer took it.
+    PlaceEvaluator(layout::Area),
+    /// How many rows the Snippet takes of the window, as the rule under it
+    /// was dragged to. Unclamped for the same reason.
+    SizeSnippet(u16),
+    /// The keyboard's move and resize, one cell at a time: `␣m` and `␣z` open
+    /// the mode and these are what its letters do. Two events rather than one
+    /// carrying the mode, so what an arm does is written where it is read.
+    MoveEvaluator(Direction),
+    ResizeEvaluator(Direction),
+    /// `␣m` and `␣z`, which put the keyboard in that mode.
+    ArrangeEvaluator(debug::Arrange),
+    /// Any other key, which leaves it — queued in front of the key's own
+    /// event, the way leaving Stepping mode is.
+    LeaveArranging,
     /// An action a *pane* offers, not a row: the Risk pane's recompute and its
     /// loop. Its own event because `RowAction` falls through to the tree's
     /// actions on a row, and a pane action stands on no row.
@@ -889,6 +1080,8 @@ pub enum Event {
     ToggleBuffersList,
     /// The Cursor history pane, on or off — the same corner again.
     ToggleCursorHistory,
+    /// The Breakpoint list, on or off — the same corner again.
+    ToggleBreakpointList,
     /// `Ctrl+p` / `gp` and `Ctrl+n` / `gn` — one step towards the oldest place
     /// the cursor has been, and one towards the newest.
     JumpBack,
@@ -925,6 +1118,52 @@ pub enum Event {
         language: String,
         why: lsp::Gone,
     },
+    /// One message the Debug adapter sent, exactly as it arrived — the
+    /// language server's shape, for its reasons. `from` is the connection it
+    /// came over: 0 for the one the session started, a child session's number
+    /// (`Effect::DapChild`) otherwise.
+    DapReceived {
+        json: String,
+        from: usize,
+    },
+    /// The edge holds the adapter a Debug session asked for, or a connection
+    /// to it for a child session, so the conversation can begin against a
+    /// process rather than against the asking.
+    DapStarted {
+        from: usize,
+    },
+    /// The edge stopped holding the adapter, or one child session's
+    /// connection to it — pushed from every site that stops holding one,
+    /// `AiExited`'s rule.
+    DapGone {
+        why: debug::Gone,
+        from: usize,
+    },
+    /// The port a Waiting session watches accepted a connection, which only
+    /// the edge can find out by trying.
+    DapPortAnswers,
+    /// Start the named Launch configuration.
+    StartLaunch(String),
+    /// The launch list's arrows.
+    MoveLaunchRow(Direction),
+    /// F9: continue while Paused, pause while Running.
+    DebugResume,
+    /// `\u{2423}a` and the Transport's ask-ai Chip: paste a Pause snapshot
+    /// into the AI's prompt.
+    AskAboutPause,
+    /// F8, F7 and Shift+F8, and the chords that alias them: one step of the
+    /// inspected thread.
+    DebugStep(debug::Step),
+    /// Ctrl+F2: stop the Debug session.
+    DebugStop,
+    /// Ctrl+F5 and the `r` chord: the last Launch configuration started
+    /// again. Answered with no session, which is the point of it.
+    DebugRestart,
+    /// A key Stepping mode does not claim, so the mode ends here and the key
+    /// does what it always does — the events queued behind this one. Its own
+    /// event because only the router knows a key was not one of the mode's,
+    /// and only `update` may write the flag.
+    LeaveStepping,
     /// Typing paused for as long as the window `Effect::DebounceCandidates`
     /// asked for, so what may follow what was typed is worth asking about.
     /// Sent by the edge, which holds the
@@ -932,15 +1171,15 @@ pub enum Event {
     /// decided here, and every keystroke resets it, so this arrives once for a
     /// typed word rather than once per letter.
     CandidatesDue,
-    /// Where the pointer is now, in the buffer's text — or nothing at all,
-    /// which is the pointer over any other pane and so over no symbol. A fact
-    /// only the edge can observe, and one nobody pressed.
+    /// Where the pointer is now: in the buffer's text, on the Hover box, or
+    /// anywhere else, which is over no symbol. A fact only the edge can
+    /// observe, and one nobody pressed.
     ///
     /// Two things read it, and both are the reason it carries the place rather
     /// than an answer: the rest it may become is what the dwell window is
     /// armed off, and what is under it decides whether a diagnostic box is
     /// drawn — so a move that leaves the text is the event that takes one down.
-    PointerMoved(Option<Place>),
+    PointerMoved(Pointed),
     /// The pointer rested for as long as `Effect::DwellHover` asked for, so
     /// what is under it is worth asking the server about. The debounce's shape
     /// exactly: the edge holds the timer and the number came from here, and
@@ -1008,6 +1247,10 @@ pub enum Event {
     StartReading,
     /// `:stop` — end the Reading, and the stream with it.
     StopReading,
+    /// The edge's player finished on its own or could not start, so the
+    /// Reading is over. Not `StopReading`: nobody pressed stop, and a stop
+    /// Chip lit for every Reading that ran to its end says somebody did.
+    ReadingEnded,
     /// `:pause` — stop the sound where it is, or start it again from there.
     /// One event for both because it is one control: R35.8's Transport has a
     /// play/pause, not a play and a pause, and a reader who paused presses the
@@ -1153,6 +1396,44 @@ pub enum Effect {
         command: String,
         args: Vec<String>,
     },
+    /// Start the Debug adapter a Launch configuration named. Whether it
+    /// started comes back as `Event::DapStarted` or `Event::DapGone`.
+    StartDap {
+        command: String,
+        args: Vec<String>,
+        reach: debug::Reach,
+    },
+    /// One Debug Adapter Protocol message for the adapter, built here, over
+    /// the connection `to` — `Event::DapReceived`'s numbering.
+    DapSend {
+        to: usize,
+        json: String,
+    },
+    /// Open connection `child` to the adapter the session holds, the way that
+    /// one was reached, for a child session it asked Varde to start. Whether
+    /// it opened comes back as `Event::DapStarted` or `Event::DapGone` from
+    /// `child`. `StopDap` lets every one go with the adapter.
+    DapChild {
+        child: usize,
+    },
+    /// Let one child session's connection go, the rest of the session going
+    /// on. Answered with `Event::DapGone` from `child` where the edge held it.
+    StopDapChild {
+        child: usize,
+    },
+    /// Start the debugged program in the Debug group's own terminal, which is
+    /// what the adapter's `runInTerminal` asks for. Never a shell: the Strip's
+    /// shells are the reader's, and a program started in one would end with
+    /// the next `:split` and print into whatever else was running there.
+    /// Whether it started is the edge's to say, the way a spawned AI is.
+    RunProgram {
+        argv: Vec<String>,
+        cwd: Option<PathBuf>,
+        env: BTreeMap<String, String>,
+    },
+    /// Let the adapter go. The edge answers with `Event::DapGone`, as every
+    /// site that stops holding one does.
+    StopDap,
     /// Ask this process's `PATH` again, and say so when the answer has landed.
     /// The only producer is the Tools list's re-check: everywhere else the
     /// edge probes on its own, when the list opens. It answers with
@@ -1180,6 +1461,11 @@ pub enum Effect {
     /// when the file cannot be read — which leaves it *not measured*, the same
     /// answer a file no server serves gets.
     ReadForReview(PathBuf),
+    /// Read a file the project remembers Breakpoints in, so each can be held
+    /// to the text its line had — at load, whether or not the file is open.
+    /// Answered with [`Event::BreakpointFileRead`], empty for a file that is
+    /// gone, which makes every Breakpoint in it Stale.
+    ReadBreakpointFile(PathBuf),
     /// Wait this many milliseconds and then answer with
     /// [`Event::CandidatesDue`] — one timer, restarted every time this
     /// arrives, so a burst of typing asks once. The edge holds the clock and
@@ -1452,6 +1738,21 @@ pub struct Place {
     pub column: usize,
 }
 
+/// What the pointer is over, as far as the buffer's text is concerned. The
+/// Hover box is one answer among the three rather than a flag beside the place:
+/// a pointer on the box is over no symbol, and the box floats over whatever is
+/// under it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Pointed {
+    #[default]
+    Elsewhere,
+    Text(Place),
+    Hover,
+    /// The gutter's Breakpoint column on this line, where an Unverified
+    /// breakpoint says why.
+    Breakpoint(usize),
+}
+
 /// The one selection the workspace holds. Its two representations do not merge
 /// (ADR-0001): a buffer's is anchored to line and column so it survives
 /// scrolling and edits, while a pty pane has no buffer to anchor to, so the edge
@@ -1629,6 +1930,63 @@ pub struct State {
     pub ai_width: Option<u32>,
     /// Whether that column stops above the terminal or runs the whole height.
     pub ai_pane: layout::AiPane,
+    /// How tall the Strip is, once the border above it has been dragged, and
+    /// `None` until then. Clamped here on every drag and every resize rather
+    /// than only where it is drawn, so what is remembered is what was seen.
+    pub strip_height: Option<u32>,
+    /// Which group the Strip is showing.
+    pub strip: layout::Group,
+    /// Whether the edge holds the debugged program's own terminal. Told by the
+    /// edge, for `ai_running`'s reason: a program asked for is not a process
+    /// that exists, and the core would otherwise route keys to a pane nobody
+    /// holds.
+    pub output_running: bool,
+    /// Whether the Program output is out of sight, which gives the Variables
+    /// the whole Debug group. Hiding it stops nothing: the pty keeps its size
+    /// and everything it printed, so this is the one fact hiding changes.
+    pub output_hidden: bool,
+    /// How wide it is once the border between it and the Variables has been
+    /// dragged, and `None` until then — a share of the group, as `ai_width`
+    /// is of the screen. Kept while it is hidden, which is what showing it
+    /// again brings back.
+    pub output_width: Option<u32>,
+    /// Whether it has printed anything since it was last on screen, which is
+    /// what the `Debug` Group tab and the show Chip are marked with.
+    pub output_unseen: bool,
+    pub output_mouse: mouse::Encoding,
+    pub output_paste: keys::Paste,
+    /// Every Breakpoint in the workspace, with or without a Debug session.
+    pub breakpoints: Vec<debug::Breakpoint>,
+    /// The floating window that runs a Snippet in the Paused program, while
+    /// one is open.
+    pub evaluator: Option<debug::Evaluator>,
+    /// Where that window sits, whether or not one is open: the rectangle
+    /// outlives the window, because a project reopens the Evaluator where it
+    /// last left it. `None` until one has been opened here or the project
+    /// records one, which is what centres the first. Clamped in [`settle`]
+    /// like every other view's offset, so no arm that moves it has to
+    /// remember the screen or the Paused line.
+    pub evaluator_at: Option<layout::Area>,
+    /// The modifier-free mode that moves and resizes that window from the
+    /// keyboard, and `None` while nobody asked for one. An enum rather than
+    /// two flags for the reason [`Modal`] is one: moving and resizing at once
+    /// has no answer for `l`.
+    pub arranging: Option<debug::Arrange>,
+    /// The Snippets that have left that window, oldest first, remembered per
+    /// project. Beside the Watches rather than inside the session for the
+    /// reason a Watch is: code written to ask a program something outlives
+    /// the run it was first asked in.
+    pub snippets: Vec<String>,
+    /// The Exception filters switched on, by the ids each Debug adapter
+    /// reported them under, keyed by the adapter's row name and remembered
+    /// per project. Outside the session so the next one starts with them,
+    /// and keyed by adapter because one adapter's `uncaught` is not another's.
+    pub exception_filters: BTreeMap<String, BTreeSet<String>>,
+    /// The expressions kept at the top of the Variables, in the order they
+    /// were added. Beside the Breakpoints rather than inside the session for
+    /// the same reason: a Watch is a question about the program, and it
+    /// outlives the session it was first asked in.
+    pub watches: Vec<debug::Watch>,
     pub terminal_mouse: mouse::Encoding,
     /// The terminal strip's shells, side by side, and what each is doing.
     /// Told by the edge — it starts them, watches them exit and asks the OS
@@ -1651,11 +2009,11 @@ pub struct State {
     pub terminal_paste: keys::Paste,
     pub ai_paste: keys::Paste,
     /// Whether the AI's child has printed anything. Until it has, it drops
-    /// what it is sent, so a confirmed review or authoring prompt waits in
+    /// what it is sent, so whatever is handed to it waits in
     /// `pending_prompt` — the same queue, since only one thing is ever
     /// waiting to reach the one AI pane.
     pub ai_spoken: bool,
-    pub pending_prompt: Option<String>,
+    pub pending_prompt: Option<(String, Enter)>,
     pub selection: Option<Selection>,
     /// The other places the next-occurrence gesture has taken, each the start
     /// of a run as long as the one `selection` holds — the second cursor and
@@ -1687,6 +2045,10 @@ pub struct State {
     /// a button. This is the whole affordance, the way the underline is a
     /// link's.
     pub hovered_action: Option<&'static str>,
+    /// The Transport action taken last, by click or by key, which its Chip
+    /// stays lit for until another is taken. Named by action for the reason
+    /// `hovered_action` is, so one field serves every Transport.
+    pub transport_lit: Option<&'static str>,
     /// Whether the pointer is on the minimap. Transient like the hovered icon
     /// above and never saved: it is where the pointer is, not a preference.
     pub hovered_minimap: bool,
@@ -1841,6 +2203,36 @@ pub struct State {
     /// The first row the Cursor history pane shows. Its own offset for the
     /// reason the two panes beside it in the corner have their own.
     pub history_scroll: usize,
+    /// The row the Breakpoint list highlights, and its first row on screen.
+    pub breakpoints_selection: usize,
+    pub breakpoints_scroll: usize,
+    /// The same two for the Frames.
+    pub frames_selection: usize,
+    pub frames_scroll: usize,
+    /// And for the Variables, which is a list in the Strip rather than in the
+    /// corner but is one all the same — a row to open, and a first row on
+    /// screen.
+    pub variables_selection: usize,
+    pub variables_scroll: usize,
+    /// What runs each language's Debug adapter, and the Launch
+    /// configurations, as configuration named them — data for the reason
+    /// `servers` is (ADR 0021).
+    pub adapters: BTreeMap<String, startup::Adapter>,
+    pub launches: BTreeMap<String, startup::Launch>,
+    /// What Run marks stand beside and start, by row (R41.1).
+    pub runs: BTreeMap<String, startup::Run>,
+    /// The Launch configuration the last session was started from, which
+    /// restart reruns. Outlives the session on purpose: rerunning is what the
+    /// reader reaches for once a program has ended. The configuration and not
+    /// its name, because a Run mark's has none.
+    pub last_launch: Option<startup::Launch>,
+    /// The Debug session, if one exists.
+    pub debug: Option<debug::Session>,
+    /// Stepping mode: a Space chord has just run, so the stepping letters act
+    /// without their Space until any other key leaves it. Never on without a
+    /// session — `n` is find-next the rest of the time, and a mode that
+    /// swallowed it for nothing would be a trap.
+    pub stepping: bool,
     /// How many ticks the edge has reported. The edge ticks only while it holds
     /// work, so this advances while a job runs and stands still otherwise —
     /// which is the whole of what the core knows about it
@@ -1985,7 +2377,7 @@ pub struct State {
     /// describes where the reader is pointing, and the diagnostic box
     /// (`lsp::pointed`) is answered from it on the way past. A box remembered
     /// here would need taking down by every arm that moved the text under it.
-    pub pointed_at: Option<Place>,
+    pub pointed_at: Pointed,
 }
 
 impl State {
@@ -2024,6 +2416,18 @@ impl State {
 
     /// The selection as text — one answer whether it was dragged off a pty's
     /// screen or extended in a buffer with the keyboard.
+    /// The Buffer the keyboard is typing into: the Evaluator's Snippet while
+    /// the floating window has focus, and the buffer on screen otherwise. The
+    /// editor goes on showing its own file behind the window, so "the buffer
+    /// in front" and "the buffer being typed into" are two questions, and
+    /// this is the second — the one a mode, a Selection and a copy answer to.
+    pub fn edited(&self) -> Option<&Buffer> {
+        match self.focus {
+            Pane::Evaluator => self.evaluator.as_ref().map(|it| &it.snippet),
+            _ => current_buffer(self),
+        }
+    }
+
     pub fn selected_text(&self) -> Option<String> {
         match self.selection.as_ref()? {
             // A Preview drag already resolved its text in `update`, against
@@ -2034,14 +2438,10 @@ impl State {
             // Whole lines, ends included, so what reaches the clipboard is
             // lines rather than a run of characters — vim's linewise register,
             // and what makes a pasted `V` selection land on lines of its own.
-            Selection::Lines { from, to } => {
-                let path = self.current_buffer.as_ref()?;
-                Some(self.buffers.get(path)?.lines_in(*from, *to))
-            }
+            Selection::Lines { from, to } => Some(self.edited()?.lines_in(*from, *to)),
             selection => {
                 let (from, to) = selection.buffer_span()?;
-                let path = self.current_buffer.as_ref()?;
-                Some(self.buffers.get(path)?.text_in(from, to))
+                Some(self.edited()?.text_in(from, to))
             }
         }
     }
@@ -2071,6 +2471,11 @@ impl Default for State {
             double_tap_ms: 300,
             tab_width: editor::DEFAULT_TAB_WIDTH,
             reports_modifiers: false,
+            evaluator: None,
+            evaluator_at: None,
+            arranging: None,
+            snippets: Vec::new(),
+            exception_filters: BTreeMap::new(),
             contents: BTreeMap::new(),
             expanded: BTreeSet::new(),
             ignored: BTreeSet::new(),
@@ -2105,6 +2510,10 @@ impl Default for State {
             tree_divider: 30,
             ai_width: None,
             ai_pane: layout::AiPane::Beside,
+            strip_height: None,
+            strip: layout::Group::Shells,
+            breakpoints: Vec::new(),
+            watches: Vec::new(),
             corner: layout::Corner::Hidden,
             risk_all: false,
             risk_selection: 0,
@@ -2114,6 +2523,24 @@ impl Default for State {
             visits: Vec::new(),
             history_selection: 0,
             history_scroll: 0,
+            breakpoints_selection: 0,
+            breakpoints_scroll: 0,
+            frames_selection: 0,
+            frames_scroll: 0,
+            variables_selection: 0,
+            variables_scroll: 0,
+            adapters: BTreeMap::new(),
+            launches: BTreeMap::new(),
+            runs: BTreeMap::new(),
+            last_launch: None,
+            debug: None,
+            stepping: false,
+            output_running: false,
+            output_hidden: false,
+            output_width: None,
+            output_unseen: false,
+            output_mouse: mouse::Encoding::None,
+            output_paste: keys::Paste::Bare,
             terminal_mouse: mouse::Encoding::None,
             terminals: vec![Shell::Idle],
             terminal_split: 0,
@@ -2185,8 +2612,9 @@ impl Default for State {
             diagnostics: BTreeMap::new(),
             hover: None,
             hovered_action: None,
+            transport_lit: None,
             hovered_minimap: false,
-            pointed_at: None,
+            pointed_at: Pointed::Elsewhere,
         }
     }
 }
@@ -2215,6 +2643,42 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
     // wrote. That is the mode doing what a mode does — it is also what the
     // editor was already *drawing*, from `Buffer::selected_lines`, while `d`
     // took the charwise arm and deleted something else.
+    // What the reader can see, told once: the mark on the `Debug` tab is a
+    // claim that output arrived unseen, so it lasts exactly as long as the
+    // Program output is out of sight. Here rather than in the arms that show
+    // it — the tab, the Chip, the chord and a session that ends are four, and
+    // a mark one of them forgot is a tab that says something arrived when the
+    // reader is looking straight at it.
+    if showing_output(&next) {
+        next.output_unseen = false;
+    }
+    // A mode bounded by the thing it arranges: the window closing with the
+    // session is what takes the keyboard out of it, so nobody is left holding
+    // four letters that move nothing.
+    if next.evaluator.is_none() {
+        next.arranging = None;
+    }
+    // The Evaluator's window, from the one clamp: wholly on the screen and
+    // clear of the Paused line, whatever moved it — a drag, a resize, or a
+    // program that stopped on a line the window was floating over. Here
+    // rather than in those arms for the reason the scrolls below are here:
+    // an arm that has to remember the screen is an arm that will forget.
+    // Outside the wheel's exception, which is about views following a cursor:
+    // no wheel moves this window, so nothing here undoes one.
+    if let Some(at) = next.evaluator_at {
+        next.evaluator_at = Some(layout::placed_window(
+            at,
+            next.screen_width,
+            next.screen_height,
+            debug::paused_row(&next),
+        ));
+    }
+    // A pane the edge no longer holds is a pane the keyboard must not be in —
+    // the rule `AiExited` exists for, here because `output_running` is derived
+    // and there is no event to hang it on.
+    if next.focus == Pane::Output && !next.output_running {
+        next.focus = Pane::Editor;
+    }
     let showing_lines = next.focus == Pane::Editor && next.diff.is_none() && !previewing(&next);
     let linewise = showing_lines
         .then(|| current_buffer(&next).and_then(Buffer::selected_lines))
@@ -2279,6 +2743,39 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
             next.history_selection.min(history_rows.saturating_sub(1)),
             history_rows,
             corner_rows(&next),
+        );
+        let frame_rows = debug::frame_rows(&next).len();
+        next.frames_selection = next.frames_selection.min(frame_rows.saturating_sub(1));
+        next.frames_scroll = layout::viewport(
+            next.frames_scroll,
+            next.frames_selection,
+            frame_rows,
+            corner_rows(&next),
+        );
+        // Clamped here and not in the arms that remove one, so a Breakpoint
+        // gone by any route — a row's Chip, a deleted line — leaves the
+        // highlight on a row that exists.
+        let breakpoint_rows = debug::rows(&next);
+        next.breakpoints_selection = next
+            .breakpoints_selection
+            .min(breakpoint_rows.saturating_sub(1));
+        next.breakpoints_scroll = layout::viewport(
+            next.breakpoints_scroll,
+            next.breakpoints_selection,
+            breakpoint_rows,
+            corner_rows(&next),
+        );
+        // The Variables against the Strip's rows rather than the corner's,
+        // being the one list of the lot that does not live in the corner.
+        let variable_rows = debug::variables(&next).len();
+        next.variables_selection = next
+            .variables_selection
+            .min(variable_rows.saturating_sub(1));
+        next.variables_scroll = layout::viewport(
+            next.variables_scroll,
+            next.variables_selection,
+            variable_rows,
+            strip_rows(&next),
         );
         // The results box, against the same `search::rows` the renderer draws.
         // The row above the selection first and the selection itself second:
@@ -2536,6 +3033,29 @@ pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
     if refuse_guest_edits(state, &mut next) {
         next.refusal = Some(preview::Refusal::GuestReadOnly);
     }
+    // A Breakpoint moves with its line whatever moved the line — a key, a
+    // paste, an undo, a format, the file changing on disk — so it is carried
+    // here, by outcome, for the reason the guest refusal above is decided here.
+    // Remembered as soon as it moves: a project whose state still named the
+    // old line would find a Breakpoint that followed its line Stale next time.
+    let mut moved = false;
+    for (path, buffer) in &next.buffers {
+        match state.buffers.get(path) {
+            Some(before)
+                if before.revision() != buffer.revision()
+                    && next.breakpoints.iter().any(|b| &b.file == path) =>
+            {
+                let was = next.breakpoints.clone();
+                debug::follow(&mut next.breakpoints, path, before.shown(), buffer.shown());
+                moved |= was != next.breakpoints;
+            }
+            _ => {}
+        }
+    }
+    if moved {
+        effects.push(Effect::SaveState(state_json(&next)));
+    }
+    debug::forget_changed(&state.breakpoints, &mut next);
     // Every event passes through here for the reason it passes through the
     // scroll clamp: an arm that has to remember to tell the language server
     // what the buffer now holds is an arm that will forget. What has been sent
@@ -2553,7 +3073,7 @@ fn route(state: &State, event: Event) -> (State, Vec<Effect>) {
     next.refusal = None;
     // Taken before the match consumes the event; see the scroll rule in
     // `settle`.
-    let wheeled = matches!(event, Event::Scroll { .. });
+    let wheeled = matches!(event, Event::Scroll { .. } | Event::ScrollHover(_));
     let declined = (next, event);
     let declined = match section_input(state, declined.0, declined.1, wheeled) {
         Ok(answer) => return answer,
@@ -2573,6 +3093,81 @@ fn route(state: &State, event: Event) -> (State, Vec<Effect>) {
     // in for it — a variant nobody answers fails the suite here rather than
     // going quietly missing.
     unreachable!("no group answers {:?}", declined.1)
+}
+
+/// Whether a Space is the chord prefix rather than a character: normal mode,
+/// nothing else collecting the keys, and code a Breakpoint could be set in —
+/// never over a half-typed operator, which it would otherwise swallow.
+///
+/// Read off [`State::edited`], which is the buffer the keyboard is *in*: the
+/// Snippet is a buffer on the same terms as the file behind it, and a chord
+/// decided against the editor's mode while somebody types in the Evaluator is
+/// a Space that means two things. One answer for the arm that opens the hint
+/// and for [`on_snippet`], which claims the editor's keys before it and hands
+/// this one back rather than spelling the question a second way.
+fn opens_a_chord(state: &State) -> bool {
+    state.modal == Modal::None
+        && state.view == View::Edit
+        && state.diff.is_none()
+        && state.walking.is_none()
+        && !previewing(state)
+        && state.edited().is_some_and(|buffer| {
+            buffer.mode == editor::Mode::Normal && buffer.pending().is_empty()
+        })
+}
+
+/// The Evaluator's Snippet, which is a [`Buffer`]: the editor's own gestures
+/// with the Snippet as their destination — one arm per gesture here and none
+/// in the edge, exactly as the comment box below inherits them.
+///
+/// Claimed before every other reader of them, because the window has the keys
+/// while the keyboard is in it and the editor answers the same events: a key
+/// meant for the Snippet would otherwise edit the file the window is floating
+/// over, which is the one file the reader can see it is not typing in.
+fn on_snippet(mut next: State, event: Event, wheeled: bool) -> Answered {
+    if next.focus != Pane::Evaluator || next.evaluator.is_none() {
+        return Err((next, event));
+    }
+    // Normal-mode Enter runs the Snippet; inserting, it is a newline like any
+    // other, because a block is written on more than one line.
+    if matches!(event, Event::EditorKey('\n')) && !editor_inserting(&next) {
+        let effects = debug::run(&mut next);
+        return Ok(settle(next, effects, wheeled));
+    }
+    // The Space that opens the Chord hint is not the Snippet's: the window is
+    // arranged from inside it, and the hint is how anybody finds those two
+    // chords. Handed back rather than answered here, so there is one spelling
+    // of what a waiting Space is.
+    if matches!(event, Event::EditorKey(' ')) && opens_a_chord(&next) {
+        return Err((next, event));
+    }
+    // Up and Down on an empty Snippet are the project's Snippets rather than
+    // the caret's motion, and go on being once a recall has started. Ahead of
+    // the arms below because the arrow is the editor's own event: the Snippet
+    // is a buffer, and a buffer answers an arrow by moving.
+    if let Event::EditorArrow(direction @ (Direction::Up | Direction::Down)) = event {
+        if debug::recall(&mut next, direction) {
+            return Ok(settle(next, vec![], wheeled));
+        }
+    }
+    let snippet = &mut next.evaluator.as_mut().expect("checked just above").snippet;
+    match event {
+        Event::EditorKey(key) => _ = snippet.key(key),
+        Event::EditorBackspace => snippet.backspace(),
+        Event::EditorDeleteWord => snippet.delete_word_back(),
+        Event::EditorUndo => snippet.undo(),
+        Event::EditorArrow(direction) => snippet.arrow(direction),
+        Event::EditorWord(direction) => snippet.word_motion(match direction {
+            Direction::Right => editor::Word::Start,
+            _ => editor::Word::Back,
+        }),
+        Event::EditorEscape => snippet.escape(),
+        // One edit, not a run of keys, for the reason the comment box's paste
+        // is one: a newline in pasted code is text and not a gesture.
+        Event::EditorPaste(text) => snippet.paste(&text),
+        other => return Err((next, other)),
+    }
+    Ok(settle(next, vec![], wheeled))
 }
 
 /// The comment box's body, which is a [`Buffer`]. The box inherits the editor's
@@ -2669,6 +3264,10 @@ fn section_workspace(state: &State, next: State, event: Event, wheeled: bool) ->
 /// 6 of the groups, in the order their arms had.
 fn route_trigger(state: &State, next: State, event: Event, wheeled: bool) -> Answered {
     let declined = (next, event);
+    let declined = match on_snippet(declined.0, declined.1, wheeled) {
+        Ok(answer) => return Ok(answer),
+        Err(declined) => declined,
+    };
     let declined = match on_comment_body(declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
@@ -2843,6 +3442,10 @@ fn route_editor_key(state: &State, next: State, event: Event, wheeled: bool) -> 
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };
+    let declined = match on_breakpoint(declined.0, declined.1, wheeled) {
+        Ok(answer) => return Ok(answer),
+        Err(declined) => declined,
+    };
     let declined = match on_resolve(state, declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
@@ -2878,6 +3481,10 @@ fn route_ai_spoke(state: &State, next: State, event: Event, wheeled: bool) -> An
         Err(declined) => declined,
     };
     let declined = match on_lsp(state, declined.0, declined.1, wheeled) {
+        Ok(answer) => return Ok(answer),
+        Err(declined) => declined,
+    };
+    let declined = match on_debug(state, declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };
@@ -3027,9 +3634,23 @@ fn on_enter_name(state: &State, mut next: State, event: Event, wheeled: bool) ->
                     Effect::ReadFolder(folder),
                 ]
             }
+            // The box on a Variables row. The text is the program's
+            // language, so it is never parsed here — set as written, and
+            // watched as written.
+            Modal::SetValue => debug::set_value(&mut next, name),
+            Modal::NewWatch => debug::add_watch(&mut next, name),
+            Modal::ExceptionClass => debug::name_class(&mut next, name),
             _ => vec![],
         },
 
+        // Leaving the box is closing it, and nothing else: a box left standing
+        // with the keyboard back in the editor is one the next `K` walks
+        // straight back into, and an Escape that also left a Story or dropped
+        // a wait would be the box's Escape answering for what is behind it.
+        Event::Cancel if state.hover.as_ref().is_some_and(|hover| hover.focused) => {
+            next.hover = None;
+            vec![]
+        }
         Event::Cancel => {
             next.modal = Modal::None;
             next.selected_action = None;
@@ -3227,6 +3848,82 @@ fn on_key_3(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
             })
         }
 
+        // Space is the chord prefix in Varde's own Debug panes too, not only
+        // on the code: stepping happens in bursts from wherever the keyboard
+        // is, and a modifier-free alias that works in one pane is the failure
+        // the F-keys' reserved-everywhere rule exists to prevent. The editor's
+        // own arm is below, where it has a buffer's mode to answer for.
+        Event::Key(' ')
+            if state.modal == Modal::None
+                && state.debug.is_some()
+                && matches!(state.focus, Pane::Variables | Pane::Frames) =>
+        {
+            Ok((
+                State {
+                    modal: Modal::Chord,
+                    ..next
+                },
+                vec![],
+            ))
+        }
+
+        // The Frames' `j` and `k`, as every list in the corner has.
+        Event::Key(key @ ('j' | 'k'))
+            if state.focus == Pane::Frames && state.modal == Modal::None =>
+        {
+            Ok(match key {
+                'j' => update(state, Event::MoveSelection(Direction::Down)),
+                _ => update(state, Event::MoveSelection(Direction::Up)),
+            })
+        }
+
+        // The Variables' own keys: `j` and `k` as every list has, and a
+        // letter per row Chip — the Breakpoint list's shape, one pane over.
+        // `Y` is the one action with no Chip of its own: the spec draws five
+        // Chips on a row and copying as an expression is the sixth action, so
+        // it rides the shifted copy key rather than a Chip the row has no
+        // room for. Not in `CHEATSHEET`, for the reason the Breakpoint
+        // list's are not — they answer only while this pane holds the
+        // keyboard, which is where its Chips are on screen naming them.
+        Event::Key(key @ ('j' | 'k' | 's' | 'y' | 'Y' | 'w' | 'd' | 'a'))
+            if state.focus == Pane::Variables && state.modal == Modal::None =>
+        {
+            Ok(match key {
+                'j' => update(state, Event::MoveSelection(Direction::Down)),
+                'k' => update(state, Event::MoveSelection(Direction::Up)),
+                's' => update(state, Event::RowAction(debug::SET_VALUE)),
+                'y' => update(state, Event::RowAction(debug::COPY_VALUE)),
+                'Y' => update(state, Event::RowAction(debug::COPY_EXPRESSION)),
+                'w' => update(state, Event::RowAction(debug::WATCH)),
+                'd' => update(state, Event::RowAction(debug::REMOVE_WATCH)),
+                // The one that needs no row: a Watch typed from scratch is
+                // not about whatever the keyboard happens to be standing on.
+                _ => {
+                    let mut opened = next;
+                    opened.modal = Modal::NewWatch;
+                    (opened, vec![])
+                }
+            })
+        }
+
+        // The Breakpoint list's own keys: `j` and `k` as every list in the
+        // corner has, `e` and `d` for its row's Chips, and `D` and `x` for the
+        // Transport's — vim's delete, and its shifted letter for the whole of
+        // it; `x` for the exception. Not in `CHEATSHEET`, for the reason the
+        // Risk list's are not; the Transport's Chips name them.
+        Event::Key(key @ ('j' | 'k' | 'e' | 'd' | 'D' | 'x'))
+            if state.focus == Pane::Breakpoints && state.modal == Modal::None =>
+        {
+            Ok(match key {
+                'j' => update(state, Event::MoveSelection(Direction::Down)),
+                'k' => update(state, Event::MoveSelection(Direction::Up)),
+                'e' => update(state, Event::RowAction(debug::EDIT)),
+                'd' => update(state, Event::RowAction(debug::REMOVE)),
+                'x' => update(state, Event::PaneAction(debug::EXCEPTION_CLASS)),
+                _ => update(state, Event::PaneAction(debug::CLEAR_ALL)),
+            })
+        }
+
         other => Err((next, other)),
     }
 }
@@ -3257,6 +3954,27 @@ fn on_key_4(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
 /// Key
 fn on_key_5(state: &State, mut next: State, event: Event, _wheeled: bool) -> Answered {
     match event {
+        // Whatever the second key is, the hint goes: a chord nobody bound
+        // costs the one key, the way Escape does.
+        Event::Key(key) if state.modal == Modal::Chord => {
+            next.modal = Modal::None;
+            let Some(chord) = keys::chord(state, key) else {
+                return Ok((next, vec![]));
+            };
+            // The chord done, the keyboard is left in Stepping mode, where the
+            // stepping letters act without their Space: stepping happens in
+            // bursts, and a Space per step is a Space too many. The session is
+            // what bounds it — see `State::stepping` — so `q`, which is the
+            // chord that ends one, is the chord that does not leave it on:
+            // between the request and the adapter letting go, the mode would
+            // be four letters swallowed for a session on its way out.
+            // Not for a chord that opens a mode of its own: `␣m` and
+            // `␣z` put the keyboard in the Evaluator's arrange mode, and two
+            // modes claiming the same letters is the trap both are shaped to
+            // avoid.
+            next.stepping = state.debug.is_some() && !matches!(key, 'q' | 'm' | 'z');
+            Ok(update(&next, chord))
+        }
         Event::Key(key) if state.modal == Modal::Palette => {
             let Some(entry) = palette_entry(key) else {
                 // Unrecognised keys leave the palette open.
@@ -3267,6 +3985,10 @@ fn on_key_5(state: &State, mut next: State, event: Event, _wheeled: bool) -> Ans
             // exists is the edge's answer to the list being open (R31.23).
             if entry == "Tools" {
                 next.modal = Modal::Tools { row: 0 };
+                return Ok((next, vec![]));
+            }
+            if entry == "Launch" {
+                next.modal = Modal::Launches { row: 0 };
                 return Ok((next, vec![]));
             }
             next.modal = Modal::None;
@@ -3311,6 +4033,7 @@ fn palette_command(next: State, entry: &str) -> Result<(State, Vec<Effect>), Sta
         "Risk" => Event::ToggleRiskList,
         "Buffers" => Event::ToggleBuffersList,
         "Cursor history" => Event::ToggleCursorHistory,
+        "Breakpoints" => Event::ToggleBreakpointList,
         // The tree's own `c` reaches this too, but only from the tree: the
         // palette is how it is reached from wherever the growing tree was
         // noticed, which is usually the pane being read rather than the tree.
@@ -3622,13 +4345,21 @@ fn on_submit_review(state: &State, mut next: State, event: Event, wheeled: bool)
         // buttons work, and the AI pane went without one for exactly as long as
         // it sat in a wildcard arm. Exhaustive so a fifth pane is a decision.
         Event::ClickThrough { pane, at } => match pane {
-            Pane::Terminal | Pane::Ai => {
+            Pane::Terminal | Pane::Ai | Pane::Output => {
                 match mouse::report(mouse_encoding(state, pane), mouse::Gesture::Click, at) {
                     Some(bytes) => vec![Effect::SendKeys { pane, bytes }],
                     None => vec![],
                 }
             }
-            Pane::Tree | Pane::Editor | Pane::Risk | Pane::Buffers | Pane::History => vec![],
+            Pane::Tree
+            | Pane::Editor
+            | Pane::Evaluator
+            | Pane::Risk
+            | Pane::Buffers
+            | Pane::History
+            | Pane::Breakpoints
+            | Pane::Frames
+            | Pane::Variables => vec![],
         },
         Event::ClickLink { row, column } => editor::link_at(&row, column)
             .map(Effect::OpenUrl)
@@ -3825,7 +4556,7 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                     // No `Effect::Scrolled` when the child cannot be told: a
                     // pty's scrollback is rows, so there is no sideways history
                     // for the edge to answer with.
-                    Pane::Terminal | Pane::Ai => match mouse::report(
+                    Pane::Terminal | Pane::Ai | Pane::Output => match mouse::report(
                         mouse_encoding(state, pane),
                         mouse::Gesture::Wheel(direction),
                         at,
@@ -3833,7 +4564,16 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                         Some(bytes) => vec![Effect::SendKeys { pane, bytes }],
                         None => vec![],
                     },
-                    Pane::Tree | Pane::Risk | Pane::Buffers | Pane::History => vec![],
+                    Pane::Tree
+                    | Pane::Evaluator
+                    | Pane::Risk
+                    | Pane::Buffers
+                    | Pane::History
+                    | Pane::Breakpoints
+                    | Pane::Frames
+                    | Pane::Variables => {
+                        vec![]
+                    }
                 };
                 return Ok(settle(next, effects, wheeled));
             }
@@ -3891,9 +4631,43 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                     );
                     vec![]
                 }
+                Pane::Frames => {
+                    next.frames_scroll = wheeled_to(
+                        direction,
+                        state.frames_scroll,
+                        debug::frame_rows(state).len(),
+                        corner_rows(state),
+                    );
+                    vec![]
+                }
+                Pane::Breakpoints => {
+                    next.breakpoints_scroll = wheeled_to(
+                        direction,
+                        state.breakpoints_scroll,
+                        state.breakpoints.len(),
+                        corner_rows(state),
+                    );
+                    vec![]
+                }
+                Pane::Variables => {
+                    next.variables_scroll = wheeled_to(
+                        direction,
+                        state.variables_scroll,
+                        debug::variables(state).len(),
+                        strip_rows(state),
+                    );
+                    vec![]
+                }
+                // The window is resized rather than scrolled: no scenario
+                // asks the Snippet or its output to hold more than the room
+                // they are given, and an offset nothing clamps is an offset
+                // that strands the last rows. Nothing here rather than the
+                // editor's scroll, which is a different pane's offset and
+                // would move the code behind the window.
+                Pane::Evaluator => vec![],
                 // A program that asked for mouse events scrolls itself; ours is
                 // the scrollback behind a shell that did not.
-                Pane::Terminal | Pane::Ai => match mouse::report(
+                Pane::Terminal | Pane::Ai | Pane::Output => match mouse::report(
                     mouse_encoding(state, pane),
                     mouse::Gesture::Wheel(direction),
                     at,
@@ -3923,18 +4697,48 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
             vec![]
         }
 
+        // Bounded by the rows the box has on screen, which a box taller than
+        // the pane has fewer of than it has lines — so the last line can come
+        // up to the bottom border and no further.
+        Event::ScrollHover(direction) => {
+            let panes = panes_of(state);
+            let spot = lsp::placement(state).map(|placement| placement.spot(state, &panes));
+            let said = lsp::sections(state).len();
+            if let (Some(spot), Some(hover)) = (spot, next.hover.as_mut()) {
+                let shown = usize::from(spot.height).saturating_sub(2);
+                let last = said.saturating_sub(shown);
+                hover.first = match direction {
+                    Direction::Down => (hover.first + 1).min(last),
+                    Direction::Up | Direction::Left | Direction::Right => {
+                        hover.first.saturating_sub(1)
+                    }
+                };
+            }
+            vec![]
+        }
+
         other => return Err((next, other)),
     };
     Ok(settle(next, effects, wheeled))
 }
 
-/// Copy, DragAiDivider, DragDivider, Resized, RightClick
+/// Copy, DragAiDivider, DragDivider, DragStrip, Resized, RightClick
 fn on_resized(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::Resized { width, height } => {
             next.screen_width = width;
             next.screen_height = height;
+            next.strip_height = state
+                .strip_height
+                .map(|rows| u32::from(layout::strip_height(height, rows as u16)));
             vec![]
+        }
+
+        Event::DragStrip(rows) => {
+            let rows =
+                layout::strip_height(state.screen_height, rows.min(u32::from(u16::MAX)) as u16);
+            next.strip_height = Some(u32::from(rows));
+            vec![Effect::SaveState(state_json(&next))]
         }
 
         // No context menus: every action lives in the toolbar and the keyboard.
@@ -3942,6 +4746,15 @@ fn on_resized(state: &State, mut next: State, event: Event, wheeled: bool) -> An
 
         Event::DragDivider(column) => {
             next.tree_divider = column;
+            vec![Effect::SaveState(state_json(&next))]
+        }
+
+        // Remembered as a width off the Debug group's right-hand end rather
+        // than as a column: the Strip's left edge moves with the Corner beside
+        // it, and a column would put the border somewhere else every time the
+        // Corner's occupant changed.
+        Event::DragOutput(width) => {
+            next.output_width = Some(width);
             vec![Effect::SaveState(state_json(&next))]
         }
 
@@ -4814,6 +5627,11 @@ fn on_editor_key(state: &State, mut next: State, event: Event, wheeled: bool) ->
             return Ok(update(state, Event::ToggleFold { all: false }));
         }
 
+        Event::EditorKey(' ') if opens_a_chord(state) => {
+            next.modal = Modal::Chord;
+            vec![]
+        }
+
         // The sideways gesture, on the two surfaces that are read rather than
         // typed in and have no cursor of their own to follow — Review's diff
         // and the code a Story walk is showing. One arm rather than one per
@@ -5197,7 +6015,25 @@ fn on_editor_key_4(state: &State, mut next: State, event: Event, wheeled: bool) 
         // `K` asks what the symbol under the cursor is — no modifier, and in
         // the cheatsheet, because a key nobody can discover is a key nobody
         // uses. Normal mode only: inserting a capital must still type one.
-        Event::EditorKey('K') if normal_mode(state) => lsp::ask(&mut next, lsp::About::Hover),
+        // A second `K` moves the keyboard into the box that is up, which is how
+        // a Hover longer than the pane is read without reaching for the mouse.
+        Event::EditorKey('K') if normal_mode(state) && state.hover.is_some() => {
+            if let Some(hover) = next.hover.as_mut() {
+                hover.focused = true;
+            }
+            vec![]
+        }
+        // The adapter is asked alongside the server, from the cursor's place:
+        // what a Hover says while Paused is the same box asked for two ways,
+        // and the key reaching only one of them is a `K` that tells the
+        // reader less than resting the pointer does.
+        Event::EditorKey('K') if normal_mode(state) => {
+            let mut effects = lsp::ask(&mut next, lsp::About::Hover);
+            if let Some(at) = cursor_place(state) {
+                effects.extend(lsp::value_hover(&mut next, at));
+            }
+            effects
+        }
 
         // `/` searches the file being edited, on the line the editor already
         // owns for `:` commands rather than in the floating modal — finding
@@ -5491,6 +6327,127 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
     Ok(settle(next, effects, wheeled))
 }
 
+/// ToggleBreakpoint, BreakpointFileRead, EditBreakpoint, BreakpointDraft,
+/// BreakpointField, SwitchSuspend, ConfirmBreakpoint, and the Run mark the
+/// gutter's same column holds: OfferRun, ChooseRun
+fn on_breakpoint(mut next: State, event: Event, wheeled: bool) -> Answered {
+    let effects = match event {
+        Event::OfferRun(line) => {
+            run::offer(&mut next, line);
+            vec![]
+        }
+        Event::ChooseRun(action) => run::choose(&mut next, action),
+        // Setting one first is what makes `␣B` a way to write a conditional
+        // Breakpoint in one gesture, rather than a key that does nothing on
+        // every line but the few that already hold one.
+        Event::EditBreakpoint(line) => {
+            let Some(file) = next.current_buffer.clone() else {
+                return Ok((next, vec![]));
+            };
+            let held = next
+                .breakpoints
+                .iter()
+                .any(|breakpoint| breakpoint.file == file && breakpoint.line == line);
+            let (mut opened, effects) = match held {
+                true => (next, vec![]),
+                false => update(&next, Event::ToggleBreakpoint(line)),
+            };
+            debug::open_box(&mut opened, file, line);
+            return Ok(settle(opened, effects, wheeled));
+        }
+        Event::BreakpointDraft(text) => {
+            if let Modal::Breakpoint { field, draft, .. } = &mut next.modal {
+                match field {
+                    debug::Field::Condition => draft.condition = text,
+                    debug::Field::HitCount => draft.hit_count = text,
+                    debug::Field::LogMessage => draft.log_message = text,
+                    debug::Field::Suspend => {}
+                }
+            }
+            vec![]
+        }
+        Event::BreakpointField(to) => {
+            if let Modal::Breakpoint { field, .. } = &mut next.modal {
+                *field = to;
+            }
+            vec![]
+        }
+        Event::SwitchSuspend => {
+            let Modal::Breakpoint {
+                file, line, draft, ..
+            } = &mut next.modal
+            else {
+                return Ok((next, vec![]));
+            };
+            draft.suspend = match draft.suspend {
+                debug::Suspend::Thread => debug::Suspend::All,
+                debug::Suspend::All => debug::Suspend::Thread,
+            };
+            let (file, line, suspend) = (file.clone(), *line, draft.suspend);
+            for breakpoint in next.breakpoints.iter_mut() {
+                if breakpoint.file == file && breakpoint.line == line {
+                    breakpoint.properties.suspend = suspend;
+                }
+            }
+            vec![Effect::SaveState(state_json(&next))]
+        }
+        Event::ConfirmBreakpoint => {
+            let Modal::Breakpoint {
+                file, line, draft, ..
+            } = std::mem::take(&mut next.modal)
+            else {
+                return Ok((next, vec![]));
+            };
+            for breakpoint in next.breakpoints.iter_mut() {
+                if breakpoint.file == file && breakpoint.line == line {
+                    breakpoint.properties = draft.clone();
+                }
+            }
+            vec![Effect::SaveState(state_json(&next))]
+        }
+        Event::ToggleBreakpoint(line) => {
+            let Some((file, text)) = next.current_buffer.clone().and_then(|file| {
+                let text = debug::held(next.buffers.get(&file)?.shown(), line)?.to_string();
+                Some((file, text))
+            }) else {
+                return Ok((next, vec![]));
+            };
+            match next
+                .breakpoints
+                .iter()
+                .position(|breakpoint| breakpoint.file == file && breakpoint.line == line)
+            {
+                Some(at) => {
+                    next.breakpoints.remove(at);
+                }
+                None => next.breakpoints.push(debug::Breakpoint {
+                    file: file.clone(),
+                    line,
+                    text,
+                    stale: false,
+                    properties: debug::Properties::default(),
+                }),
+            }
+            let mut effects = debug::breakpoints_changed(&mut next, &file);
+            effects.push(Effect::SaveState(state_json(&next)));
+            effects
+        }
+
+        // Stale is decided here and nowhere else: a Breakpoint whose line no
+        // longer holds its text is marked, never moved to where the text went.
+        Event::BreakpointFileRead { path, contents } => {
+            for breakpoint in next.breakpoints.iter_mut().filter(|b| b.file == path) {
+                breakpoint.stale =
+                    debug::held(&contents, breakpoint.line) != Some(breakpoint.text.as_str());
+            }
+            vec![]
+        }
+
+        other => return Err((next, other)),
+    };
+    Ok(settle(next, effects, wheeled))
+}
+
 /// AiExited, Resolve
 fn on_resolve(_state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
@@ -5518,7 +6475,7 @@ fn on_resolve(_state: &State, mut next: State, event: Event, wheeled: bool) -> A
                             editor::merge_prompt(&name, &buffer.disk, buffer.shown())
                         });
                     match asked {
-                        Some(prompt) => queue_for_ai(&mut next, prompt),
+                        Some(prompt) => queue_for_ai(&mut next, Enter::Pressed, prompt),
                         None => vec![],
                     }
                 }
@@ -5577,8 +6534,8 @@ fn seek(next: &mut State, sought: Option<reading::Seek>) -> Vec<Effect> {
     }
 }
 
-/// StartReading, StopReading, PlayPause, SetSpeed, NextUtterance,
-/// PreviousUtterance, Speaking
+/// StartReading, StopReading, ReadingEnded, PlayPause, SetSpeed,
+/// NextUtterance, PreviousUtterance, Speaking
 fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         // Superseding, never queueing: whatever was in flight is replaced, the
@@ -5612,7 +6569,15 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
             }
         },
 
+        // Lit only when there was a Reading to act on: a dimmed Chip does
+        // nothing, and a Chip lit for nothing says something happened.
         Event::StopReading => {
+            if next.reading.take().is_some() {
+                next.transport_lit = Some(reading::STOP);
+            }
+            vec![Effect::StopSpeaking]
+        }
+        Event::ReadingEnded => {
             next.reading = None;
             vec![Effect::StopSpeaking]
         }
@@ -5629,15 +6594,22 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
             // button the reader presses twice and then stops believing.
             // `start` still refuses when nothing names a passage, and says so
             // out loud — so this is a route to a Reading, never a silent one.
-            None => return Ok(update(state, Event::StartReading)),
+            None => {
+                let (mut started, effects) = update(state, Event::StartReading);
+                if started.reading.is_some() {
+                    started.transport_lit = Some(reading::PLAY_PAUSE);
+                }
+                return Ok((started, effects));
+            }
             Some(reading) if reading.paused => {
                 reading.paused = false;
-                vec![Effect::SpeakFrom {
-                    at_ms: reading.at_ms,
-                }]
+                let at_ms = reading.at_ms;
+                next.transport_lit = Some(reading::PLAY_PAUSE);
+                vec![Effect::SpeakFrom { at_ms }]
             }
             Some(reading) => {
                 reading.paused = true;
+                next.transport_lit = Some(reading::PLAY_PAUSE);
                 vec![Effect::PauseSpeaking]
             }
         },
@@ -5646,15 +6618,22 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
         // stream it is playing was paced when it was built.
         Event::SetSpeed(speed) => {
             next.speech.speed = speed;
+            next.transport_lit = Some(reading::SPEED);
             vec![]
         }
 
         Event::NextUtterance => {
             let sought = next.reading.as_ref().map(reading::Reading::forward);
+            if sought.is_some() {
+                next.transport_lit = Some(reading::NEXT);
+            }
             seek(&mut next, sought)
         }
         Event::PreviousUtterance => {
             let sought = next.reading.as_ref().map(reading::Reading::back);
+            if sought.is_some() {
+                next.transport_lit = Some(reading::PREVIOUS);
+            }
             seek(&mut next, sought)
         }
 
@@ -5677,6 +6656,57 @@ fn on_reading(state: &State, mut next: State, event: Event, wheeled: bool) -> An
     Ok(settle(next, effects, wheeled))
 }
 
+/// DapReceived, DapStarted, DapGone, DapPortAnswers, StartLaunch, MoveLaunchRow, DebugResume,
+/// DebugStep, DebugStop, DebugRestart, LeaveStepping, AskAboutPause
+fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
+    let effects = match event {
+        Event::DapReceived { json, from } => debug::received(&mut next, &json, from),
+        Event::DapStarted { from } => debug::started(&mut next, from),
+        // An adapter let go after its session ended is the tail of whatever
+        // ended it, so the footer keeps saying why: a launch the adapter
+        // refused would otherwise be explained for exactly as long as it took
+        // the edge to report the process gone. The same for one let go by a
+        // session now Waiting, which lets go on purpose and goes on.
+        Event::DapGone { .. } if state.debug.is_none() || debug::waiting_on(state).is_some() => {
+            next.refusal = state.refusal.clone();
+            vec![]
+        }
+        Event::DapGone { why, from } => debug::gone(&mut next, why, from),
+        Event::DapPortAnswers => debug::reattach(&mut next),
+        Event::StartLaunch(name) => {
+            next.modal = Modal::None;
+            debug::start(&mut next, &name)
+        }
+        Event::DebugResume => debug::resume(&mut next),
+        // Nothing while Running, where the Chip is dimmed: a snapshot of the
+        // last pause is a snapshot of a program that has moved on.
+        Event::AskAboutPause => match debug::snapshot(state) {
+            Some(snapshot) => queue_for_ai(&mut next, Enter::Withheld, snapshot),
+            None => vec![],
+        },
+        Event::DebugStep(step) => debug::step(&mut next, step),
+        Event::DebugStop => debug::stop(&mut next),
+        Event::DebugRestart => debug::restart(&mut next),
+        Event::LeaveStepping => {
+            next.stepping = false;
+            vec![]
+        }
+        Event::MoveLaunchRow(direction) => {
+            let last = state.launches.len().saturating_sub(1);
+            if let Modal::Launches { row } = &mut next.modal {
+                *row = match direction {
+                    Direction::Down => (*row + 1).min(last),
+                    Direction::Up => row.saturating_sub(1),
+                    _ => (*row).min(last),
+                };
+            }
+            vec![]
+        }
+        other => return Err((next, other)),
+    };
+    Ok(settle(next, effects, wheeled))
+}
+
 /// LspReceived, LspGone, CandidatesDue, PointerMoved, HoverDue, FormatBuffer, FormatterAnswered,
 /// MoveCandidate, AcceptCandidate, NextStop, MoveToolRow, InstallTool,
 /// GlobalConfigRead, InstallEnded, RecheckTool, PathProbed
@@ -5690,7 +6720,11 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         Event::ReviewFileRead { path, contents } => {
             lsp::read_for_review(&mut next, &path, &contents)
         }
-        Event::LspGone { language, why } => lsp::gone(&mut next, &language, why),
+        Event::LspGone { language, why } => {
+            let mut effects = lsp::gone(&mut next, &language, why);
+            effects.extend(debug::unhosted(&mut next, &language));
+            effects
+        }
 
         Event::CandidatesDue => lsp::ask(&mut next, lsp::About::Candidates),
 
@@ -5698,8 +6732,8 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         // the tick does: nobody pressed the pointer, and a rest that pulled a
         // wheeled editor back to the cursor would leave it unscrollable for as
         // long as the pointer lay over it.
-        Event::PointerMoved(at) => {
-            next.pointed_at = at;
+        Event::PointerMoved(pointed) => {
+            next.pointed_at = pointed;
             // The box goes with the pointer that asked for it. Asked here
             // rather than left to `settle`, because this arm returns before it:
             // `settle`'s take-down covers everything a person pressed, and this
@@ -5711,7 +6745,7 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
             // A report for the cell the pointer is already on is not a rest
             // interrupted, so the window is left running rather than restarted
             // — a terminal that repeats them would otherwise never let it end.
-            let crossed = at.is_some() && at != state.pointed_at;
+            let crossed = matches!(pointed, Pointed::Text(_)) && pointed != state.pointed_at;
             let effects = match crossed {
                 true => vec![Effect::DwellHover(lsp::DWELL_MS)],
                 false => Vec::new(),
@@ -5720,8 +6754,12 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         }
         Event::HoverDue => {
             let effects = match state.pointed_at {
-                Some(at) => lsp::ask_at(&mut next, lsp::About::Hover, Some(at)),
-                None => Vec::new(),
+                Pointed::Text(at) => {
+                    let mut effects = lsp::ask_at(&mut next, lsp::About::Hover, Some(at));
+                    effects.extend(lsp::value_hover(&mut next, at));
+                    effects
+                }
+                Pointed::Hover | Pointed::Breakpoint(_) | Pointed::Elsewhere => Vec::new(),
             };
             return Ok((next, effects));
         }
@@ -6095,9 +7133,9 @@ fn on_ai_spoke(state: &State, mut next: State, event: Event, wheeled: bool) -> A
         Event::AiSpoke => {
             next.ai_spoken = true;
             match next.pending_prompt.take() {
-                Some(prompt) => vec![Effect::SendKeys {
+                Some((prompt, enter)) => vec![Effect::SendKeys {
                     pane: Pane::Ai,
-                    bytes: injection(&prompt, state.ai_paste),
+                    bytes: injection(&prompt, state.ai_paste, enter),
                 }],
                 None => vec![],
             }
@@ -6283,6 +7321,9 @@ fn on_quit_force(state: &State, mut next: State, event: Event, wheeled: bool) ->
         Event::ToggleRiskList => take_the_corner(state, &mut next, layout::Corner::Risk),
         Event::ToggleBuffersList => take_the_corner(state, &mut next, layout::Corner::Buffers),
         Event::ToggleCursorHistory => take_the_corner(state, &mut next, layout::Corner::History),
+        Event::ToggleBreakpointList => {
+            take_the_corner(state, &mut next, layout::Corner::Breakpoints)
+        }
 
         // The two gestures the pane exists beside, answered wherever Varde's
         // own keys are answered. `history` holds the whole of what a step is,
@@ -6637,7 +7678,7 @@ fn on_drag_row(state: &State, mut next: State, event: Event, wheeled: bool) -> A
                             attempt: attempt + 1,
                             problems,
                         };
-                        queue_for_ai(&mut next, prompt)
+                        queue_for_ai(&mut next, Enter::Pressed, prompt)
                     }
                     _ => {
                         next.story_set = story::Set::Refused {
@@ -6721,6 +7762,7 @@ fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool
                 ];
                 effects.extend(queue_for_ai(
                     &mut next,
+                    Enter::Pressed,
                     story::prompt(&spelling, &out, &context),
                 ));
                 effects
@@ -7080,6 +8122,37 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
                 Event::SetSpeed(reading::next_speed(state.speech.speed)),
             ));
         }
+        // The Variables' Transport, each Chip straight through to the event
+        // its key already had, for the reason the Reading's are: a click and
+        // the key are one gesture, so they are one event and not two paths
+        // that can drift. `next-thread` has no key, so it is no event either.
+        Event::PaneAction(debug::RESUME) => return Ok(update(state, Event::DebugResume)),
+        Event::PaneAction(debug::ASK_AI) => return Ok(update(state, Event::AskAboutPause)),
+        Event::PaneAction(debug::NEXT_THREAD) => debug::next_thread(&mut next),
+        Event::PaneAction(debug::STEP_OVER) => {
+            return Ok(update(state, Event::DebugStep(debug::Step::Over)));
+        }
+        Event::PaneAction(debug::STEP_INTO) => {
+            return Ok(update(state, Event::DebugStep(debug::Step::Into)));
+        }
+        Event::PaneAction(debug::STEP_OUT) => {
+            return Ok(update(state, Event::DebugStep(debug::Step::Out)));
+        }
+        Event::PaneAction(debug::STOP) => return Ok(update(state, Event::DebugStop)),
+        Event::PaneAction(debug::RESTART) => return Ok(update(state, Event::DebugRestart)),
+        // Dimmed with nothing to clear, and a dimmed Chip does nothing.
+        Event::PaneAction(debug::TOGGLE_OUTPUT) => return Ok(update(state, Event::ToggleOutput)),
+        Event::PaneAction(debug::CLEAR_ALL) if !state.breakpoints.is_empty() => {
+            next.breakpoints.clear();
+            vec![Effect::SaveState(state_json(&next))]
+        }
+        // Read off the Chip, as the set-value box is: dimmed, it does nothing.
+        Event::PaneAction(debug::EXCEPTION_CLASS) => {
+            if offers(&debug::transport(state), debug::EXCEPTION_CLASS) {
+                next.modal = Modal::ExceptionClass;
+            }
+            vec![]
+        }
         // Unreachable from any gesture — the key, the icon and the hit-test all
         // read `risk::pane_actions` — and here because a `&str` match has to be
         // exhaustive. Nothing rather than a guess: a pane action is a name, and
@@ -7133,9 +8206,14 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
             vec![]
         }
 
+        // The Shell group comes forward with it: a split asked for while the
+        // Debug group is up is a shell nobody would see, and the Debug group
+        // never grows a split of its own — the Program output is the
+        // program's terminal, not another one of the reader's.
         Event::SplitTerminal => {
             let from = state.split();
             next.focus = Pane::Terminal;
+            next.strip = layout::Group::Shells;
             next.terminal_split = from + 1;
             vec![Effect::SplitTerminal { from }]
         }
@@ -7212,6 +8290,37 @@ fn on_move_selection(state: &State, mut next: State, event: Event, wheeled: bool
             };
             // Another row means the icon you had stepped into is gone — the
             // same rule the tree's and the Risk list's motions follow.
+            next.selected_action = None;
+            vec![]
+        }
+
+        Event::MoveSelection(direction) if state.focus == Pane::Variables => {
+            let last = debug::variables(state).len().saturating_sub(1);
+            next.variables_selection = match direction {
+                Direction::Down => (state.variables_selection + 1).min(last),
+                Direction::Up => state.variables_selection.saturating_sub(1),
+                _ => state.variables_selection.min(last),
+            };
+            vec![]
+        }
+
+        Event::MoveSelection(direction) if state.focus == Pane::Frames => {
+            let last = debug::frame_rows(state).len().saturating_sub(1);
+            next.frames_selection = match direction {
+                Direction::Down => (state.frames_selection + 1).min(last),
+                Direction::Up => state.frames_selection.saturating_sub(1),
+                _ => state.frames_selection.min(last),
+            };
+            vec![]
+        }
+
+        Event::MoveSelection(direction) if state.focus == Pane::Breakpoints => {
+            let last = debug::rows(state).saturating_sub(1);
+            next.breakpoints_selection = match direction {
+                Direction::Down => (state.breakpoints_selection + 1).min(last),
+                Direction::Up => state.breakpoints_selection.saturating_sub(1),
+                _ => state.breakpoints_selection.min(last),
+            };
             next.selected_action = None;
             vec![]
         }
@@ -7393,6 +8502,39 @@ fn on_activate_2(state: &State, mut next: State, event: Event, wheeled: bool) ->
             return Ok((gone, effects));
         }
 
+        Event::Activate if state.focus == Pane::Frames => {
+            debug::choose(&mut next, state.frames_selection)
+        }
+
+        // Enter opens or closes the row the keyboard is on: the one gesture
+        // that walks the tree, which the click below goes through.
+        Event::Activate if state.focus == Pane::Variables => {
+            debug::open(&mut next, state.variables_selection)
+        }
+
+        // The file opened if it is not, and the cursor put on the
+        // Breakpoint's line either way — the Risk list's Enter below, for a
+        // line rather than a Function.
+        Event::Activate
+            if state.focus == Pane::Breakpoints
+                && state.breakpoints_selection < debug::switches(state).len() =>
+        {
+            debug::switch(&mut next, state.breakpoints_selection)
+        }
+        Event::Activate if state.focus == Pane::Breakpoints => match debug::selected(state) {
+            Some(breakpoint) => {
+                next.focus = Pane::Editor;
+                vec![Effect::OpenAt {
+                    path: breakpoint.file.clone(),
+                    at: Place {
+                        line: breakpoint.line,
+                        column: 1,
+                    },
+                }]
+            }
+            None => vec![],
+        },
+
         Event::Activate if state.focus == Pane::Risk => match risk::selected(state) {
             Some(function) => {
                 let path = state.root.join(&function.file);
@@ -7431,6 +8573,67 @@ fn on_activate_2(state: &State, mut next: State, event: Event, wheeled: bool) ->
             next.history_selection = index;
             let (mut opened, effects) = update(&next, Event::Activate);
             opened.focus = Pane::History;
+            return Ok((opened, effects));
+        }
+
+        Event::ClickFrameRow(index) => {
+            next.focus = Pane::Frames;
+            next.frames_selection = index;
+            debug::choose(&mut next, index)
+        }
+
+        // Through the arm Enter takes, for the reason the corner's rows go
+        // through theirs: a click on a row is the same gesture, and a second
+        // mapping is a second place for it to drift. The focus is not given
+        // away afterwards, since opening a row leaves the keyboard in the
+        // tree it opened.
+        Event::ClickVariablesRow(index) => {
+            next.focus = Pane::Variables;
+            next.variables_selection = index;
+            debug::open(&mut next, index)
+        }
+
+        // The keyboard follows the Strip when it was already in it — the pane
+        // it was in is the one going off screen, and keys landing in a pane
+        // nobody can see is the failure focus exists to prevent. From
+        // anywhere else it stays where it was: showing a group is not asking
+        // to leave the file being read.
+        Event::ShowGroup(group) => {
+            next.strip = group;
+            if state.strip.holds(state.focus) {
+                next.focus = group.pane();
+            }
+            vec![]
+        }
+
+        // Nothing is stopped and nothing is resized: the pty keeps its rows
+        // and everything it printed, and `output_width` keeps the border where
+        // the reader left it, so showing it again brings back what was there.
+        Event::ToggleOutput => {
+            next.output_hidden = !state.output_hidden;
+            // Showing it is asking to see it, so the group it lives in comes
+            // forward — the Chip is clickable from the Debug group alone, but
+            // `␣h` is a key like the F-keys and reaches from anywhere.
+            if state.output_hidden {
+                next.strip = layout::Group::Debug;
+            }
+            vec![]
+        }
+
+        // Out of sight it is marked where the reader will look — the `Debug`
+        // Group tab and the Chip that brings it back. On screen it has already
+        // been read, so it marks nothing; `settle` is what clears the mark,
+        // for the reason it clamps the scrolls.
+        Event::OutputSpoke => {
+            next.output_unseen = !showing_output(state);
+            vec![]
+        }
+
+        Event::ClickBreakpointRow(index) => {
+            next.focus = Pane::Breakpoints;
+            next.breakpoints_selection = index;
+            let (mut opened, effects) = update(&next, Event::Activate);
+            opened.focus = Pane::Breakpoints;
             return Ok((opened, effects));
         }
 
@@ -7502,11 +8705,22 @@ fn on_bytes(state: &State, next: State, event: Event, wheeled: bool) -> Answered
             // With no session running the AI pane is an input box, so its keys
             // belong to that — never to the shell.
             Pane::Ai if !state.ai_running => vec![],
-            Pane::Terminal | Pane::Ai => vec![Effect::SendKeys {
+            // And with no program started the Debug group is the Variables
+            // alone, so there is no child there for a key to reach.
+            Pane::Output if !state.output_running => vec![],
+            Pane::Terminal | Pane::Ai | Pane::Output => vec![Effect::SendKeys {
                 pane: state.focus,
                 bytes,
             }],
-            Pane::Tree | Pane::Editor | Pane::Risk | Pane::Buffers | Pane::History => vec![],
+            Pane::Tree
+            | Pane::Editor
+            | Pane::Evaluator
+            | Pane::Risk
+            | Pane::Buffers
+            | Pane::History
+            | Pane::Breakpoints
+            | Pane::Frames
+            | Pane::Variables => vec![],
         },
 
         other => return Err((next, other)),
@@ -7524,12 +8738,18 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
             let asked = match state.focus {
                 Pane::Terminal => Some(state.terminal_paste),
                 Pane::Ai if state.ai_running => Some(state.ai_paste),
-                Pane::Ai
+                Pane::Output if state.output_running => Some(state.output_paste),
+                Pane::Output
+                | Pane::Ai
                 | Pane::Tree
                 | Pane::Editor
+                | Pane::Evaluator
                 | Pane::Risk
                 | Pane::Buffers
-                | Pane::History => None,
+                | Pane::History
+                | Pane::Breakpoints
+                | Pane::Frames
+                | Pane::Variables => None,
             };
             match asked {
                 Some(paste) => vec![Effect::SendKeys {
@@ -7546,7 +8766,9 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
         // spoken. One prompt and nothing else: no Iteration, no tests, no Gate,
         // and nothing committed. The gated loop is `refactor_loop.feature`.
         Event::RowAction(risk::REFACTOR) => match risk::selected(state) {
-            Some(function) => queue_for_ai(&mut next, risk::refactor_prompt(function)),
+            Some(function) => {
+                queue_for_ai(&mut next, Enter::Pressed, risk::refactor_prompt(function))
+            }
             None => vec![],
         },
 
@@ -7555,6 +8777,128 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
         // run on a row is not the deliberate "take me there" that Enter on the
         // row itself is.
         Event::RowAction(history::GO_TO) => return Ok(history::go(state, next)),
+        // The Variables' row Chips, each straight through to what its key
+        // does, for the reason the Transport's are one event: a click and a
+        // key are one gesture.
+        Event::RowAction(debug::SET_VALUE) => {
+            // Read off the Chip itself rather than re-deciding: a dimmed Chip
+            // does nothing, and a box that opened over an adapter that will
+            // not take the value is a box that refuses at Enter.
+            if offers(
+                &debug::row_chips(state, state.variables_selection),
+                debug::SET_VALUE,
+            ) {
+                next.modal = Modal::SetValue;
+            }
+            vec![]
+        }
+        // One value, by the path the Evaluator would take to it, and left
+        // unsubmitted for the reason the whole snapshot is. Read off the Chip,
+        // as set-value is: dimmed, it does nothing.
+        Event::RowAction(debug::ROW_ASK_AI) => {
+            let offered = offers(
+                &debug::row_chips(state, state.variables_selection),
+                debug::ROW_ASK_AI,
+            );
+            match debug::row(state).filter(|_| offered) {
+                Some(row) => queue_for_ai(
+                    &mut next,
+                    Enter::Withheld,
+                    format!("In my Paused program, {} = {}", row.expression, row.value),
+                ),
+                None => vec![],
+            }
+        }
+        // The row's evaluate Chip and the Hover's each open the Evaluator on
+        // their own expression, which is why they are two names rather than
+        // one: the row's is the path to a member and the Hover's is what the
+        // pointer was resting on.
+        Event::RowAction(debug::EVALUATE) => {
+            if let Some(row) = debug::row(state) {
+                debug::open_evaluator(&mut next, row.expression);
+            }
+            vec![]
+        }
+        Event::HoverChip(debug::WATCH) => debug::watch_hovered(&mut next),
+        Event::HoverChip(debug::EVALUATE) => {
+            if let Some(hovered) = state.hover.as_ref().and_then(|hover| hover.value.as_ref()) {
+                debug::open_evaluator(&mut next, hovered.expression.clone());
+            }
+            vec![]
+        }
+        // `\u{2423}e`: the expression is the core's to read off the cursor or
+        // the Selection, which is why the chord carries none.
+        Event::OpenEvaluator => {
+            debug::open_evaluator(&mut next, debug::cursor_expression(state));
+            vec![]
+        }
+        // Normal-mode Enter, the Run Chip and Ctrl+Enter are one gesture, so
+        // they are one event and one arm.
+        Event::RunSnippet | Event::RowAction(debug::RUN) => debug::run(&mut next),
+        // The window's rectangle, from wherever a gesture took it: the mouse
+        // names it whole and the keyboard a cell at a time. Unclamped on the
+        // way in — `settle` places it on the screen and off the Paused line,
+        // which is the one answer to where a window may be — and saved, the
+        // way every other dragged edge in Varde is.
+        Event::PlaceEvaluator(at) => debug::place(&mut next, at),
+        Event::MoveEvaluator(direction) => {
+            debug::arrange(&mut next, direction, debug::Arrange::Moving)
+        }
+        Event::ResizeEvaluator(direction) => {
+            debug::arrange(&mut next, direction, debug::Arrange::Sizing)
+        }
+        Event::SizeSnippet(rows) => {
+            if let Some(evaluator) = next.evaluator.as_mut() {
+                evaluator.snippet_rows = Some(rows);
+            }
+            vec![]
+        }
+        // The mode the letters below act in, and the key that leaves it —
+        // Stepping mode's shape, for its reason: nobody may be trapped in a
+        // mode, so any key the mode does not claim leaves it and then does
+        // what it always did.
+        Event::ArrangeEvaluator(how) => {
+            next.arranging = state.evaluator.is_some().then_some(how);
+            vec![]
+        }
+        Event::LeaveArranging => {
+            next.arranging = None;
+            vec![]
+        }
+        Event::RowAction(debug::CANCEL) => debug::cancel(&mut next),
+        Event::OpenEvaluatedRow(index) => debug::open_evaluated(&mut next, index),
+        Event::OpenHoverRow(index) => debug::open_hovered(&mut next, index),
+        Event::RowAction(debug::COPY_VALUE) => match debug::row(state) {
+            Some(row) => to_clipboard(state, row.value),
+            None => vec![],
+        },
+        Event::RowAction(debug::COPY_EXPRESSION) => match debug::row(state) {
+            Some(row) => to_clipboard(state, row.expression),
+            None => vec![],
+        },
+        Event::RowAction(debug::WATCH) => match debug::row(state) {
+            Some(row) => debug::add_watch(&mut next, row.expression),
+            None => vec![],
+        },
+        Event::RowAction(debug::REMOVE_WATCH) => {
+            if let Some(debug::Of::Watch { index, .. }) = debug::row(state).map(|row| row.of) {
+                debug::remove_watch(&mut next, index);
+            }
+            vec![]
+        }
+        Event::RowAction(debug::EDIT) => {
+            if let Some(chosen) = debug::selected(state).cloned() {
+                debug::open_box(&mut next, chosen.file, chosen.line);
+            }
+            vec![]
+        }
+        Event::RowAction(debug::REMOVE) => match debug::selected(state).cloned() {
+            Some(gone) => {
+                next.breakpoints.retain(|breakpoint| *breakpoint != gone);
+                vec![Effect::SaveState(state_json(&next))]
+            }
+            None => vec![],
+        },
 
         other => return Err((next, other)),
     };
@@ -7584,7 +8928,9 @@ fn on_row_action(state: &State, next: State, event: Event, wheeled: bool) -> Ans
         // than assumed open: the mouse hit-tests the palette's rows only while
         // it is up, and a core that force-opened it here would answer a click
         // nobody could have made.
-        Event::ClickPaletteEntry(_) if state.modal != Modal::Palette => vec![],
+        Event::ClickPaletteEntry(_) if !matches!(state.modal, Modal::Palette | Modal::Chord) => {
+            vec![]
+        }
         Event::ClickPaletteEntry(key) => return Ok(update(state, Event::Key(key))),
         other => return Err((next, other)),
     };
@@ -7631,15 +8977,40 @@ fn walking_position(state: &State) -> (Option<String>, Option<u32>) {
     }
 }
 
-/// Ctrl+U clears the line the CLI is showing — readline's convention, and
-/// best-effort by nature, which is why submitting confirms first. The review
-/// then goes in as one paste, so its line breaks survive and the Enter riding
-/// along is not read as a submit at every newline.
-fn injection(prompt: &str, paste: keys::Paste) -> Vec<u8> {
-    let mut bytes = b"\x15".to_vec();
-    bytes.extend(paste_bytes(prompt, paste));
-    bytes.push(b'\r');
-    bytes
+/// Pressed, Ctrl+U clears the line the CLI is showing — readline's convention,
+/// and best-effort by nature, which is why submitting confirms first. The
+/// prompt then goes in as one paste, so its line breaks survive and the Enter
+/// riding along is not read as a submit at every newline. Withheld, the paste
+/// is all that is sent.
+fn injection(prompt: &str, paste: keys::Paste, enter: Enter) -> Vec<u8> {
+    match enter {
+        Enter::Pressed => {
+            let mut bytes = b"\x15".to_vec();
+            bytes.extend(paste_bytes(prompt, paste));
+            bytes.push(b'\r');
+            bytes
+        }
+        // Nor is the line cleared first: what the user had begun typing is
+        // theirs, and the paste lands after it.
+        Enter::Withheld => paste_bytes(prompt, paste),
+    }
+}
+
+/// Whether a prompt handed to the AI is submitted, or left in its prompt for
+/// the user to send. A Pause snapshot is left: variable values can be real
+/// customer data, so whether they leave the machine is the user's Enter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Enter {
+    Pressed,
+    Withheld,
+}
+
+/// Whether `chips` offer `action` undimmed. An action is read off its Chip
+/// rather than decided a second time: a dimmed Chip does nothing.
+fn offers(chips: &[Chip], action: &str) -> bool {
+    chips
+        .iter()
+        .any(|chip| chip.action == action && chip.tone != Tone::Dimmed)
 }
 
 /// Marked as a paste when the child asked to be told a paste from typing. The
@@ -7654,11 +9025,11 @@ fn paste_bytes(text: &str, paste: keys::Paste) -> Vec<u8> {
     }
 }
 
-/// Queues a prompt for the AI pane, starting a session first when none is
-/// running. Shared by a submitted review and a confirmed story (ADR 0006):
-/// both hand off through the same pane, so both wait behind the same
+/// Queues a prompt for the AI pane, submitted or left for the user to send,
+/// starting a session first when none is running. Every hand-off goes through
+/// the one pane (ADR 0006), so all of them wait behind the same
 /// `pending_prompt` for `AiSpoke` when the CLI has not printed anything yet.
-pub(crate) fn queue_for_ai(next: &mut State, prompt: String) -> Vec<Effect> {
+pub(crate) fn queue_for_ai(next: &mut State, enter: Enter, prompt: String) -> Vec<Effect> {
     let mut effects = Vec::new();
     if !next.ai_running {
         effects.push(Effect::SpawnAi {
@@ -7669,10 +9040,10 @@ pub(crate) fn queue_for_ai(next: &mut State, prompt: String) -> Vec<Effect> {
     if next.ai_spoken {
         effects.push(Effect::SendKeys {
             pane: Pane::Ai,
-            bytes: injection(&prompt, next.ai_paste),
+            bytes: injection(&prompt, next.ai_paste, enter),
         });
     } else {
-        next.pending_prompt = Some(prompt);
+        next.pending_prompt = Some((prompt, enter));
     }
     effects
 }
@@ -7716,7 +9087,11 @@ fn submit(next: &mut State) -> Vec<Effect> {
         path: dir.join(&file),
         contents: review::artifact(&comments, verdict),
     }];
-    effects.extend(queue_for_ai(next, review::prompt(&comments, &named)));
+    effects.extend(queue_for_ai(
+        next,
+        Enter::Pressed,
+        review::prompt(&comments, &named),
+    ));
 
     next.reviews.insert(number);
     while next.reviews.len() > next.retention_limit {
@@ -7790,6 +9165,16 @@ pub fn mode_label(state: &State, buffer: &editor::Buffer) -> &'static str {
     if previewing(state) {
         return "preview";
     }
+    // Ahead of the buffer's own mode, because it is the mode the next
+    // keystroke obeys: in Stepping mode `n`, `i`, `o` and `c` drive the
+    // program rather than the buffer, and the title is where a reader finds
+    // out which of the two they are typing at. Behind the three above for the
+    // reason they are there at all: a surface that refuses every edit is the
+    // more useful thing to say, and Stepping mode adds keys rather than
+    // taking any away.
+    if state.stepping {
+        return "stepping";
+    }
     buffer.mode.as_str()
 }
 
@@ -7828,7 +9213,7 @@ fn relaunching(next: State) -> (State, Vec<Effect>) {
 }
 
 /// What Varde remembers about a project between sessions.
-fn state_json(state: &State) -> String {
+pub(crate) fn state_json(state: &State) -> String {
     let expanded: Vec<String> = state
         .expanded
         .iter()
@@ -7845,19 +9230,59 @@ fn state_json(state: &State) -> String {
             .map(|rest| rest.to_string_lossy().into_owned())
     };
     let buffers: Vec<String> = state.buffers.keys().filter_map(|p| relative(p)).collect();
+    // The text a Breakpoint was set against, so the next start can tell a
+    // line that still holds it from one that does not.
+    let breakpoints: Vec<serde_json::Value> = state
+        .breakpoints
+        .iter()
+        .filter_map(|breakpoint| {
+            let mut saved = serde_json::json!({
+                "file": breakpoint.file.strip_prefix(&state.root).ok()?,
+                "line": breakpoint.line,
+                "text": breakpoint.text,
+            });
+            // Only what was set, so a plain Breakpoint is recorded as it
+            // always was.
+            let properties = &breakpoint.properties;
+            for (key, text) in [
+                ("condition", &properties.condition),
+                ("hit_count", &properties.hit_count),
+                ("log_message", &properties.log_message),
+            ] {
+                if !text.is_empty() {
+                    saved[key] = serde_json::json!(text);
+                }
+            }
+            if properties.suspend == debug::Suspend::All {
+                saved["suspend"] = serde_json::json!("all");
+            }
+            Some(saved)
+        })
+        .collect();
     serde_json::json!({
         "last_view": format!("{:?}", state.view),
         "ai_command": state.ai_command,
         "expanded": expanded,
         "tree_divider": state.tree_divider,
         "ai_width": state.ai_width,
+        "strip_height": state.strip_height,
+        "output_width": state.output_width,
         "ai_pane": format!("{:?}", state.ai_pane),
-        "corner": format!("{:?}", state.corner),
+        "corner": format!("{:?}", debug::resting_corner(state)),
         "cheatsheet": state.cheatsheet,
         "editor_field": state.editor_field,
         "minimap": state.minimap,
         "buffers": buffers,
         "current_buffer": state.current_buffer.as_deref().and_then(relative),
+        "breakpoints": breakpoints,
+        "snippets": state.snippets,
+        "exception_filters": state.exception_filters,
+        "evaluator": state.evaluator_at.map(|at| serde_json::json!({
+            "column": at.x,
+            "row": at.y,
+            "width": at.width,
+            "height": at.height,
+        })),
     })
     .to_string()
 }
@@ -8075,11 +9500,21 @@ fn neighbour(state: &State, direction: Direction) -> Pane {
         (Pane::Editor, Direction::Right) => Pane::Ai,
         (Pane::Ai, Direction::Left) => Pane::Editor,
         (Pane::Tree, Direction::Down) => corner.unwrap_or(Pane::Terminal),
-        (Pane::Editor | Pane::Ai | Pane::Risk | Pane::Buffers | Pane::History, Direction::Down) => {
+        (
+            Pane::Editor
+            | Pane::Ai
+            | Pane::Risk
+            | Pane::Buffers
+            | Pane::History
+            | Pane::Breakpoints,
+            Direction::Down,
+        ) => Pane::Terminal,
+        (Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints, Direction::Up) => {
+            Pane::Tree
+        }
+        (Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints, Direction::Right) => {
             Pane::Terminal
         }
-        (Pane::Risk | Pane::Buffers | Pane::History, Direction::Up) => Pane::Tree,
-        (Pane::Risk | Pane::Buffers | Pane::History, Direction::Right) => Pane::Terminal,
         // The way back in, and the reason every direction is written both ways
         // round: the shell starts where the corner ends, so a pane that could be
         // left sideways and not re-entered was a list only the tree above it
@@ -8115,6 +9550,18 @@ fn selected_row_actions(state: &State) -> Vec<&'static str> {
     if state.focus == Pane::History {
         return history::row_actions(state);
     }
+    if state.focus == Pane::Breakpoints {
+        return debug::row_actions(state);
+    }
+    // The one pane whose row actions are Chips rather than bare icons: the
+    // names come off the Chips so the arrows, the click and the renderer read
+    // one list, and only the dimming is `ui`'s to draw.
+    if state.focus == Pane::Variables {
+        return debug::row_chips(state, state.variables_selection)
+            .into_iter()
+            .map(|chip| chip.action)
+            .collect();
+    }
     match state.tree_selection.as_deref() {
         Some(path) => tree::row_actions(state, path),
         None => Vec::new(),
@@ -8127,17 +9574,120 @@ fn mouse_encoding(state: &State, pane: Pane) -> mouse::Encoding {
     match pane {
         Pane::Terminal => state.terminal_mouse,
         Pane::Ai => state.ai_mouse,
-        Pane::Tree | Pane::Editor | Pane::Risk | Pane::Buffers | Pane::History => {
-            mouse::Encoding::None
-        }
+        Pane::Output => state.output_mouse,
+        Pane::Tree
+        | Pane::Editor
+        | Pane::Evaluator
+        | Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Variables => mouse::Encoding::None,
     }
+}
+
+/// Whether the Program output is on screen: the Debug group up, a pty behind
+/// it, and not hidden. One answer, read by the layout, by the mark that says
+/// output arrived unseen and by the Chip that brings it back, so the three
+/// cannot disagree about whether the reader can see it.
+pub fn showing_output(state: &State) -> bool {
+    state.strip == layout::Group::Debug && state.output_running && !state.output_hidden
+}
+
+/// One Group tab as it is drawn. Lit and marked are two facts rather than one
+/// [`Tone`]: the Debug group can be up with the Program output hidden behind
+/// it, which is a tab that is both, and a single tone would have to drop one
+/// of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tab {
+    pub group: layout::Group,
+    /// Whether this is the group the Strip is showing.
+    pub lit: bool,
+    /// Whether it holds output the reader has not seen.
+    pub unseen: bool,
+}
+
+/// The Group tabs on the Strip's top border, in the order they are drawn. The
+/// Debug group only while a session exists, for the reason its chords are
+/// offered only then: a tab that shows an empty Strip is a tab that lies.
+pub fn group_tabs(state: &State) -> Vec<Tab> {
+    [layout::Group::Shells]
+        .into_iter()
+        .chain(state.debug.as_ref().map(|_| layout::Group::Debug))
+        .map(|group| Tab {
+            group,
+            lit: group == state.strip,
+            // Only the group the Program output lives in has anything unseen
+            // to say: the shells are the reader's own and nothing marks them.
+            unseen: group == layout::Group::Debug && state.output_unseen,
+        })
+        .collect()
+}
+
+/// What the panes take out of the shell, as `state` has it: the AI pane's
+/// shape, the corner's occupant, the Strip's group and its height. One answer
+/// for the five places that ask `layout::panes` where the panes are — the
+/// renderer, the mouse, the two clamps here and the World — because the four
+/// travel together and a fifth of them added to one caller and not the others
+/// is a pane drawn where nothing hit-tests it.
+pub fn shapes(state: &State) -> layout::Shapes {
+    layout::Shapes {
+        ai: state.ai_pane,
+        corner: state.corner,
+        group: state.strip,
+        strip: state.strip_height.map(|height| height as u16),
+        output: match showing_output(state) {
+            true => layout::Output::Shown(state.output_width.map(|width| width as u16)),
+            false => layout::Output::Away,
+        },
+        evaluator: state
+            .evaluator
+            .is_some()
+            .then_some(state.evaluator_at)
+            .flatten(),
+    }
+}
+
+/// Whether the Strip's Transport is on screen. The Debug group's border
+/// carries it; with the Shell group up — where a session that ended leaves the
+/// Strip — the lone restart Chip is still drawn, because a control reachable
+/// only while the thing it restarts is running is one nobody can press. One
+/// answer for `ui`, which draws it, and `mouse`, which hit-tests it: two would
+/// be a click landing on a Chip nobody can see.
+pub fn showing_transport(state: &State) -> bool {
+    state.strip == layout::Group::Debug || state.debug.is_none()
+}
+
+/// Where the Variables' Transport is drawn and hit-tested: the Strip's own
+/// rectangle, less the columns the Group tabs keep at its right-hand end. One
+/// derivation, for the reason [`layout::chip_labels`] is one — two would be a
+/// Chip drawn where nothing clicks it.
+pub fn transport_area(state: &State, strip: layout::Area) -> layout::Area {
+    layout::Area {
+        width: strip
+            .width
+            .saturating_sub(layout::strip_width(&group_labels(state))),
+        ..strip
+    }
+}
+
+/// The Group tabs as they are drawn, padded a column each side: `ui` draws
+/// these and `mouse` hit-tests them through `layout::strip_at`, so the two
+/// cannot disagree about which columns a tab is in — the reason a Transport's
+/// Chip labels are built in one place too.
+pub fn group_labels(state: &State) -> Vec<String> {
+    group_tabs(state)
+        .iter()
+        .map(|tab| format!(" {} ", tab.group.label()))
+        .collect()
 }
 
 /// Where the panes are, for the two things the core measures against them: how
 /// many rows a list shows, and how many rows the Risk list shows. `ui` derives
 /// its own rectangles from the same function — one layout, so a clamp and a
 /// drawn pane can never disagree about how tall it is.
-fn panes_of(state: &State) -> layout::Layout {
+pub(crate) fn panes_of(state: &State) -> layout::Layout {
     layout::panes(
         state.screen_width,
         state.screen_height,
@@ -8145,11 +9695,15 @@ fn panes_of(state: &State) -> layout::Layout {
         state.ai_width.map(|width| width as u16),
         story::band_height(state),
         story::step_menu_width(state),
-        layout::Shapes {
-            ai: state.ai_pane,
-            corner: state.corner,
-        },
+        shapes(state),
     )
+}
+
+/// How many rows a pane in the Strip shows: its two border rows and nothing
+/// else, for the reason [`corner_rows`] is the one answer for every occupant
+/// of the corner.
+pub fn strip_rows(state: &State) -> usize {
+    panes_of(state).terminal.height.saturating_sub(2) as usize
 }
 
 /// How many rows the pane in the corner shows. One answer for every occupant,
@@ -8431,10 +9985,7 @@ pub fn preview_columns(state: &State) -> usize {
         state.ai_width.map(|width| width as u16),
         story::band_height(state),
         story::step_menu_width(state),
-        layout::Shapes {
-            ai: state.ai_pane,
-            corner: state.corner,
-        },
+        shapes(state),
     );
     // Borders only. A Preview has no gutter at all — `layout::gutter` is where
     // that is said once, for the renderer and the hit-test both.
@@ -8951,9 +10502,7 @@ fn normal_mode(state: &State) -> bool {
 /// something else, the way it does in Story view before anything is loaded.
 pub(crate) fn editor_inserting(state: &State) -> bool {
     state
-        .current_buffer
-        .as_ref()
-        .and_then(|path| state.buffers.get(path))
+        .edited()
         .is_some_and(|buffer| buffer.mode == editor::Mode::Insert)
 }
 
@@ -10211,20 +11760,30 @@ mod tests {
     /// cannot be told a paste from typing gets the text bare — the same contract
     /// as an ordinary paste — so its newlines are its own to interpret.
     #[test]
-    fn the_review_injection_clears_pastes_and_submits_in_one_write() {
+    fn an_injection_is_one_write_and_only_a_pressed_one_clears_and_submits() {
         assert_eq!(
-            injection("one\ntwo", keys::Paste::Bracketed),
+            injection("one\ntwo", keys::Paste::Bracketed, Enter::Pressed),
             b"\x15\x1b[200~one\ntwo\x1b[201~\r".to_vec()
         );
         assert_eq!(
-            injection("one\ntwo", keys::Paste::Bare),
+            injection("one\ntwo", keys::Paste::Bare, Enter::Pressed),
             b"\x15one\ntwo\r".to_vec()
         );
         // A review quoting a filename that carries the end marker cannot close
         // its own bracketing and hand the rest to the child as keys.
         assert_eq!(
-            injection("safe\x1b[201~rm -rf /", keys::Paste::Bracketed),
+            injection(
+                "safe\x1b[201~rm -rf /",
+                keys::Paste::Bracketed,
+                Enter::Pressed
+            ),
             b"\x15\x1b[200~saferm -rf /\x1b[201~\r".to_vec()
+        );
+        // Withheld, the paste is all of it: nothing the user had typed is
+        // cleared, and nothing is sent on their behalf.
+        assert_eq!(
+            injection("one\ntwo", keys::Paste::Bracketed, Enter::Withheld),
+            b"\x1b[200~one\ntwo\x1b[201~".to_vec()
         );
     }
 
@@ -10455,7 +12014,44 @@ mod tests {
             let mut buffer = editor::Buffer::open("", false, editor::DEFAULT_TAB_WIDTH);
             buffer.mode = mode;
             assert_eq!(mode_label(&state, &buffer), expected);
+            // Stepping mode outranks the buffer's own mode and nothing else:
+            // `n`, `i`, `o` and `c` drive the program rather than the buffer,
+            // so naming the buffer's mode there advertises keys that are not
+            // on offer — but a walk refuses every edit, which is the more
+            // useful thing to say. Until the Variables' title exists this is
+            // where Varde says the mode is on at all.
+            let stepping = State {
+                stepping: true,
+                ..state
+            };
+            let expected = match walking {
+                true => "read-only",
+                false => "stepping",
+            };
+            assert_eq!(mode_label(&stepping, &buffer), expected);
         }
+    }
+
+    /// Which chord leaves the keyboard in Stepping mode and which does not.
+    /// `␣q` is the chord that ends the session the mode belongs to, so it is
+    /// the one that leaves it off: in the interval between the request and the
+    /// adapter letting go, the mode is four letters swallowed for a session on
+    /// its way out. With no session the mode never opens at all, because `n`
+    /// is find-next the rest of the time.
+    #[test]
+    fn a_chord_leaves_stepping_mode_on_unless_it_ends_the_session() {
+        let chord = |state: &State, key| {
+            let waiting = State {
+                modal: Modal::Chord,
+                ..state.clone()
+            };
+            update(&waiting, Event::Key(key)).0
+        };
+        let paused = debug::paused(State::default());
+        assert!(chord(&paused, 'n').stepping);
+        assert!(chord(&paused, 'b').stepping);
+        assert!(!chord(&paused, 'q').stepping);
+        assert!(!chord(&State::default(), 'b').stepping);
     }
 
     /// The claim the guard in `update` makes that no list of keys could: an
@@ -10500,6 +12096,167 @@ mod tests {
             let buffer = editor::Buffer::open("", false, editor::DEFAULT_TAB_WIDTH);
             assert_eq!(mode_label(&state, &buffer), expected);
         }
+    }
+
+    /// Space waits for a chord only in plain normal mode over Source: over a
+    /// half-typed operator it would swallow the operator's second key, and a
+    /// Preview's rows are not lines a Breakpoint could be set on.
+    #[test]
+    fn space_opens_the_chord_hint_only_over_source_in_plain_normal_mode() {
+        let source = update(
+            &State::default(),
+            Event::BufferOpened {
+                path: PathBuf::from("/w/a.rs"),
+                contents: "one\ntwo\n".to_string(),
+                preview: false,
+                at: None,
+            },
+        )
+        .0;
+        let spaced = |state: &State| update(state, Event::EditorKey(' ')).0.modal;
+        assert_eq!(spaced(&source), Modal::Chord);
+        let operator = update(&source, Event::EditorKey('d')).0;
+        assert_eq!(spaced(&operator), Modal::None);
+        assert_eq!(spaced(&previewing_readme("# Title\n")), Modal::None);
+    }
+
+    /// Moving is saved as it happens, not only at the next toggle or at quit:
+    /// state naming the old line would make a Breakpoint that followed its
+    /// line read as Stale at the next start.
+    #[test]
+    fn a_breakpoint_moved_by_an_edit_is_remembered_where_it_went() {
+        let source = update(
+            &State::default(),
+            Event::BufferOpened {
+                path: PathBuf::from("/a.rs"),
+                contents: "one\ntwo".to_string(),
+                preview: false,
+                at: None,
+            },
+        )
+        .0;
+        let set = update(&source, Event::ToggleBreakpoint(2)).0;
+        let (moved, effects) = update(&set, Event::EditorKey('O'));
+        assert_eq!(moved.breakpoints[0].line, 3);
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::SaveState(json) if json.contains("\"line\":3")
+        )));
+    }
+
+    /// The list's keys reach what its Chips do: `d` the row's, `D` the
+    /// Transport's. Removing the last row leaves the highlight on the row that
+    /// is now last, and clearing with nothing to clear is dimmed and does
+    /// nothing — not even a save.
+    #[test]
+    fn the_breakpoint_lists_keys_remove_one_and_clear_them_all() {
+        let state = State {
+            breakpoints: ["/w/b.rs", "/w/a.rs", "/w/c.rs"]
+                .into_iter()
+                .map(|file| debug::Breakpoint {
+                    file: PathBuf::from(file),
+                    line: 1,
+                    text: String::new(),
+                    stale: false,
+                    properties: Default::default(),
+                })
+                .collect(),
+            ..State::default()
+        };
+        let shown = update(&state, Event::ToggleBreakpointList).0;
+        assert_eq!(shown.focus, Pane::Breakpoints);
+        let last = update(&update(&shown, Event::Key('j')).0, Event::Key('j')).0;
+        assert_eq!(
+            debug::selected(&last).unwrap().file,
+            PathBuf::from("/w/c.rs")
+        );
+        let (removed, effects) = update(&last, Event::Key('d'));
+        assert!(matches!(effects[..], [Effect::SaveState(_)]));
+        assert_eq!(
+            debug::selected(&removed).unwrap().file,
+            PathBuf::from("/w/b.rs")
+        );
+        let cleared = update(&removed, Event::Key('D')).0;
+        assert!(cleared.breakpoints.is_empty());
+        let clear_all = debug::transport(&cleared)
+            .into_iter()
+            .find(|chip| chip.action == debug::CLEAR_ALL)
+            .expect("the clear-all Chip");
+        assert_eq!(clear_all.tone, Tone::Dimmed);
+        assert_eq!(update(&cleared, Event::Key('D')).1, vec![]);
+    }
+
+    /// The list's `e` is its `✎` Chip: the box opens on the row the keyboard
+    /// is on, and what Enter keeps is saved with the Breakpoint.
+    #[test]
+    fn the_breakpoint_lists_e_opens_the_box_on_its_row() {
+        let state = State {
+            breakpoints: ["/w/a.rs", "/w/b.rs"]
+                .into_iter()
+                .map(|file| debug::Breakpoint {
+                    file: PathBuf::from(file),
+                    line: 1,
+                    text: String::new(),
+                    stale: false,
+                    properties: Default::default(),
+                })
+                .collect(),
+            ..State::default()
+        };
+        let shown = update(&state, Event::ToggleBreakpointList).0;
+        let open = update(&update(&shown, Event::Key('j')).0, Event::Key('e')).0;
+        assert!(matches!(
+            &open.modal,
+            Modal::Breakpoint { file, .. } if file == Path::new("/w/b.rs")
+        ));
+        let written = update(&open, Event::BreakpointDraft("n > 1".to_string())).0;
+        let (kept, effects) = update(&written, Event::ConfirmBreakpoint);
+        assert_eq!(kept.breakpoints[1].properties.condition, "n > 1");
+        assert!(matches!(
+            &effects[..],
+            [Effect::SaveState(json)] if json.contains("\"condition\":\"n > 1\"")
+        ));
+    }
+
+    /// `␣B` on a line with no Breakpoint sets one and opens its box, so it is
+    /// never a key that does nothing.
+    #[test]
+    fn opening_the_box_on_a_bare_line_sets_a_breakpoint_there() {
+        let source = update(
+            &State::default(),
+            Event::BufferOpened {
+                path: PathBuf::from("/a.rs"),
+                contents: "one\ntwo".to_string(),
+                preview: false,
+                at: None,
+            },
+        )
+        .0;
+        let (open, effects) = update(&source, Event::EditBreakpoint(2));
+        assert_eq!(open.breakpoints[0].line, 2);
+        assert!(matches!(open.modal, Modal::Breakpoint { line: 2, .. }));
+        assert!(matches!(effects[..], [Effect::SaveState(_)]));
+    }
+
+    /// A line the buffer does not have is not a place for a Breakpoint: a
+    /// click below a short file's last line sets nothing.
+    #[test]
+    fn a_breakpoint_is_only_set_on_a_line_the_buffer_has() {
+        let source = update(
+            &State::default(),
+            Event::BufferOpened {
+                path: PathBuf::from("/w/a.rs"),
+                contents: "one\ntwo".to_string(),
+                preview: false,
+                at: None,
+            },
+        )
+        .0;
+        let (past, effects) = update(&source, Event::ToggleBreakpoint(9));
+        assert!(past.breakpoints.is_empty());
+        assert!(effects.is_empty());
+        let (set, _) = update(&source, Event::ToggleBreakpoint(2));
+        assert_eq!(set.breakpoints[0].text, "two");
     }
 
     /// The pane a Preview lays out to, arrived at through the events the edge
@@ -10709,6 +12466,50 @@ mod tests {
         assert_eq!(effects, vec![Effect::StopSpeaking]);
     }
 
+    /// ADR 0022. The Chip lit is the Transport action taken last and moves
+    /// only when another is taken — nothing unlights it on its own — while a
+    /// dimmed Chip pressed did nothing, so it lights nothing either.
+    #[test]
+    fn the_last_transport_action_taken_is_the_one_lit() {
+        let state = State {
+            reading: Some(reading::Reading {
+                utterances: reading::utterances("One. Two."),
+                offsets: vec![0, 1_550],
+                at_ms: 0,
+                paused: false,
+                file: None,
+            }),
+            ..State::default()
+        };
+        let lit = |state: &State, event| update(state, event).0.transport_lit;
+        assert_eq!(lit(&state, Event::PlayPause), Some(reading::PLAY_PAUSE));
+        assert_eq!(lit(&state, Event::NextUtterance), Some(reading::NEXT));
+        assert_eq!(
+            lit(&state, Event::PreviousUtterance),
+            Some(reading::PREVIOUS)
+        );
+        assert_eq!(lit(&state, Event::SetSpeed(1.5)), Some(reading::SPEED));
+        let (stopped, _) = update(&state, Event::StopReading);
+        assert_eq!(stopped.transport_lit, Some(reading::STOP));
+        assert_eq!(
+            update(&stopped, Event::Tick).0.transport_lit,
+            Some(reading::STOP)
+        );
+        // A Reading that ran to its end, or whose player never started, was
+        // not stopped by anybody, and a play that started nothing — no
+        // Selection to read — was refused out loud rather than done.
+        let (ended, _) = update(&state, Event::ReadingEnded);
+        assert_eq!((ended.reading, ended.transport_lit), (None, None));
+        assert_eq!(lit(&State::default(), Event::PlayPause), None);
+        for dimmed in [
+            Event::NextUtterance,
+            Event::PreviousUtterance,
+            Event::StopReading,
+        ] {
+            assert_eq!(lit(&State::default(), dimmed), None);
+        }
+    }
+
     /// A position report is what the machine did, so it is the tick's
     /// exception and not a second rule: the clamp earns its keep by covering
     /// everything a *person* did. A report arriving on the spinner's cadence
@@ -10753,15 +12554,113 @@ mod tests {
             editor_scroll: 12,
             ..State::default()
         };
-        let (moved, effects) = update(&state, Event::PointerMoved(Some(at)));
+        let (moved, effects) = update(&state, Event::PointerMoved(Pointed::Text(at)));
         assert_eq!(moved.editor_scroll, 12, "the pointer pulled the wheel back");
-        assert_eq!(moved.pointed_at, Some(at));
+        assert_eq!(moved.pointed_at, Pointed::Text(at));
         assert_eq!(effects, vec![Effect::DwellHover(lsp::DWELL_MS)]);
-        let (rested, effects) = update(&moved, Event::PointerMoved(Some(at)));
+        let (rested, effects) = update(&moved, Event::PointerMoved(Pointed::Text(at)));
         assert!(effects.is_empty(), "the window was armed a second time");
         let (asked, effects) = update(&rested, Event::HoverDue);
         assert_eq!(asked.editor_scroll, 12, "the rest pulled the wheel back");
         assert!(effects.is_empty(), "there is no server to ask");
+    }
+
+    /// A box of `lines` rows asked about line 2 of an open file, placed from
+    /// line 3 — the state every wheel over a Hover below arrives into.
+    fn hovering(lines: usize) -> State {
+        let path = PathBuf::from("/w/src/lib.rs");
+        let mut state = State {
+            screen_width: 120,
+            screen_height: 26,
+            current_buffer: Some(path.clone()),
+            ..State::default()
+        };
+        state.buffers.insert(
+            path.clone(),
+            editor::Buffer::open(
+                &(1..=40).map(|n| format!("line {n}\n")).collect::<String>(),
+                false,
+                4,
+            ),
+        );
+        state.hover = Some(lsp::Hover {
+            lines: vec![
+                preview::Row {
+                    kind: preview::RowKind::Paragraph,
+                    line: 1,
+                    pieces: Vec::new(),
+                    refused: None,
+                };
+                lines
+            ],
+            from: 3,
+            asked: lsp::Ask {
+                path,
+                place: Place { line: 2, column: 9 },
+                revision: 0,
+                about: lsp::About::Hover,
+            },
+            first: 0,
+            focused: false,
+            value: None,
+        });
+        state.pointed_at = Pointed::Hover;
+        state
+    }
+
+    /// The wheel stops with the last line against the bottom border: the
+    /// pane's 18 rows are 16 of text inside the box's border, so a 30-line
+    /// reply has 14 rows to scroll and a reply that fits has none.
+    #[test]
+    fn the_wheel_scrolls_a_hover_as_far_as_its_last_line() {
+        let mut state = hovering(30);
+        for _ in 0..20 {
+            state = update(&state, Event::ScrollHover(Direction::Down)).0;
+        }
+        assert_eq!(state.hover.as_ref().map(|hover| hover.first), Some(14));
+        let state = update(&state, Event::ScrollHover(Direction::Up)).0;
+        assert_eq!(state.hover.as_ref().map(|hover| hover.first), Some(13));
+        let fits = update(&hovering(3), Event::ScrollHover(Direction::Down)).0;
+        assert_eq!(fits.hover.as_ref().map(|hover| hover.first), Some(0));
+    }
+
+    /// Scrolling the box is the wheel, and the wheel is the exception to the
+    /// clamp: an editor wheeled away from the cursor stays where it was, or
+    /// the box would jump with the lines it sits over.
+    #[test]
+    fn scrolling_a_hover_leaves_a_wheeled_editor_where_it_was() {
+        let state = State {
+            editor_scroll: 2,
+            ..hovering(30)
+        };
+        let (scrolled, _) = update(&state, Event::ScrollHover(Direction::Down));
+        assert_eq!(
+            scrolled.editor_scroll, 2,
+            "the editor was pulled back to the cursor"
+        );
+    }
+
+    /// Escape with the keyboard in a Hover closes the box and nothing behind
+    /// it: a Story being authored keeps waiting, which the bare Escape it
+    /// shares an event with would cancel.
+    #[test]
+    fn escape_in_a_hover_closes_the_box_and_nothing_else() {
+        let mut state = State {
+            view: View::Story,
+            story_set: story::Set::Authoring {
+                spelling: "HEAD".to_string(),
+            },
+            ..hovering(3)
+        };
+        if let Some(hover) = state.hover.as_mut() {
+            hover.focused = true;
+        }
+        let (left, _) = update(&state, Event::Cancel);
+        assert_eq!(left.hover, None);
+        assert!(
+            matches!(left.story_set, story::Set::Authoring { .. }),
+            "the wait was dropped"
+        );
     }
 
     /// The other half of ticket 07's guard: a markdown buffer already crossed

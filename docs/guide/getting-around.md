@@ -50,8 +50,8 @@ Edit view has four panes:
 | AI | right | an AI CLI, or the box that starts one |
 
 Beneath the tree there is one more slot, the Corner. It holds one occupant at a time — the Risk
-list, the Buffers pane or the Cursor history — or nothing; asking for one while another is showing
-replaces it.
+list, the Buffers pane, the Cursor history or the Breakpoint list — or nothing; asking for one while
+another is showing replaces it.
 
 The palette switches between three views:
 
@@ -84,6 +84,7 @@ The palette is grouped. Press the letter, or click the row:
 | | `t` | Terminal | focus the terminal |
 | | `k` | Risk | show or hide the Risk list in the Corner ([risk.md](risk.md)) |
 | | `y` | Cursor history | show or hide the list of places you jumped from ([editing.md](editing.md)) |
+| | `b` | Breakpoints | show or hide every Breakpoint in the workspace: Enter goes to one, `d` removes it, `D` clears them all |
 | | `a` | AI | focus the AI pane — it does not start a session |
 | | `l` | Tall | swap the AI pane between beside the editor and the whole right-hand edge |
 | Views | `e` | Edit | switch to Edit view |
@@ -91,6 +92,7 @@ The palette is grouped. Press the letter, or click the row:
 | | `s` | Story | switch to Story view |
 | Project | `f` | Find | project-wide search, the same as `Ctrl+F` |
 | | `v` | Tools | everything Varde runs, and what is installed ([language-intelligence.md](language-intelligence.md)) |
+| | `n` | Launch | start a Launch configuration under the debugger ([debugging.md](debugging.md)) |
 | | `c` | Collapse | close every open folder in the tree |
 | Help | `h` | Keys | take the Cheatsheet down or put it back, the same as `:help` |
 | | `u` | Update | rebuild Varde from its checkout, the same as `:update` |

@@ -37,6 +37,7 @@ Feature: The command palette
       | Panes   | t   | Terminal       |
       | Panes   | k   | Risk           |
       | Panes   | y   | Cursor history |
+      | Panes   | b   | Breakpoints    |
       | Panes   | a   | AI             |
       | Panes   | l   | Tall           |
       | Views   | e   | Edit           |
@@ -44,6 +45,7 @@ Feature: The command palette
       | Views   | s   | Story          |
       | Project | f   | Find           |
       | Project | v   | Tools          |
+      | Project | n   | Launch         |
       | Project | c   | Collapse       |
       | Help    | h   | Keys           |
       | Help    | u   | Update         |

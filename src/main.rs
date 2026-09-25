@@ -563,11 +563,24 @@ struct Status {
     tone: ui::Tone,
 }
 
+/// Where a Debug adapter answers: the port it listens on, or the command that
+/// starts another one over stdio, which is the only way to have a second
+/// conversation with an adapter that has no port.
+#[derive(Clone)]
+enum Again {
+    Dial(u16),
+    Spawn { command: String, args: Vec<String> },
+}
+
 struct Edge {
     /// The terminal strip's shells, side by side, never empty while the loop
     /// runs: the last one exiting is how Varde ends.
     shells: Vec<pty::Pane>,
     ai: Option<pty::Pane>,
+    /// The debugged program's own terminal, in the Debug group beside the
+    /// Variables. Held here and nowhere else, so the core is told it exists
+    /// rather than remembering it was asked for.
+    output: Option<pty::Pane>,
     root: PathBuf,
     /// The Bare workspace's Sidecar, as `main` derived it — the edge's own copy
     /// of what it told the core, for the effects it executes against a path of
@@ -582,6 +595,9 @@ struct Edge {
     /// Parsed tokens for the current buffer, kept until it changes. Re-parsing
     /// a whole file every frame is what made a big file feel heavy.
     highlighted: (PathBuf, u64, Vec<Vec<varde::highlight::Token>>),
+    /// The lines a Run mark stands on, found with the tokens and for their
+    /// reason: a syntax tree is a parse too.
+    run_marks: Vec<usize>,
     /// The new and old sides of the diff under review, each parsed whole when
     /// the diff was read. No key: a diff is only ever on screen because a
     /// `ReadDiff` put it there, and that is the one place either side changes.
@@ -637,6 +653,26 @@ struct Edge {
     /// never remembers that a process exists — the failure `ai_running` was, in
     /// a second shape (`docs/adr/0011-a-language-server-is-a-second-hosted-child.md`).
     servers: BTreeMap<String, rpc::Server>,
+    /// The Debug adapter, held for as long as it is alive — the one fact about
+    /// a Debug session only the edge can observe, told to the core as
+    /// `Event::DapStarted` and `Event::DapGone`.
+    adapter: Option<rpc::Adapter>,
+    /// A server-reached adapter spawned and not yet listening. Holding it is
+    /// holding the adapter: nothing is told the core until it connects, and
+    /// letting it go is a site that stops holding one.
+    connecting: Option<Receiver<std::io::Result<rpc::Adapter>>>,
+    /// How the adapter was reached, so a child session's connection to it is
+    /// reached the same way.
+    again: Option<Again>,
+    /// The child sessions' connections, by the number the core gave each, and
+    /// the ones still being made. The adapter's: let go wherever it is.
+    children: BTreeMap<usize, rpc::Adapter>,
+    joining: BTreeMap<usize, Receiver<std::io::Result<rpc::Adapter>>>,
+    /// A Waiting session's port being tried, off the main loop because a
+    /// remote host that drops the packets holds a connect for as long as its
+    /// timeout, and when it was last tried.
+    probe: Option<Receiver<bool>>,
+    probed: Instant,
     /// Which of the configured commands a probe of this process's `PATH` found,
     /// and `None` for "not probed since Tools was last opened" —
     /// which is what makes reopening the list a fresh answer rather than a
@@ -776,7 +812,14 @@ fn run(
     let (released_tx, released_rx) = channel();
     let (replaced_tx, replaced_rx) = channel();
     let mut edge = Edge {
-        shells: vec![pty::Pane::spawn(None, &root, size.height / 3, size.width)?],
+        output: None,
+        shells: vec![pty::Pane::spawn(
+            &[],
+            &root,
+            &BTreeMap::new(),
+            size.height / 3,
+            size.width,
+        )?],
         ai: None,
         root: root.clone(),
         sidecar: state.sidecar.clone(),
@@ -792,6 +835,7 @@ fn run(
         pointer: mouse::Pointer::default(),
         cursor_style: "",
         highlighted: (PathBuf::new(), u64::MAX, Vec::new()),
+        run_marks: Vec::new(),
         diff_sides: (Vec::new(), Vec::new()),
         previewed: (PathBuf::new(), u64::MAX, 0, Vec::new()),
         faint: ui::faint(palette),
@@ -799,6 +843,7 @@ fn run(
         candidates_due: None,
         hover_due: None,
         servers: BTreeMap::new(),
+        adapter: None,
         on_path: None,
         git: None,
         facts: None,
@@ -817,6 +862,12 @@ fn run(
         replaced: replaced_tx,
         exe,
         relaunch: false,
+        probe: None,
+        probed: Instant::now(),
+        connecting: None,
+        again: None,
+        children: BTreeMap::new(),
+        joining: BTreeMap::new(),
     };
 
     let (watch_tx, watch_rx) = channel();
@@ -888,6 +939,8 @@ fn run(
         dirty |= queue_due_windows(&mut edge, &mut queue);
         dirty |= drain_panes(&state, &mut edge, &mut queue);
         dirty |= drain_servers(&mut edge, &mut queue);
+        dirty |= drain_adapter(&mut edge, &mut queue);
+        dirty |= probe_waiting(&state, &mut edge, &mut queue);
         start_voice(&state, &mut edge);
         reap_player(&mut edge, &mut queue);
         queue_position(&edge, &mut last_position, &mut queue);
@@ -1157,14 +1210,24 @@ fn resize_panes(
     }
     edge.area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
     let areas = ui::areas(edge.area, state);
+    // One rule for every hosted pane, off the rectangles the renderer draws:
+    // `pty_size` clamps the grid vt100 would panic on and answers `None` for a
+    // pane with no rectangle at all — the Program output while it is hidden,
+    // which squeezed to the floor would reflow everything it printed.
+    let fit = |pane: &mut pty::Pane, width, height| {
+        if let Some((rows, cols)) = varde::layout::pty_size(width, height) {
+            pane.resize(rows, cols);
+        }
+    };
     for (shell, area) in edge.shells.iter_mut().zip(&areas.splits) {
-        shell.resize(area.height.saturating_sub(2), area.width.saturating_sub(2));
+        fit(shell, area.width, area.height);
     }
     if let Some(ai) = edge.ai.as_mut() {
-        ai.resize(
-            areas.ai.height.saturating_sub(2),
-            areas.ai.width.saturating_sub(2),
-        );
+        fit(ai, areas.ai.width, areas.ai.height);
+    }
+    if let Some(output) = edge.output.as_mut() {
+        let area = areas.panes.output;
+        fit(output, area.width, area.height);
     }
     dirty
 }
@@ -1193,6 +1256,21 @@ fn drain_panes(state: &State, edge: &mut Edge, queue: &mut VecDeque<Event>) -> b
     // command held for a fresh split waits for, as a review waits for the AI.
     for (split, _) in spoke.iter().enumerate().filter(|(_, spoke)| **spoke) {
         queue.push_back(Event::ShellSpoke(split));
+    }
+    if let Some(output) = edge.output.as_mut() {
+        // Every arrival, not only the first: out of sight each one is what
+        // marks the `Debug` Group tab, and the core is the one that decides
+        // whether the reader can see it.
+        if output.drain() {
+            dirty = true;
+            queue.push_back(Event::OutputSpoke);
+        }
+        // The program ended, so the pane goes with it — the Debug group is the
+        // Variables alone again.
+        if !output.alive {
+            edge.output = None;
+            dirty = true;
+        }
     }
     let Some(ai) = edge.ai.as_mut() else {
         return dirty;
@@ -1242,6 +1320,162 @@ fn drain_servers(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
         });
     }
     dirty
+}
+
+/// Whatever the Debug adapter has said since the last pass, and whether it is
+/// still there — `drain_servers` for the one adapter a session holds.
+fn drain_adapter(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
+    if let Some(connected) = &edge.connecting {
+        let why = match connected.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Ok(Ok(adapter)) => {
+                edge.connecting = None;
+                edge.adapter = Some(adapter);
+                queue.push_back(Event::DapStarted { from: 0 });
+                return true;
+            }
+            Ok(Err(error)) => format!("the Debug adapter never listened: {error}"),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                "the Debug adapter's connection was lost".to_string()
+            }
+        };
+        // The notice says the adapter failed; the reason is the edge's alone,
+        // so it goes to the status line with it.
+        edge.status = Status {
+            text: why,
+            tone: ui::Tone::Warning,
+        };
+        adapter_is_gone(edge, queue, varde::debug::Gone::FailedToStart);
+        return true;
+    }
+    let Some(adapter) = edge.adapter.as_mut() else {
+        return false;
+    };
+    let arrived = adapter.drain();
+    let mut dirty = !arrived.is_empty() || !adapter.alive;
+    queue.extend(
+        arrived
+            .into_iter()
+            .map(|json| Event::DapReceived { json, from: 0 }),
+    );
+    if !adapter.alive {
+        adapter_is_gone(edge, queue, varde::debug::Gone::Exited);
+        return dirty;
+    }
+    // Each child session's connection the same way, told apart by its number.
+    let mut joined = Vec::new();
+    for (&child, joining) in &edge.joining {
+        match joining.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Ok(Ok(adapter)) => joined.push((child, Ok(adapter))),
+            Ok(Err(error)) => joined.push((child, Err(error.to_string()))),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                joined.push((child, Err("the connection was lost".to_string())))
+            }
+        }
+    }
+    for (child, adapter) in joined {
+        edge.joining.remove(&child);
+        dirty = true;
+        match adapter {
+            Ok(adapter) => {
+                edge.children.insert(child, adapter);
+                queue.push_back(Event::DapStarted { from: child });
+            }
+            Err(why) => child_never_joined(edge, queue, child, why),
+        }
+    }
+    let mut ended = Vec::new();
+    for (&child, adapter) in edge.children.iter_mut() {
+        let arrived = adapter.drain();
+        dirty |= !arrived.is_empty() || !adapter.alive;
+        queue.extend(
+            arrived
+                .into_iter()
+                .map(|json| Event::DapReceived { json, from: child }),
+        );
+        if !adapter.alive {
+            ended.push(child);
+        }
+    }
+    for child in ended {
+        edge.children.remove(&child);
+        queue.push_back(Event::DapGone {
+            why: varde::debug::Gone::Exited,
+            from: child,
+        });
+    }
+    dirty
+}
+
+/// A child session's connection that could not be made: the core hears it
+/// failed, and the reason, which only the edge has, goes to the status line.
+fn child_never_joined(edge: &mut Edge, queue: &mut VecDeque<Event>, child: usize, why: String) {
+    edge.status = Status {
+        text: format!("a child Debug session could not reach its adapter: {why}"),
+        tone: ui::Tone::Warning,
+    };
+    queue.push_back(Event::DapGone {
+        why: varde::debug::Gone::FailedToStart,
+        from: child,
+    });
+}
+
+/// The port a Waiting session watches, tried about once a second while — and
+/// only while — `debug::waiting_on` names one, so a session nobody is waiting
+/// on costs nothing. What answering means is the core's: the event says only
+/// that it did.
+fn probe_waiting(state: &State, edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
+    if let Some(probe) = &edge.probe {
+        match probe.try_recv() {
+            Ok(true) => {
+                edge.probe = None;
+                queue.push_back(Event::DapPortAnswers);
+                return true;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Ok(false) | Err(std::sync::mpsc::TryRecvError::Disconnected) => edge.probe = None,
+        }
+    }
+    // The clock restarts while nothing is Waiting, so the first try is a whole
+    // interval after the program went: one still shutting down can hold its
+    // port long enough to be attached to again on its way out.
+    let Some((host, port)) = varde::debug::waiting_on(state) else {
+        edge.probed = Instant::now();
+        return false;
+    };
+    if edge.probed.elapsed() < PROBE {
+        return false;
+    }
+    edge.probed = Instant::now();
+    let (answered, probe) = channel();
+    let host = host.to_string();
+    std::thread::spawn(move || {
+        use std::net::ToSocketAddrs;
+        let answers = (host.as_str(), port)
+            .to_socket_addrs()
+            .into_iter()
+            .flatten()
+            .any(|address| std::net::TcpStream::connect_timeout(&address, PROBE).is_ok());
+        let _ = answered.send(answers);
+    });
+    edge.probe = Some(probe);
+    false
+}
+
+/// What the edge does wherever it stops holding an adapter: the session is
+/// gone, and the debugged program goes with it. Dropping its pty is what takes
+/// the child down — a program left running in a group nobody can reach is a
+/// pane with no way back, `ai_running`'s failure from the other side. One
+/// function for the two sites, so neither can remember only half of it.
+fn adapter_is_gone(edge: &mut Edge, queue: &mut VecDeque<Event>, why: varde::debug::Gone) {
+    edge.adapter = None;
+    edge.connecting = None;
+    edge.again = None;
+    edge.children.clear();
+    edge.joining.clear();
+    edge.output = None;
+    queue.push_back(Event::DapGone { why, from: 0 });
 }
 
 /// Asking git which paths are ignored costs milliseconds, so it is asked when
@@ -1474,6 +1708,7 @@ fn cache_highlight(state: &State, edge: &mut Edge) {
     let Some((path, buffer)) = current else {
         if !edge.highlighted.2.is_empty() {
             edge.highlighted = (PathBuf::new(), u64::MAX, Vec::new());
+            edge.run_marks.clear();
         }
         return;
     };
@@ -1484,6 +1719,7 @@ fn cache_highlight(state: &State, edge: &mut Edge) {
             buffer.revision(),
             varde::highlight::highlight(&name, buffer.shown()),
         );
+        edge.run_marks = varde::run::marks(state).into_keys().collect();
     }
 }
 
@@ -1526,6 +1762,7 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
             &rows,
             &edge.shells,
             edge.ai.as_ref(),
+            edge.output.as_ref(),
             ui::Chrome {
                 status: &status,
                 tone,
@@ -1535,6 +1772,7 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
                 comment_kind: &edge.drafts.comment_kind,
                 filter_draft: edge.drafts.filter.as_deref(),
                 tokens: &edge.highlighted.2,
+                run_marks: &edge.run_marks,
                 diff_new: &edge.diff_sides.0,
                 diff_old: &edge.diff_sides.1,
                 preview: &edge.previewed.3,
@@ -1557,6 +1795,9 @@ const INPUT_BATCH: usize = 512;
 /// motion, slow enough that a frame's cost is a rounding error next to the
 /// analysis it is reporting on.
 const SPIN: Duration = Duration::from_millis(80);
+
+/// How often a Waiting session's port is tried, and how long one try may take.
+const PROBE: Duration = Duration::from_secs(1);
 
 /// How far below the workspace root [`beneath`] looks for a fact's marker.
 /// Three, because `apps/web/frontend` is as deep as a package sits and this is
@@ -1757,6 +1998,19 @@ fn tell_core(state: &mut State, edge: &mut Edge) {
         .as_ref()
         .map(pty::Pane::bracketed_paste)
         .unwrap_or_default();
+    // The Program output's three, the same way: whether the edge holds it, and
+    // what its child asked for.
+    state.output_running = edge.output.is_some();
+    state.output_mouse = edge
+        .output
+        .as_ref()
+        .map(pty::Pane::mouse_encoding)
+        .unwrap_or_default();
+    state.output_paste = edge
+        .output
+        .as_ref()
+        .map(pty::Pane::bracketed_paste)
+        .unwrap_or_default();
 }
 
 /// The synthesizer, started when the first markdown buffer opens rather than on
@@ -1934,7 +2188,7 @@ fn play(edge: &mut Edge, at_ms: u32, queue: &mut VecDeque<Event>) {
         // spelled with a different child, and refusing out loud is R35.9.
         Err(because) => {
             hush(edge);
-            queue.push_back(Event::StopReading);
+            queue.push_back(Event::ReadingEnded);
             edge.status = Status {
                 text: because,
                 tone: ui::Tone::Warning,
@@ -2128,7 +2382,7 @@ fn reap_player(edge: &mut Edge, queue: &mut VecDeque<Event>) {
     );
     if done {
         hush(edge);
-        queue.push_back(Event::StopReading);
+        queue.push_back(Event::ReadingEnded);
     }
 }
 
@@ -2351,10 +2605,7 @@ fn route_mouse(state: &State, edge: &mut Edge, input: mouse::Input, queue: &mut 
         state.ai_width.map(|width| width as u16),
         story::band_height(state),
         story::step_menu_width(state),
-        layout::Shapes {
-            ai: state.ai_pane,
-            corner: state.corner,
-        },
+        varde::shapes(state),
     );
     let outcome = mouse::on_mouse(state, &panes, &mut edge.pointer, input);
     queue.extend(outcome.events);
@@ -2393,7 +2644,16 @@ fn grid_lines(edge: &Edge, pane: Pane, split: usize, upto: usize) -> Option<Vec<
     let screen = match pane {
         Pane::Ai => edge.ai.as_ref()?.screen(),
         Pane::Terminal => edge.shells.get(split)?.screen(),
-        Pane::Tree | Pane::Editor | Pane::Risk | Pane::Buffers | Pane::History => return None,
+        Pane::Output => edge.output.as_ref()?.screen(),
+        Pane::Tree
+        | Pane::Editor
+        | Pane::Evaluator
+        | Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Variables => return None,
     };
     let (rows, columns) = screen.size();
     // Absolutely indexed from the grid's first row, because that is what the
@@ -2496,7 +2756,20 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
                 }
             }
             Pane::Terminal => edge.shell(split).send(&bytes),
-            Pane::Tree | Pane::Editor | Pane::Risk | Pane::Buffers | Pane::History => {}
+            Pane::Output => {
+                if let Some(output) = edge.output.as_mut() {
+                    output.send(&bytes);
+                }
+            }
+            Pane::Tree
+            | Pane::Editor
+            | Pane::Evaluator
+            | Pane::Risk
+            | Pane::Buffers
+            | Pane::History
+            | Pane::Breakpoints
+            | Pane::Frames
+            | Pane::Variables => {}
         },
         other => return Some(other),
     }
@@ -2519,7 +2792,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
             let from = from.min(edge.shells.len() - 1);
             let cwd = edge.shells[from].cwd().unwrap_or_else(|| edge.root.clone());
             let (rows, cols) = edge.shells[from].screen().size();
-            match pty::Pane::spawn(None, &cwd, rows, cols) {
+            match pty::Pane::spawn(&[], &cwd, &BTreeMap::new(), rows, cols) {
                 Ok(pane) => edge.shells.insert(from + 1, pane),
                 Err(error) => {
                     edge.status = Status {
@@ -2531,7 +2804,13 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
         }
         Effect::SpawnAi { command } => {
             let size = edge.shells[0].screen().size();
-            match pty::Pane::spawn(Some(&command), &edge.root, size.0, size.1) {
+            match pty::Pane::spawn(
+                std::slice::from_ref(&command),
+                &edge.root,
+                &BTreeMap::new(),
+                size.0,
+                size.1,
+            ) {
                 Ok(pane) => {
                     edge.ai = Some(pane);
                 }
@@ -2545,6 +2824,23 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                     // and a review queued for it is not owed to whichever CLI
                     // is started next.
                     queue.push_back(Event::AiExited);
+                }
+            }
+        }
+        // The adapter asked for a terminal to run the debugged program in. It
+        // replaces whatever the last session left: one Debug group, one
+        // program, and a pane holding a program nobody is debugging is the
+        // dead pane `ai_running` was.
+        Effect::RunProgram { argv, cwd, env } => {
+            let cwd = cwd.unwrap_or_else(|| edge.root.clone());
+            let size = edge.shells[0].screen().size();
+            match pty::Pane::spawn(&argv, &cwd, &env, size.0, size.1) {
+                Ok(pane) => edge.output = Some(pane),
+                Err(error) => {
+                    edge.status = Status {
+                        text: format!("could not run {}: {error}", argv.join(" ")),
+                        tone: ui::Tone::Warning,
+                    };
                 }
             }
         }
@@ -2589,6 +2885,120 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                     language,
                     why: varde::lsp::Gone::FailedToStart,
                 }),
+            }
+        }
+        Effect::StartDap {
+            command,
+            args,
+            reach,
+        } => {
+            // A new session numbers its children afresh, so none of the last
+            // one's may still answer to a number.
+            edge.children.clear();
+            edge.joining.clear();
+            // Truncated per spawn, for the reason a server's log is.
+            let log = varde_dir(&edge.root, edge.sidecar.as_deref()).join("dap.log");
+            let log = match std::fs::File::create(&log) {
+                Ok(file) => Some(file),
+                Err(error) => {
+                    edge.status = Status {
+                        text: format!("could not open {}: {error}", log.display()),
+                        tone: ui::Tone::Warning,
+                    };
+                    None
+                }
+            };
+            let spawned = match reach {
+                varde::debug::Reach::Stdio => rpc::Adapter::spawn(&command, &args, &edge.root, log)
+                    .map(|adapter| {
+                        edge.adapter = Some(adapter);
+                        edge.again = Some(Again::Spawn {
+                            command: command.clone(),
+                            args: args.clone(),
+                        });
+                        queue.push_back(Event::DapStarted { from: 0 });
+                    }),
+                // A port nothing holds, asked of the OS and let go for the
+                // adapter to take: the only way to learn one that is free.
+                varde::debug::Reach::Server => {
+                    std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                        .and_then(|listener| listener.local_addr())
+                        .and_then(|address| {
+                            let port = address.port();
+                            let args = varde::debug::on_port(&args, port);
+                            edge.again = Some(Again::Dial(port));
+                            rpc::Adapter::connect(&command, &args, &edge.root, log, port)
+                        })
+                        .map(|connected| edge.connecting = Some(connected))
+                }
+                varde::debug::Reach::Port(port) => {
+                    edge.connecting = Some(rpc::Adapter::dial(port, None));
+                    edge.again = Some(Again::Dial(port));
+                    Ok(())
+                }
+            };
+            // What the spawn said, which only the edge can see: a command
+            // that is not there is the one the reader fixes by installing.
+            if let Err(error) = spawned {
+                queue.push_back(Event::DapGone {
+                    why: match error.kind() {
+                        std::io::ErrorKind::NotFound => varde::debug::Gone::Missing,
+                        _ => varde::debug::Gone::FailedToStart,
+                    },
+                    from: 0,
+                });
+            }
+        }
+        Effect::DapSend { to, json } => {
+            let adapter = match to {
+                0 => edge.adapter.as_mut(),
+                child => edge.children.get_mut(&child),
+            };
+            let alive = adapter.is_some_and(|adapter| {
+                adapter.send(&json);
+                adapter.alive
+            });
+            if !alive {
+                match to {
+                    0 => edge.adapter = None,
+                    child => {
+                        edge.children.remove(&child);
+                    }
+                }
+                queue.push_back(Event::DapGone {
+                    why: varde::debug::Gone::Exited,
+                    from: to,
+                });
+            }
+        }
+        // Another conversation with the adapter the session holds, for a child
+        // session: its port dialled again, or another one of it spawned.
+        Effect::DapChild { child } => match edge.again.clone() {
+            Some(Again::Dial(port)) => {
+                edge.joining.insert(child, rpc::Adapter::dial(port, None));
+            }
+            Some(Again::Spawn { command, args }) => {
+                match rpc::Adapter::spawn(&command, &args, &edge.root, None) {
+                    Ok(adapter) => {
+                        edge.children.insert(child, adapter);
+                        queue.push_back(Event::DapStarted { from: child });
+                    }
+                    Err(error) => child_never_joined(edge, queue, child, error.to_string()),
+                }
+            }
+            None => child_never_joined(edge, queue, child, "no adapter is held".to_string()),
+        },
+        Effect::StopDapChild { child } => {
+            if edge.children.remove(&child).is_some() || edge.joining.remove(&child).is_some() {
+                queue.push_back(Event::DapGone {
+                    why: varde::debug::Gone::Exited,
+                    from: child,
+                });
+            }
+        }
+        Effect::StopDap => {
+            if edge.adapter.is_some() || edge.connecting.is_some() {
+                adapter_is_gone(edge, queue, varde::debug::Gone::Exited);
             }
         }
         // Asked for, so the answer kept from the list opening is dropped and
@@ -2739,6 +3149,16 @@ fn perform_files(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) -
             if let Ok(contents) = std::fs::read_to_string(&path) {
                 queue.push_back(Event::ReviewFileRead { path, contents });
             }
+        }
+        // A file that cannot be read is answered as empty, which makes every
+        // Breakpoint in it Stale — the honest answer about a line nobody can
+        // find — and says why.
+        Effect::ReadBreakpointFile(path) => {
+            let contents = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+                eprintln!("varde: cannot read {}: {error}", path.display());
+                String::new()
+            });
+            queue.push_back(Event::BreakpointFileRead { contents, path });
         }
         Effect::ReadDiff(path) => {
             let diff = diff_lines(&edge.root, &path);
@@ -3866,6 +4286,26 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
     (
         "language-server-stopped",
         "The language server stopped — see .varde/lsp-<language>.log; no diagnostics, hover or completion until it is restarted",
+        ui::Tone::Warning,
+    ),
+    (
+        "no-debug-adapter",
+        "No Debug adapter — install it from Tools (Ctrl+Space v)",
+        ui::Tone::Warning,
+    ),
+    (
+        "debug-adapter-failed",
+        "The Debug adapter could not be started — its log is .varde/dap.log",
+        ui::Tone::Warning,
+    ),
+    (
+        "debug-adapter-exited",
+        "The Debug adapter stopped, and the Debug session with it — its log is .varde/dap.log",
+        ui::Tone::Warning,
+    ),
+    (
+        "launch-failed",
+        "The Debug adapter would not start the program",
         ui::Tone::Warning,
     ),
     (

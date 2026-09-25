@@ -5,7 +5,7 @@
 //! [`Selection`] request for the edge to fulfil.
 
 use crate::layout::{self, Area, Layout};
-use crate::{tree, Direction, Event, Modal, Pane, Place, State};
+use crate::{tree, Direction, Event, Modal, Pane, Place, Pointed, State};
 use terminput::KeyModifiers;
 
 /// Which mouse-report encoding the program in a hosted pane asked for, as the
@@ -146,6 +146,48 @@ pub enum Divider {
     Tree,
     /// The AI pane's left border, which moves the editor/AI boundary.
     Ai,
+    /// The border above the Strip, which moves the Strip/top boundary.
+    Strip,
+    /// The Program output's left border, which moves the Variables/Program
+    /// output boundary inside the Debug group.
+    Output,
+}
+
+/// What a press on the Evaluator's floating window took hold of, and the
+/// rectangle the window had at the time. Every report is measured from the
+/// press rather than from the report before it: a drag that runs off the
+/// screen and comes back leaves the window under the pointer, where measuring
+/// each step against the last would have left it a cell short for every one
+/// the clamp swallowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Grab {
+    took: Took,
+    window: Area,
+}
+
+/// Which part of the window: its title bar moves the whole of it, a border or
+/// a corner resizes it by the edges it names, and the rule between the
+/// Snippet and the output divides the two. An enum over the edges rather than
+/// a flag per side, for the reason [`Divider`] is an enum — dragging the top
+/// and the bottom at once has no answer.
+///
+/// No top edge: that row is the title bar, Chips and all, so a press there is
+/// the move gesture anybody would make on a title bar. Which is also why the
+/// corners are the bottom two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Took {
+    Title,
+    Edge(Edge),
+    Rule,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Edge {
+    Left,
+    Right,
+    Bottom,
+    BottomLeft,
+    BottomRight,
 }
 
 /// Where a drag began, and which divider it grabbed. Edge state, but the
@@ -180,6 +222,10 @@ pub struct Pointer {
     /// names a different character every tick, so the selection eats itself
     /// from the top.
     anchor: Option<Place>,
+    /// What a press on the Evaluator's window took hold of, for as long as
+    /// the button is held. `None` for a press anywhere else and for one in
+    /// either half of the window, which is text somebody is picking.
+    grab: Option<Grab>,
     /// The last drag report while the button is held at or past its pane's
     /// edge. The edge replays it on a cadence, which is the only thing that can
     /// move a drag held *still*: a terminal reports nothing while nothing
@@ -253,6 +299,37 @@ pub fn on_mouse(state: &State, panes: &Layout, pointer: &mut Pointer, input: Inp
             return Outcome::of(result_click(state, search, input));
         }
     }
+    // The wheel over the Hover box scrolls the box, whatever pane it floats
+    // over: the reader is reading it, not the code underneath.
+    let wheel = match input.kind {
+        Kind::ScrollUp => Some(Direction::Up),
+        Kind::ScrollDown => Some(Direction::Down),
+        _ => None,
+    };
+    if let Some(direction) = wheel.filter(|_| on_hover(state, panes, input)) {
+        return Outcome::of(vec![Event::ScrollHover(direction)]);
+    }
+    // Ahead of the border handle below, which the Group tabs are drawn into
+    // the columns of: a handle that swallowed them would be tabs nobody could
+    // click. Ahead of the pane dispatch too, because the border row a tab sits
+    // on is neither a shell's grid nor a Variables row.
+    if input.kind == Kind::LeftDown && input.row == panes.terminal.y {
+        if let Some(group) = group_tab_at(state, panes, input.column) {
+            return Outcome::of(vec![Event::ShowGroup(group)]);
+        }
+        if let Some(action) = strip_chip_at(state, panes, input.column) {
+            return Outcome::of(vec![Event::PaneAction(action)]);
+        }
+    }
+    // The Evaluator floats over the panes, so a press on it belongs to the
+    // window before a divider *between* those panes can claim the column: the
+    // AI pane's edge runs straight through the middle of a centred window, and
+    // it was swallowing every press on the Chip drawn there. Only where no
+    // drag is already held — a drag belongs to the pane its button went down
+    // in, whatever it crosses.
+    if pointer.pane.is_none() && panes.evaluator.holds(input.column, input.row) {
+        return in_pane(state, panes, pointer, Pane::Evaluator, input);
+    }
     if let Some(outcome) = divider_drag(panes, pointer, input) {
         return outcome;
     }
@@ -297,6 +374,34 @@ fn result_click(state: &State, search: &crate::Search, input: Input) -> Vec<Even
     }
 }
 
+/// Which Group tab is under a column of the Strip's top border, if any — the
+/// labels `ui` draws, hit-tested by the `layout::strip_at` every other strip
+/// of labels on a border is hit-tested by. Nothing at all off the Strip's own
+/// columns: the corner's top border is on the same row and carries its icons.
+fn group_tab_at(state: &State, panes: &Layout, column: u16) -> Option<crate::layout::Group> {
+    let strip = panes.strip();
+    if !strip.holds(column, strip.y) {
+        return None;
+    }
+    let labels = crate::group_labels(state);
+    let index = crate::layout::strip_at(strip, &labels, column)?;
+    Some(crate::group_tabs(state)[index].group)
+}
+
+/// Which Chip of the Variables' Transport sits under a column of the Strip's
+/// top border, at the columns `ui` draws them into — both off
+/// `crate::transport_area`, for the reason the Group tabs above read one
+/// `strip_at`.
+fn strip_chip_at(state: &State, panes: &Layout, column: u16) -> Option<&'static str> {
+    if !crate::showing_transport(state) {
+        return None;
+    }
+    let chips = crate::debug::strip_transport(state);
+    let area = crate::transport_area(state, panes.strip());
+    let labels = crate::layout::chip_labels(&chips, area.width, crate::layout::CORNER_TITLE);
+    Some(chips[crate::layout::strip_at(area, &labels, column)?].action)
+}
+
 /// A pane's border is the handle. Checked before anything else, because those
 /// columns belong to a pane and would otherwise read as clicking a row. Only
 /// where the border is, though: the terminal spans every column underneath, so
@@ -313,6 +418,20 @@ fn divider_drag(panes: &Layout, pointer: &mut Pointer, input: Input) -> Option<O
     // tall shape is past the terminal's first row.
     let beside_tree = input.row < panes.terminal.y;
     let beside_ai = input.row < panes.ai.bottom();
+    // The Strip's own top border across the shell's columns, and nothing
+    // else: the row above it is the editor's bottom border, where the buffer
+    // dots are, and the Corner's top border carries its icons. Its Group tabs
+    // have already been answered above.
+    // The whole Strip's top border, the Program output's columns included: a
+    // handle that stopped at the Variables would leave the height undraggable
+    // from half of it.
+    let above_strip = input.row == panes.terminal.y && panes.strip().holds(input.column, input.row);
+    // The Program output's own left border, which runs the Strip's height —
+    // its top row excepted, where the Group tabs and the Transport are.
+    let beside_output = panes.output.width > 0
+        && input.row > panes.output.y
+        && input.row < panes.output.bottom()
+        && input.column.abs_diff(panes.output.x) <= 1;
     match input.kind {
         Kind::LeftDown if beside_tree && input.column.abs_diff(tree_edge) <= 1 => {
             pointer.dragging = Some(Divider::Tree);
@@ -321,6 +440,28 @@ fn divider_drag(panes: &Layout, pointer: &mut Pointer, input: Input) -> Option<O
         Kind::LeftDown if beside_ai && input.column.abs_diff(ai_edge) <= 1 => {
             pointer.dragging = Some(Divider::Ai);
             Some(Outcome::default())
+        }
+        Kind::LeftDown if beside_output => {
+            pointer.dragging = Some(Divider::Output);
+            Some(Outcome::default())
+        }
+        Kind::LeftDown if above_strip => {
+            pointer.dragging = Some(Divider::Strip);
+            Some(Outcome::default())
+        }
+        // Unclamped, like the Strip's height: the width is state, and the
+        // layout bounds it against the group it was dragged in.
+        Kind::LeftDrag if pointer.dragging == Some(Divider::Output) => {
+            Some(Outcome::of(vec![Event::DragOutput(u32::from(
+                panes.output.right().saturating_sub(input.column),
+            ))]))
+        }
+        // Unclamped: the height is state, and `update` bounds it against the
+        // screen it was dragged on.
+        Kind::LeftDrag if pointer.dragging == Some(Divider::Strip) => {
+            Some(Outcome::of(vec![Event::DragStrip(u32::from(
+                panes.terminal.bottom().saturating_sub(input.row),
+            ))]))
         }
         Kind::LeftDrag if pointer.dragging == Some(Divider::Tree) => {
             let width = input.column.saturating_sub(panes.tree.x) + 1;
@@ -365,6 +506,7 @@ fn in_pane(
             pointer.drag_from = Some((input.column, input.row));
             pointer.pane = Some(pane);
             pointer.anchor = None;
+            pointer.grab = None;
             pointer.held = None;
             pointer.dragged = false;
             let doubled = pointer.last_press.is_some_and(|(column, row, ms)| {
@@ -372,7 +514,7 @@ fn in_pane(
                     && pointer.at_ms.saturating_sub(ms) <= state.double_tap_ms
             });
             pointer.last_press = Some((input.column, input.row, pointer.at_ms));
-            let mut events = pressed(state, panes, pane, input);
+            let mut events = pressed(state, panes, pointer, pane, input);
             // The place the press already named, rather than a hit-test of its
             // own: a double-click picks a word wherever a single click takes
             // the caret, and two hit-tests are how a click and what it selects
@@ -412,6 +554,7 @@ fn in_pane(
             pointer.drag_from = None;
             pointer.pane = None;
             pointer.anchor = None;
+            pointer.grab = None;
             pointer.held = None;
             pointer.dragged = false;
             let at = place_in(state, panes, pane, (input.column, input.row));
@@ -447,9 +590,9 @@ fn hovered(state: &State, panes: &Layout, input: Input) -> Vec<Event> {
     // The editor's own text only, and the border row the Transport lives on is
     // not text — the same rows `pressed` reads as places, and the same ones
     // `resting` answers for.
-    let at = match jumping(input.modifiers) {
-        true => resting(state, panes, input),
-        false => None,
+    let at = match (jumping(input.modifiers), resting(state, panes, input)) {
+        (true, Pointed::Text(at)) => Some(at),
+        _ => None,
     };
     match at == state.link {
         true => vec![],
@@ -457,9 +600,30 @@ fn hovered(state: &State, panes: &Layout, input: Input) -> Vec<Event> {
     }
 }
 
-fn pressed(state: &State, panes: &Layout, pane: Pane, input: Input) -> Vec<Event> {
+fn pressed(
+    state: &State,
+    panes: &Layout,
+    pointer: &mut Pointer,
+    pane: Pane,
+    input: Input,
+) -> Vec<Event> {
+    // The Evaluator floats over the panes, so a press that landed on it is
+    // the window's before anything drawn under it is asked — the reason
+    // `layout::pane_at` asks it first. Without this the strips hit-tested
+    // below answer for a rectangle the window is covering.
+    if pane == Pane::Evaluator {
+        return pressed_in_evaluator(state, panes, pointer, input);
+    }
+    if let Some(events) = pressed_in_hover(state, panes, input) {
+        return events;
+    }
     if let Some(key) = palette_entry_at(state, panes, input.column, input.row) {
         return vec![Event::ClickPaletteEntry(key)];
+    }
+    // The screen, read off the panes for the reason `palette_entry_at` gives.
+    let screen = (panes.ai.right(), panes.tree.height + panes.terminal.height);
+    if let Some(action) = crate::run::chip_at(state, screen.0, screen.1, input.column, input.row) {
+        return vec![Event::ChooseRun(action)];
     }
     if let Some(index) = buffer_dot_at(state, panes, input.column, input.row) {
         return match state.buffers.keys().nth(index) {
@@ -489,6 +653,26 @@ fn pressed(state: &State, panes: &Layout, pane: Pane, input: Input) -> Vec<Event
                 crate::minimap::strip(state, panes.editor),
                 input.row,
             ))]
+        }
+        (Pane::Editor, _)
+            if crate::debug::edit_chip(state, panes) == Some((input.column, input.row)) =>
+        {
+            vec![Event::EditBreakpoint(
+                crate::current_buffer(state).map_or(0, |buffer| buffer.line),
+            )]
+        }
+        // The gutter's leftmost column is the Breakpoint column, and the line
+        // numbers beside it set nothing. A Run mark shares it, and the click
+        // is whichever of the two the column draws: a Breakpoint over a Run
+        // mark, so the one drawn is the one a click takes away.
+        (Pane::Editor, _) if breakpoint_column(state, panes, input) => {
+            let at = place_in(state, panes, pane, (input.column, input.row));
+            let offered = !crate::debug::marks(state).contains_key(&at.line)
+                && crate::run::marks(state).contains_key(&at.line);
+            match offered {
+                true => vec![Event::OfferRun(at.line)],
+                false => vec![Event::ToggleBreakpoint(at.line)],
+            }
         }
         // The toggle in the gutter and the dots at the end of a folded line are
         // one affordance drawn in two places, so a press on either is one
@@ -523,6 +707,37 @@ fn pressed(state: &State, panes: &Layout, pane: Pane, input: Input) -> Vec<Event
         (Pane::Risk, _) => pressed_in_risk(state, panes, input),
         (Pane::Buffers, _) => pressed_in_buffers(state, panes, input),
         (Pane::History, _) => pressed_in_history(state, panes, input),
+        (Pane::Breakpoints, _) => pressed_in_breakpoints(state, panes, input),
+        (Pane::Frames, _) => {
+            let index = list_row(panes.corner, input.row, state.frames_scroll);
+            let on_a_row = input.row > panes.corner.y
+                && input.row < panes.corner.bottom().saturating_sub(1)
+                && index < crate::debug::frame_rows(state).len();
+            match on_a_row {
+                true => vec![Event::ClickFrameRow(index)],
+                false => vec![Event::ClickPane(Pane::Frames)],
+            }
+        }
+        // A Variables row, through the Strip's rectangle and the Variables'
+        // own scroll offset — the Frames' hit-test, one pane over. Its Chips
+        // first, for the reason the Breakpoint list's row icons come before
+        // its rows: an icon is on the row, so a row that answered first would
+        // open the tree instead of acting on it.
+        (Pane::Variables, _) => {
+            let index = list_row(panes.terminal, input.row, state.variables_scroll);
+            let on_a_row = input.row > panes.terminal.y
+                && input.row < panes.terminal.bottom().saturating_sub(1)
+                && index < crate::debug::variables(state).len();
+            if on_a_row {
+                if let Some(action) = variables_chip_at(state, panes, input.column, index) {
+                    return vec![Event::RowAction(action)];
+                }
+            }
+            match on_a_row {
+                true => vec![Event::ClickVariablesRow(index)],
+                false => vec![Event::ClickPane(Pane::Variables)],
+            }
+        }
         // Which of the strip's shells was pressed, so a click in a split is
         // the keyboard moving to it — the one gesture that tells them apart.
         (Pane::Terminal, _) => vec![Event::FocusSplit(crate::layout::split_at(
@@ -597,6 +812,107 @@ fn pressed_in_history(state: &State, panes: &Layout, input: Input) -> Vec<Event>
     }
 }
 
+/// A row of the Breakpoint list, its row's icon, or a Chip on its top border —
+/// the Risk list's three, tested in the Risk list's order and for its reasons.
+fn pressed_in_breakpoints(state: &State, panes: &Layout, input: Input) -> Vec<Event> {
+    if input.row == panes.corner.y {
+        return match breakpoint_chip_at(state, panes, input.column) {
+            Some(action) => vec![Event::PaneAction(action)],
+            None => vec![Event::ClickPane(Pane::Breakpoints)],
+        };
+    }
+    if input.row >= panes.corner.bottom().saturating_sub(1) {
+        return vec![Event::ClickPane(Pane::Breakpoints)];
+    }
+    let index = list_row(panes.corner, input.row, state.breakpoints_scroll);
+    if let Some(action) = breakpoint_action_at(state, panes, input.column, index) {
+        return vec![Event::RowAction(action)];
+    }
+    match crate::debug::rows(state) > index {
+        true => vec![Event::ClickBreakpointRow(index)],
+        false => vec![Event::ClickPane(Pane::Breakpoints)],
+    }
+}
+
+/// The Evaluator's window: its Chips on the top border, the chrome a drag
+/// takes hold of, a row of its output below the split, and the window itself
+/// otherwise. The Chips first, for the reason the Breakpoint list's are first
+/// — the border row is chrome, and reading it as content acts on a row nobody
+/// pointed at. A Chip is not a title bar either: a press on one that was
+/// remembered as a grab would move the window every time somebody ran a
+/// Snippet.
+fn pressed_in_evaluator(
+    state: &State,
+    panes: &Layout,
+    pointer: &mut Pointer,
+    input: Input,
+) -> Vec<Event> {
+    let window = panes.evaluator;
+    if input.row == window.y {
+        let labels = crate::debug::evaluator_labels(state, window.width);
+        let chips = crate::debug::evaluator_chips(state);
+        if let Some(chip) =
+            layout::strip_at(window, &labels, input.column).and_then(|at| chips.get(at))
+        {
+            return vec![Event::RowAction(chip.action)];
+        }
+    }
+    let (_, output) = layout::evaluator_split(window, snippet_rows(state));
+    // Which gesture this press begins, decided here and held for as long as
+    // the button is: a drag belongs to what it went down on, the rule the
+    // pane a drag belongs to is one of.
+    pointer.grab = grab_at(window, output, input).map(|took| Grab { took, window });
+    if pointer.grab.is_none() && output.holds(input.column, input.row) {
+        let index = (input.row - output.y) as usize;
+        if index < crate::debug::evaluator_output(state).len() {
+            return vec![Event::OpenEvaluatedRow(index)];
+        }
+    }
+    vec![Event::ClickPane(Pane::Evaluator)]
+}
+
+/// How many rows of the window the Snippet has, as the reader left it. Here
+/// beside the two hit-tests that read it, so the renderer and the mouse ask
+/// `layout::evaluator_split` the same question.
+fn snippet_rows(state: &State) -> Option<u16> {
+    state
+        .evaluator
+        .as_ref()
+        .and_then(|evaluator| evaluator.snippet_rows)
+}
+
+/// Which part of the window a press landed on, and nothing at all for one in
+/// either half: that is text somebody is picking, and a window that moved
+/// when a selection began would be a Snippet nobody could copy out of.
+fn grab_at(window: Area, output: Area, input: Input) -> Option<Took> {
+    let bottom = input.row + 1 == window.bottom();
+    let left = input.column == window.x;
+    let right = input.column + 1 == window.right();
+    if input.row == window.y {
+        return Some(Took::Title);
+    }
+    if bottom {
+        return Some(Took::Edge(match (left, right) {
+            (true, _) => Edge::BottomLeft,
+            (_, true) => Edge::BottomRight,
+            (false, false) => Edge::Bottom,
+        }));
+    }
+    match (left, right, input.row + 1 == output.y) {
+        (true, _, _) => Some(Took::Edge(Edge::Left)),
+        (_, true, _) => Some(Took::Edge(Edge::Right)),
+        (_, _, true) => Some(Took::Rule),
+        _ => None,
+    }
+}
+
+/// A coordinate moved by however far the pointer has travelled since the
+/// press, which is a signed distance: a window dragged left past column zero
+/// stops there rather than wrapping to the far side of the screen.
+fn moved_by(at: u16, by: i32) -> u16 {
+    (i32::from(at) + by).clamp(0, i32::from(u16::MAX)) as u16
+}
+
 fn dragged(
     state: &State,
     panes: &Layout,
@@ -644,7 +960,74 @@ fn dragged(
         // to rather than text somebody picked: there is nothing in them to
         // copy, and nothing to copy is not the same as copying whatever the
         // pane behind them holds.
-        Pane::Risk | Pane::Buffers | Pane::History => Outcome::default(),
+        Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Variables => Outcome::default(),
+        // Moving the window, resizing it and picking text in the Snippet are
+        // all drags, and which one this is was decided at the press: the
+        // window's chrome grabs, and everything inside it picks text.
+        Pane::Evaluator => {
+            let Some(grab) = pointer.grab else {
+                // The Snippet is a buffer, so a drag in it is the editor's own
+                // gesture against the window's own text coordinates — the same
+                // span event, because there is nothing here to read off a
+                // screen.
+                let anchor = *pointer
+                    .anchor
+                    .get_or_insert_with(|| place_in(state, panes, pane, from));
+                let at = place_in(state, panes, pane, (input.column, input.row));
+                let (from, to) = order(anchor, at);
+                return Outcome::of(vec![Event::DragText { from, to }]);
+            };
+            let window = grab.window;
+            let across = i32::from(input.column) - i32::from(from.0);
+            let down = i32::from(input.row) - i32::from(from.1);
+            // Unclamped, like every other dragged edge: where a window may be
+            // is `update`'s one answer, and the mouse only says where the
+            // pointer took it.
+            let placed = match grab.took {
+                Took::Title => Area {
+                    x: moved_by(window.x, across),
+                    y: moved_by(window.y, down),
+                    ..window
+                },
+                Took::Edge(Edge::Right) => Area {
+                    width: moved_by(window.width, across),
+                    ..window
+                },
+                Took::Edge(Edge::Left) => Area {
+                    x: moved_by(window.x, across),
+                    width: moved_by(window.width, -across),
+                    ..window
+                },
+                Took::Edge(Edge::Bottom) => Area {
+                    height: moved_by(window.height, down),
+                    ..window
+                },
+                Took::Edge(Edge::BottomRight) => Area {
+                    width: moved_by(window.width, across),
+                    height: moved_by(window.height, down),
+                    ..window
+                },
+                Took::Edge(Edge::BottomLeft) => Area {
+                    x: moved_by(window.x, across),
+                    width: moved_by(window.width, -across),
+                    height: moved_by(window.height, down),
+                    ..window
+                },
+                // The rule goes where the pointer is, counted off the window
+                // as it stands: an absolute row needs no anchor, and the row
+                // the reader is looking at is the row they are dragging.
+                Took::Rule => {
+                    let rows = input.row.saturating_sub(panes.evaluator.y + 1);
+                    return Outcome::of(vec![Event::SizeSnippet(rows)]);
+                }
+            };
+            Outcome::of(vec![Event::PlaceEvaluator(placed)])
+        }
         Pane::Editor => {
             // A drag that began in the mirror stays a travel however far the
             // pointer wanders, and a selection that wanders into the mirror
@@ -736,7 +1119,7 @@ fn dragged(
         }
         // A pty's cells are the child's, so this half of the drag is the edge's
         // to finish.
-        Pane::Terminal | Pane::Ai => {
+        Pane::Terminal | Pane::Ai | Pane::Output => {
             let (from, to) = order(
                 place_in(state, panes, pane, from),
                 place_in(state, panes, pane, (input.column, input.row)),
@@ -855,26 +1238,76 @@ fn nudge(at: Place, vertical: Option<Direction>, horizontal: Option<Direction>) 
     }
 }
 
-/// Which place in the buffer the pointer is over, or nothing at all when it is
-/// over anything else. Nothing is what the dwell asks about, so it is also what
-/// says the pointer has left: the border row the Transport lives on, another
-/// pane, the gap between them, a diff, a Preview and an empty editor are one
-/// answer — there is no symbol under it.
-fn resting(state: &State, panes: &Layout, input: Input) -> Option<Place> {
+/// Which place in the buffer the pointer is over, the Hover box, or neither.
+/// Neither is what says the pointer has left: the border row the Transport
+/// lives on, another pane, the gap between them, a diff, a Preview and an empty
+/// editor are one answer — there is no symbol under it. The box is asked first
+/// because it is drawn over the text and over the panes beside it.
+fn resting(state: &State, panes: &Layout, input: Input) -> Pointed {
+    if on_hover(state, panes, input) {
+        return Pointed::Hover;
+    }
     if state.diff.is_some() || state.current_buffer.is_none() || crate::previewing(state) {
-        return None;
+        return Pointed::Elsewhere;
     }
     if layout::pane_at(panes, input.column, input.row) != Some(Pane::Editor)
         || input.row <= panes.editor.y
     {
+        return Pointed::Elsewhere;
+    }
+    let at = place_in(state, panes, Pane::Editor, (input.column, input.row));
+    match breakpoint_column(state, panes, input) {
+        true => Pointed::Breakpoint(at.line),
+        false => Pointed::Text(at),
+    }
+}
+
+/// A Chip on the Hover's top border, or one of its value rows. `None` where
+/// the pointer is not on the box at all, which is what leaves the press to the
+/// pane underneath — the box floats over the text and over the panes beside
+/// it, so it is asked first, the order `resting` asks in and for its reason.
+fn pressed_in_hover(state: &State, panes: &Layout, input: Input) -> Option<Vec<Event>> {
+    let spot = hover_spot(state, panes).filter(|spot| spot.holds(input.column, input.row))?;
+    let chips = crate::debug::hover_chips(state);
+    // A box with nothing to act on does not take the press at all: outside a
+    // session it carries no Chips and no value, and a box that swallowed a
+    // click there would be a change to the Hover this feature promised to
+    // leave alone.
+    if chips.is_empty() {
         return None;
     }
-    Some(place_in(
-        state,
-        panes,
-        Pane::Editor,
-        (input.column, input.row),
-    ))
+    if input.row == spot.y {
+        let labels = crate::debug::hover_labels(state, spot.width);
+        return Some(match crate::layout::strip_at(spot, &labels, input.column) {
+            Some(at) => vec![Event::HoverChip(chips[at].action)],
+            None => Vec::new(),
+        });
+    }
+    // Through the box's own scroll, for the reason every list's rows are read
+    // through theirs: a box scrolled down and hit-tested from its first row
+    // opens whatever has moved into the row that was clicked.
+    let first = state.hover.as_ref()?.first;
+    let row = usize::from(input.row.saturating_sub(spot.y + 1)) + first;
+    Some(match crate::lsp::sections(state).get(row) {
+        Some(crate::lsp::Said::Value(_)) => vec![Event::OpenHoverRow(row)],
+        // The border, the docs and the line that declines to evaluate are all
+        // read: a box swallows the press rather than letting it place a caret
+        // under itself.
+        _ => Vec::new(),
+    })
+}
+
+/// Whether the pointer is on the Hover box, border and all, against the
+/// rectangle the renderer draws it in.
+fn on_hover(state: &State, panes: &Layout, input: Input) -> bool {
+    hover_spot(state, panes).is_some_and(|spot| spot.holds(input.column, input.row))
+}
+
+/// The rectangle the Hover box is drawn in, which the press below is
+/// hit-tested against for the reason every other one is: one derivation, or a
+/// Chip is clicked a column away from where it was drawn.
+fn hover_spot(state: &State, panes: &Layout) -> Option<crate::layout::Area> {
+    Some(crate::lsp::placement(state)?.spot(state, panes))
 }
 
 /// Where a screen position sits in the pane's own text, 1-based like the
@@ -890,9 +1323,17 @@ fn place_in(state: &State, panes: &Layout, pane: Pane, (column, row): (u16, u16)
     let text = text_area(state, panes, pane);
     let (scroll, sideways) = match pane {
         Pane::Editor => (state.editor_scroll, state.editor_hscroll),
-        Pane::Tree | Pane::Ai | Pane::Terminal | Pane::Risk | Pane::Buffers | Pane::History => {
-            (0, 0)
-        }
+        Pane::Tree
+        | Pane::Ai
+        | Pane::Terminal
+        | Pane::Output
+        | Pane::Evaluator
+        | Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Variables => (0, 0),
     };
     Place {
         // Through `line_at_row`, not straight off the row: Story view draws
@@ -948,23 +1389,35 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
             state.terminals.len(),
             state.split(),
         )),
-        Pane::Risk | Pane::Buffers | Pane::History => interior(panes.corner),
+        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
+            interior(panes.corner)
+        }
+        // The Strip's own rectangle less whatever the Program output beside it
+        // is taking, which the Debug group has instead of the shells.
+        Pane::Variables => interior(panes.terminal),
+        Pane::Output => interior(panes.output),
+        // The Snippet, which is the text in that window: the output below it
+        // is rows of the adapter's tree, not characters somebody picks.
+        // Empty while no window is open, which `Area::holds` answers `false`
+        // for, so no hit-test has to ask whether there is one.
+        Pane::Evaluator => crate::layout::evaluator_split(panes.evaluator, snippet_rows(state)).0,
     }
 }
 
-/// Which palette entry sits under the pointer, if the palette is open — named
-/// by the key it offers, so a click is the keystroke and not a second mapping
-/// beside it. Rows carrying no key (a heading, a gap, the cancel line) answer
-/// nothing.
+/// Which palette or Chord hint entry sits under the pointer, if one is open —
+/// named by the key it offers, so a click is the keystroke and not a second
+/// mapping beside it. Rows carrying no key (a heading, a gap, the cancel line)
+/// answer nothing.
 pub fn palette_entry_at(state: &State, panes: &Layout, column: u16, row: u16) -> Option<char> {
-    if state.modal != Modal::Palette {
-        return None;
-    }
     // The screen, which `ui` centres the box against and sizes the list to.
     // Read off the panes rather than taken as an argument: `tree` and
     // `terminal` tile the screen's height between them by construction.
     let height = panes.tree.height + panes.terminal.height;
-    let rows = crate::palette_rows(height);
+    let rows = match state.modal {
+        Modal::Palette => crate::palette_rows(height),
+        Modal::Chord => crate::keys::chord_rows(state),
+        _ => return None,
+    };
     let widest = rows
         .iter()
         .map(|(_, line)| line.chars().count() as u16)
@@ -1045,10 +1498,22 @@ fn row_index(state: &State, panes: &Layout, row: u16) -> usize {
 /// the click and the key, and `layout::strip_at` is the one place their
 /// columns are worked out.
 fn transport_at(state: &State, panes: &Layout, column: u16) -> Option<&'static str> {
-    let controls = crate::reading::transport(state);
-    let labels: Vec<String> = controls.iter().map(|(_, glyph)| glyph.clone()).collect();
-    let at = crate::layout::strip_at(panes.editor, &labels, column)?;
-    Some(controls[at].0)
+    let chips = crate::reading::transport(state);
+    let labels = layout::chip_labels(&chips, panes.editor.width, layout::EDITOR_TITLE);
+    let at = layout::strip_at(panes.editor, &labels, column)?;
+    Some(chips[at].action)
+}
+
+/// Whether a press lands in the gutter's Breakpoint column, on the code a
+/// Breakpoint can be set in: not a diff, a Preview or a walked Site.
+fn breakpoint_column(state: &State, panes: &Layout, input: Input) -> bool {
+    state.view == crate::View::Edit
+        && state.diff.is_none()
+        && state.walking.is_none()
+        && !crate::previewing(state)
+        && state.current_buffer.is_some()
+        && input.column == panes.editor.x + 1 + layout::BREAKPOINT_COLUMN
+        && input.row + 1 < panes.editor.bottom()
 }
 
 /// Whether a press lands on a fold's affordance: the toggle in the gutter's
@@ -1098,6 +1563,20 @@ fn action_under(state: &State, panes: &Layout, input: Input) -> Option<&'static 
             let index = list_row(panes.corner, input.row, state.history_scroll);
             history_action_at(state, panes, input.column, index)
         }
+        Pane::Breakpoints if input.row == panes.corner.y => {
+            breakpoint_chip_at(state, panes, input.column)
+        }
+        Pane::Breakpoints if corner_row => {
+            let index = list_row(panes.corner, input.row, state.breakpoints_scroll);
+            breakpoint_action_at(state, panes, input.column, index)
+        }
+        Pane::Variables
+            if input.row > panes.terminal.y
+                && input.row < panes.terminal.bottom().saturating_sub(1) =>
+        {
+            let index = list_row(panes.terminal, input.row, state.variables_scroll);
+            variables_chip_at(state, panes, input.column, index)
+        }
         _ => None,
     }
 }
@@ -1139,6 +1618,44 @@ fn risk_action_at(
         return None;
     }
     icon_at(&crate::risk::row_actions(state), panes.corner, column)
+}
+
+/// Which icon of the Breakpoint list's focused row sits under the pointer.
+fn breakpoint_action_at(
+    state: &State,
+    panes: &Layout,
+    column: u16,
+    index: usize,
+) -> Option<&'static str> {
+    if index != state.breakpoints_selection {
+        return None;
+    }
+    icon_at(&crate::debug::row_actions(state), panes.corner, column)
+}
+
+/// Which Chip of the Variables' focused row sits under the pointer. Only the
+/// row the keyboard is on, for the reason the Breakpoint list's are: that is
+/// the row the pane draws Chips on.
+fn variables_chip_at(
+    state: &State,
+    panes: &Layout,
+    column: u16,
+    index: usize,
+) -> Option<&'static str> {
+    let chips: Vec<&'static str> = crate::debug::row_chips(state, index)
+        .into_iter()
+        .map(|chip| chip.action)
+        .collect();
+    icon_at(&chips, panes.terminal, column)
+}
+
+/// Which Chip of the Breakpoint list's Transport sits under the pointer, at
+/// the columns `ui` draws them from the same labels.
+fn breakpoint_chip_at(state: &State, panes: &Layout, column: u16) -> Option<&'static str> {
+    let chips = crate::debug::transport(state);
+    let labels = layout::chip_labels(&chips, panes.corner.width, layout::CORNER_TITLE);
+    let at = layout::strip_at(panes.corner, &labels, column)?;
+    Some(chips[at].action)
 }
 
 /// Which of the Risk pane's own action icons sits under the pointer, on the
@@ -1183,7 +1700,7 @@ mod tests {
     use crate::layout::{AiPane, Shapes};
     use crate::tree::Entry;
     use crate::Direction;
-    use crate::{Event, Modal, Pane, Place, State, View};
+    use crate::{Event, Modal, Pane, Place, Pointed, State, View};
     use std::path::PathBuf;
 
     fn workspace() -> State {
@@ -1751,59 +2268,153 @@ mod tests {
         assert_eq!(click(&state, 5, 25), vec![Event::ClickPane(Pane::History)]);
     }
 
+    /// The fourth occupant: a row, its icon on the row the keyboard is on, and
+    /// the Transport on the top border — " ✕ D " five columns wide, with a
+    /// column of border between it and the corner at 29.
+    #[test]
+    fn a_click_in_the_breakpoint_list_names_the_row_its_icon_or_the_chip() {
+        let mut state = workspace();
+        state.corner = crate::layout::Corner::Breakpoints;
+        state.breakpoints = (1..=2)
+            .map(|line| crate::debug::Breakpoint {
+                file: PathBuf::from("/w/a.rs"),
+                line,
+                text: String::new(),
+                stale: false,
+                properties: Default::default(),
+            })
+            .collect();
+        let click = |state: &State, column, row| {
+            on_mouse(
+                state,
+                &panes(
+                    120,
+                    26,
+                    30,
+                    None,
+                    0,
+                    0,
+                    Shapes {
+                        corner: crate::layout::Corner::Breakpoints,
+                        ..Shapes::default()
+                    },
+                ),
+                &mut Pointer::default(),
+                Input {
+                    kind: Kind::LeftDown,
+                    column,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                },
+            )
+            .events
+        };
+        assert_eq!(click(&state, 5, 19), vec![Event::ClickBreakpointRow(0)]);
+        assert_eq!(
+            click(&state, 25, 19),
+            vec![Event::RowAction(crate::debug::EDIT)]
+        );
+        assert_eq!(
+            click(&state, 27, 19),
+            vec![Event::RowAction(crate::debug::REMOVE)]
+        );
+        assert_eq!(click(&state, 27, 20), vec![Event::ClickBreakpointRow(1)]);
+        assert_eq!(
+            click(&state, 5, 21),
+            vec![Event::ClickPane(Pane::Breakpoints)]
+        );
+        for column in 23..=27 {
+            assert_eq!(
+                click(&state, column, 18),
+                vec![Event::PaneAction(crate::debug::CLEAR_ALL)]
+            );
+        }
+        for column in [22, 28] {
+            assert_eq!(
+                click(&state, column, 18),
+                vec![Event::ClickPane(Pane::Breakpoints)]
+            );
+        }
+    }
+
     /// R35.8. The Transport is on the editor's top border, so a click there is
     /// a control and never a place in the text — and a buffer that cannot be
     /// read has no controls, so the same columns are just the pane again.
+    ///
+    /// Pinned in both of its shapes, every column of each Chip including its
+    /// padding, and the border column between two naming neither: the columns
+    /// `ui`'s render test pins.
     #[test]
-    fn a_click_on_the_transport_reaches_the_reading_it_names() {
+    fn a_click_on_the_transport_reaches_the_chip_drawn() {
+        use crate::reading::{NEXT, PLAY_PAUSE, PREVIOUS, SPEED, STOP};
         let mut state = workspace();
         state.current_buffer = Some(PathBuf::from("/w/guide.md"));
         state.speech.speed = 1.0;
-        let editor = panes(120, 26, 30, None, 0, 0, Shapes::default()).editor;
-        // The strip is `« ▸ » ▪ 1.00x `, fourteen columns ending on the one
-        // before the corner — the columns `ui`'s render test pins.
-        let last = editor.x + editor.width - 1;
-        assert_eq!(
-            click(&state, last - 14, 0),
-            vec![Event::PaneAction(crate::reading::PREVIOUS)]
-        );
-        assert_eq!(
-            click(&state, last - 12, 0),
-            vec![Event::PaneAction(crate::reading::PLAY_PAUSE)]
-        );
-        assert_eq!(
-            click(&state, last - 10, 0),
-            vec![Event::PaneAction(crate::reading::NEXT)]
-        );
-        assert_eq!(
-            click(&state, last - 8, 0),
-            vec![Event::PaneAction(crate::reading::STOP)]
-        );
-        assert_eq!(
-            click(&state, last - 5, 0),
-            vec![Event::PaneAction(crate::reading::SPEED)]
-        );
+        let press = |state: &State, width: u16, from_corner: u16, row: u16| {
+            let panes = panes(width, 26, 30, None, 0, 0, Shapes::default());
+            let corner = panes.editor.x + panes.editor.width - 1;
+            on_mouse(
+                state,
+                &panes,
+                &mut Pointer::default(),
+                Input {
+                    kind: Kind::LeftDown,
+                    column: corner - from_corner,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                },
+            )
+            .events
+        };
+        let chip = |action| vec![Event::PaneAction(action)];
+        let border = vec![Event::ClickPane(Pane::Editor)];
+        // 120 columns leave the editor 54, too few for the keys: ` ► ` ` « `
+        // ` » ` ` ■ ` ` 1.00x `, each followed by a column of border.
+        let shed = [
+            (22..=24, PLAY_PAUSE),
+            (18..=20, PREVIOUS),
+            (14..=16, NEXT),
+            (10..=12, STOP),
+            (2..=8, SPEED),
+        ];
+        // 220 leave it 124: ` ► :pause ` ` « :prev ` ` » :next ` ` ■ :stop `
+        // ` 1.00x :speed `.
+        let whole = [
+            (47..=56, PLAY_PAUSE),
+            (37..=45, PREVIOUS),
+            (27..=35, NEXT),
+            (17..=25, STOP),
+            (2..=15, SPEED),
+        ];
+        for (width, strip) in [(120, shed), (220, whole)] {
+            for (columns, action) in strip {
+                let gap = columns.end() + 1;
+                assert_eq!(press(&state, width, gap, 0), border, "{width}: {gap}");
+                for column in columns {
+                    assert_eq!(
+                        press(&state, width, column, 0),
+                        chip(action),
+                        "{width}: {column}"
+                    );
+                }
+            }
+            assert_eq!(press(&state, width, 1, 0), border, "{width}");
+        }
         // The border's name, not its controls. The corner itself is not
         // tested here: it is the AI divider's handle, which is grabbed before
         // any pane sees the press — `layout`'s own test holds it to naming no
         // control.
-        assert_eq!(
-            click(&state, editor.x + 10, 0),
-            vec![Event::ClickPane(Pane::Editor)]
-        );
+        assert_eq!(press(&state, 120, 43, 0), border);
         // A row inside the pane is still text, which is what the border row
         // being tested first has to leave alone.
         assert!(matches!(
-            click(&state, editor.x + 8, 3).as_slice(),
+            press(&state, 120, 20, 3).as_slice(),
             [Event::ClickText(_)]
         ));
         // A buffer nothing can read draws no Transport, so those columns are
         // the pane and not a control that quietly does nothing.
         state.current_buffer = Some(PathBuf::from("/w/a.rs"));
-        assert_eq!(
-            click(&state, last - 5, 0),
-            vec![Event::ClickPane(Pane::Editor)]
-        );
+        assert_eq!(press(&state, 120, 5, 0), border);
     }
 
     /// Where the pointer rests is the editor's text and nothing else: the row
@@ -1831,13 +2442,19 @@ mod tests {
         };
         assert_eq!(
             moved(editor.x + 1 + crate::gutter(&state) + 3, editor.y + 2),
-            vec![Event::PointerMoved(Some(Place { line: 2, column: 4 }))]
+            vec![Event::PointerMoved(Pointed::Text(Place {
+                line: 2,
+                column: 4
+            }))]
         );
         assert_eq!(
             moved(editor.x + 4, editor.y),
-            vec![Event::PointerMoved(None)]
+            vec![Event::PointerMoved(Pointed::Elsewhere)]
         );
-        assert_eq!(moved(1, editor.y + 2), vec![Event::PointerMoved(None)]);
+        assert_eq!(
+            moved(1, editor.y + 2),
+            vec![Event::PointerMoved(Pointed::Elsewhere)]
+        );
         // A diff and a Preview draw rows that are not the buffer's lines, so
         // the cell the pointer is on names no place in the text (ADR 0007).
         for showing in [diffed(), previewing()] {
@@ -1854,7 +2471,7 @@ mod tests {
                     },
                 )
                 .events,
-                vec![Event::PointerMoved(None)]
+                vec![Event::PointerMoved(Pointed::Elsewhere)]
             );
         }
     }
@@ -1891,16 +2508,22 @@ mod tests {
         let at = place_in(&state, &panes, Pane::Editor, cell);
         assert_eq!(
             hover(&state, KeyModifiers::SUPER),
-            vec![Event::PointerMoved(Some(at)), Event::HoverLink(Some(at))]
+            vec![
+                Event::PointerMoved(Pointed::Text(at)),
+                Event::HoverLink(Some(at))
+            ]
         );
         state.link = Some(at);
         assert_eq!(
             hover(&state, KeyModifiers::CTRL),
-            vec![Event::PointerMoved(Some(at))]
+            vec![Event::PointerMoved(Pointed::Text(at))]
         );
         assert_eq!(
             hover(&state, KeyModifiers::NONE),
-            vec![Event::PointerMoved(Some(at)), Event::HoverLink(None)]
+            vec![
+                Event::PointerMoved(Pointed::Text(at)),
+                Event::HoverLink(None)
+            ]
         );
     }
 
@@ -2068,6 +2691,103 @@ mod tests {
         assert_eq!(outcome.events, vec![Event::DragAiDivider(40)]);
     }
 
+    /// The Strip's top border is the handle, and the height it names is the
+    /// rows from the pointer to the screen's bottom, left for `update` to
+    /// clamp. The row above it is the editor's, whose buffer dots stay
+    /// clickable.
+    #[test]
+    fn the_border_above_the_strip_is_grabbed_and_names_a_height() {
+        let state = workspace();
+        // 26 rows: the Strip is rows 18 to 25.
+        let panes = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        let mut pointer = Pointer::default();
+        on_mouse(
+            &state,
+            &panes,
+            &mut pointer,
+            Input {
+                kind: Kind::LeftDown,
+                column: 50,
+                row: 17,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert_eq!(pointer.dragging, None);
+        let mut pointer = Pointer::default();
+        let press = on_mouse(
+            &state,
+            &panes,
+            &mut pointer,
+            Input {
+                kind: Kind::LeftDown,
+                column: 50,
+                row: 18,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert!(press.events.is_empty(), "a press clicked through");
+        assert_eq!(pointer.dragging, Some(Divider::Strip));
+        let drag = on_mouse(
+            &state,
+            &panes,
+            &mut pointer,
+            Input {
+                kind: Kind::LeftDrag,
+                column: 50,
+                row: 10,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert_eq!(drag.events, vec![Event::DragStrip(16)]);
+    }
+
+    /// A tall AI pane runs past the Strip, so its columns on that row are the
+    /// AI pane's, not the handle.
+    #[test]
+    fn a_tall_ai_pane_is_not_the_border_above_the_strip() {
+        let tall = Shapes {
+            ai: AiPane::Tall,
+            ..Shapes::default()
+        };
+        let panes = panes(120, 26, 30, None, 0, 0, tall);
+        let mut pointer = Pointer::default();
+        on_mouse(
+            &workspace(),
+            &panes,
+            &mut pointer,
+            Input {
+                kind: Kind::LeftDown,
+                column: panes.ai.x + 2,
+                row: panes.terminal.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert_eq!(pointer.dragging, None);
+    }
+
+    /// The Corner's top border is the Strip's too, and its icons stay clickable.
+    #[test]
+    fn the_corners_border_is_not_the_border_above_the_strip() {
+        let shapes = Shapes {
+            corner: crate::layout::Corner::Risk,
+            ..Shapes::default()
+        };
+        let panes = panes(120, 26, 30, None, 0, 0, shapes);
+        let mut pointer = Pointer::default();
+        on_mouse(
+            &workspace(),
+            &panes,
+            &mut pointer,
+            Input {
+                kind: Kind::LeftDown,
+                column: 5,
+                row: panes.corner.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert_eq!(pointer.dragging, None);
+    }
+
     /// The terminal runs the full width beneath, so its rows must reach the
     /// shell rather than a divider that is nowhere near them.
     #[test]
@@ -2149,6 +2869,88 @@ mod tests {
             },
         );
         assert!((0..26).any(|row| palette_entry_at(&state, &panes, 60, row) == Some('r')));
+    }
+
+    /// Every key the Chord hint names is a cell a click lands on, and the click
+    /// is that key: the hint is also a menu.
+    #[test]
+    fn every_chord_hint_entry_is_a_click_on_its_key() {
+        let state = State {
+            modal: Modal::Chord,
+            ..workspace()
+        };
+        let panes = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        for (key, _) in crate::keys::chord_rows(&state) {
+            let Some(key) = key else { continue };
+            let clicked = (0..26).any(|row| {
+                (0..120)
+                    .any(|column| click(&state, column, row) == vec![Event::ClickPaletteEntry(key)])
+            });
+            assert!(clicked, "the hint's ({key}) cannot be clicked");
+        }
+        let closed = workspace();
+        assert!((0..26).all(|row| palette_entry_at(&closed, &panes, 60, row).is_none()));
+    }
+
+    /// The gutter's leftmost column is the Breakpoint column, and the line
+    /// number beside it sets nothing — it is a click at the start of the line,
+    /// as it always was. A diff has no Breakpoints to set.
+    #[test]
+    fn a_click_in_the_breakpoint_column_toggles_that_lines_breakpoint() {
+        let panes = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        let column = panes.editor.x + 1 + crate::layout::BREAKPOINT_COLUMN;
+        assert_eq!(
+            click(&editing(), column, 3),
+            vec![Event::ToggleBreakpoint(3)]
+        );
+        assert_eq!(
+            click(&editing(), column + 1, 3),
+            vec![Event::ClickText(Place { line: 3, column: 1 })]
+        );
+        assert!(!click(&diffed(), column, 3).contains(&Event::ToggleBreakpoint(3)));
+        // A Preview has no gutter, so the column is its text; and the bottom
+        // border is chrome, not the line scrolled beneath it.
+        assert!(!click(&previewing(), column, 3).contains(&Event::ToggleBreakpoint(3)));
+        let border = panes.editor.bottom() - 1;
+        assert!(!matches!(
+            click(&editing(), column, border).as_slice(),
+            [Event::ToggleBreakpoint(_)]
+        ));
+    }
+
+    /// A Run mark shares the Breakpoint column and takes its click, unless a
+    /// Breakpoint is drawn over it: the one drawn is the one a click takes.
+    /// With the offer up, each of its Chips is a click on that choice.
+    #[test]
+    fn a_click_on_a_run_mark_offers_it_unless_a_breakpoint_is_drawn_over_it() {
+        let mut state = editing();
+        state.runs = crate::startup::start(&crate::startup::Startup::default())
+            .expect("the defaults start")
+            .0
+            .runs;
+        state.buffers.insert(
+            PathBuf::from("/w/a.rs"),
+            crate::editor::Buffer::open("\n\nfn main() {}\n", false, 4),
+        );
+        let panes = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        let column = panes.editor.x + 1 + crate::layout::BREAKPOINT_COLUMN;
+        assert_eq!(click(&state, column, 3), vec![Event::OfferRun(3)]);
+        let offered = crate::update(&state, Event::OfferRun(3)).0;
+        for action in [crate::run::RUN, crate::run::DEBUG] {
+            let clicked = (0..26).any(|row| {
+                (0..120)
+                    .any(|column| click(&offered, column, row) == vec![Event::ChooseRun(action)])
+            });
+            assert!(clicked, "the offer's {action} cannot be clicked");
+        }
+        state.breakpoints.push(crate::debug::Breakpoint {
+            file: PathBuf::from("/w/a.rs"),
+            line: 3,
+            text: "fn main() {}".to_string(),
+            stale: false,
+            properties: crate::debug::Properties::default(),
+        });
+        assert_eq!(click(&state, column, 3), vec![Event::ToggleBreakpoint(3)]);
     }
 
     /// Every entry the palette offers is clickable at some cell, at the two
@@ -2373,14 +3175,17 @@ mod tests {
                 },
             )
         };
-        let over_text = moved(&mut pointer, 43, 5);
+        let over_text = moved(&mut pointer, 44, 5);
         assert_eq!(
             over_text.events,
-            vec![Event::PointerMoved(Some(Place { line: 5, column: 5 }))]
+            vec![Event::PointerMoved(Pointed::Text(Place {
+                line: 5,
+                column: 5
+            }))]
         );
         assert_eq!(
             moved(&mut pointer, 5, 5).events,
-            vec![Event::PointerMoved(None)]
+            vec![Event::PointerMoved(Pointed::Elsewhere)]
         );
         assert_eq!(pointer, Pointer::default(), "a move took hold of something");
     }
@@ -2555,7 +3360,7 @@ mod tests {
     // screen for that, so the drag comes back finished.
     #[test]
     fn dragging_in_the_editor_covers_a_span_of_the_buffer() {
-        let outcome = drag(&editing(), (39, 1), (43, 3));
+        let outcome = drag(&editing(), (40, 1), (44, 3));
         assert_eq!(
             outcome.events,
             vec![Event::DragText {
@@ -2585,7 +3390,7 @@ mod tests {
         let mut scrolled = editing();
         scrolled.editor_scroll = 4;
         assert_eq!(
-            drag(&scrolled, (40, 2), (40, 2)).events,
+            drag(&scrolled, (41, 2), (41, 2)).events,
             vec![Event::DragText {
                 from: Place { line: 6, column: 2 },
                 to: Place { line: 6, column: 2 },
@@ -2601,7 +3406,7 @@ mod tests {
         let mut scrolled = editing();
         scrolled.editor_hscroll = 12;
         assert_eq!(
-            drag(&scrolled, (40, 2), (40, 2)).events,
+            drag(&scrolled, (41, 2), (41, 2)).events,
             vec![Event::DragText {
                 from: Place {
                     line: 2,
@@ -2619,7 +3424,7 @@ mod tests {
     #[test]
     fn clicking_in_the_editor_reports_the_place_clicked() {
         assert_eq!(
-            click(&editing(), 43, 3),
+            click(&editing(), 44, 3),
             vec![Event::ClickText(Place { line: 3, column: 5 })]
         );
     }
@@ -2789,9 +3594,9 @@ mod tests {
     fn two_presses_on_one_cell_inside_the_window_pick_the_word() {
         let state = editing();
         let doubled = Event::DoubleClickText(Place { line: 3, column: 5 });
-        assert!(twice(&state, (43, 3, 0), (43, 3, 299)).contains(&doubled));
-        assert!(!twice(&state, (43, 3, 0), (43, 3, 301)).contains(&doubled));
-        assert!(!twice(&state, (44, 3, 0), (43, 3, 100)).contains(&doubled));
+        assert!(twice(&state, (44, 3, 0), (44, 3, 299)).contains(&doubled));
+        assert!(!twice(&state, (44, 3, 0), (44, 3, 301)).contains(&doubled));
+        assert!(!twice(&state, (45, 3, 0), (44, 3, 100)).contains(&doubled));
     }
 
     // Nothing to pick where a press names no place in the text: the pane, a
@@ -2932,6 +3737,128 @@ mod tests {
             at(15, 8),
             (Some(Direction::Down), Some(Direction::Right)),
             "a corner moves both"
+        );
+    }
+
+    /// The Evaluator's window is moved, resized and picked text out of by the
+    /// same button, so which gesture a drag is has to be decided at the press
+    /// and held. Every part of the chrome here on one rectangle, because the
+    /// one that matters most is the press that grabs *nothing*: a window that
+    /// moved when a selection began is a Snippet nobody can copy out of.
+    #[test]
+    fn a_press_decides_whether_a_drag_moves_the_window_resizes_it_or_picks_text() {
+        let window = Area {
+            x: 20,
+            y: 5,
+            width: 40,
+            height: 12,
+        };
+        let panes = panes(
+            120,
+            40,
+            30,
+            None,
+            0,
+            0,
+            Shapes {
+                evaluator: Some(window),
+                ..Shapes::default()
+            },
+        );
+        let mut state = crate::debug::paused(workspace());
+        crate::debug::open_evaluator(&mut state, "count".to_string());
+        state.evaluator_at = Some(window);
+        // Press, then one report a few cells along: the drag is measured from
+        // where the button went down.
+        let drag = |from: (u16, u16), to: (u16, u16)| {
+            let mut pointer = Pointer::default();
+            let input = |kind, (column, row)| Input {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            };
+            on_mouse(&state, &panes, &mut pointer, input(Kind::LeftDown, from));
+            on_mouse(&state, &panes, &mut pointer, input(Kind::LeftDrag, to))
+                .events
+                .into_iter()
+                .find(|event| {
+                    matches!(
+                        event,
+                        Event::PlaceEvaluator(_) | Event::SizeSnippet(_) | Event::DragText { .. }
+                    )
+                })
+        };
+        let title = (window.x + 2, window.y);
+        assert_eq!(
+            drag(title, (title.0 + 10, title.1 + 2)),
+            Some(Event::PlaceEvaluator(Area {
+                x: 30,
+                y: 7,
+                ..window
+            })),
+            "the title bar moves it"
+        );
+        assert_eq!(
+            drag(
+                (window.right() - 1, window.bottom() - 1),
+                (window.right() + 9, window.bottom() + 3)
+            ),
+            Some(Event::PlaceEvaluator(Area {
+                width: 50,
+                height: 16,
+                ..window
+            })),
+            "the bottom-right corner resizes both ways"
+        );
+        assert_eq!(
+            drag((window.x, window.y + 3), (window.x + 4, window.y + 3)),
+            Some(Event::PlaceEvaluator(Area {
+                x: 24,
+                width: 36,
+                ..window
+            })),
+            "the left border keeps the right one where it is"
+        );
+        assert_eq!(
+            drag(
+                (window.x + 5, window.bottom() - 1),
+                (window.x + 5, window.bottom() + 2)
+            ),
+            Some(Event::PlaceEvaluator(Area {
+                height: 15,
+                ..window
+            })),
+            "the bottom border resizes downward alone"
+        );
+        assert_eq!(
+            drag(
+                (window.x, window.bottom() - 1),
+                (window.x - 4, window.bottom() + 2)
+            ),
+            Some(Event::PlaceEvaluator(Area {
+                x: 16,
+                width: 44,
+                height: 15,
+                ..window
+            })),
+            "the bottom-left corner resizes both ways and keeps the right edge"
+        );
+        let (snippet, _) = crate::layout::evaluator_split(window, None);
+        assert_eq!(
+            drag(
+                (window.x + 2, snippet.bottom()),
+                (window.x + 2, snippet.bottom() - 2)
+            ),
+            Some(Event::SizeSnippet(snippet.height - 2)),
+            "the rule between the halves divides them"
+        );
+        assert!(
+            matches!(
+                drag((snippet.x + 1, snippet.y), (snippet.x + 4, snippet.y + 1)),
+                Some(Event::DragText { .. })
+            ),
+            "a drag inside the Snippet picks text"
         );
     }
 }

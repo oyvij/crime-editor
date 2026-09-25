@@ -8,9 +8,10 @@
 //! `docs/adr/0011-a-language-server-is-a-second-hosted-child.md` argues why that
 //! fact is the edge's alone, and `State::lsp_running` is where the edge puts it.
 
+use crate::layout::{Area, Layout};
 use crate::search::{Hit, Results};
 use crate::startup::Server;
-use crate::{preview, Effect, Place, Search, State};
+use crate::{preview, Effect, Place, Pointed, Search, State};
 use lsp_types::{
     ClientCapabilities, CompletionClientCapabilities, CompletionItemCapability, CompletionResponse,
     DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
@@ -351,7 +352,13 @@ impl Ask {
                     // still there: the cursor was never moved for it, and
                     // measured against the cursor the reply would be dropped as
                     // stale before it could be drawn.
-                    About::Hover if state.pointed_at == Some(self.place) => true,
+                    About::Hover if state.pointed_at == Pointed::Text(self.place) => true,
+                    // And while the pointer is on the box itself, which is
+                    // the only way to read or scroll a box longer than a
+                    // glance: the pointer has to cross from the symbol to get
+                    // there, and a box that went when it left the symbol
+                    // could never be reached.
+                    About::Hover if state.pointed_at == Pointed::Hover => true,
                     _ => buffer.line == self.place.line && buffer.column == self.place.column,
                 })
     }
@@ -498,14 +505,7 @@ pub fn sync(state: &mut State) -> Vec<Effect> {
             json: request(
                 INITIALIZE,
                 "initialize",
-                initialize(
-                    &state.root,
-                    state
-                        .servers
-                        .get(&language)
-                        .and_then(|server| server.initialization_options.as_ref()),
-                    &facts,
-                ),
+                initialize(&state.root, options(state, &language, &facts)),
             ),
         });
         state
@@ -1038,34 +1038,110 @@ pub struct Hover {
     /// pass — a box drawn over a different file, or over a cursor that has
     /// moved on, describes a symbol nobody is looking at.
     pub asked: Ask,
+    /// The first of `lines` the box draws. A reply longer than the pane is
+    /// only readable by scrolling the box, and scrolling the editor under it
+    /// moves the symbol it describes instead. Clamped in `update`.
+    pub first: usize,
+    /// Whether the keyboard is in the box. Here and not a [`crate::Modal`]
+    /// variant, so the keyboard goes with the box whatever takes it down.
+    pub focused: bool,
+    /// While Paused, what the expression under the pointer holds — asked of
+    /// the Debug adapter and drawn above the type and docs. `None` outside a
+    /// session, which is every Hover Varde drew before there was a debugger,
+    /// and which is what keeps that box unchanged.
+    pub value: Option<crate::debug::Hovered>,
 }
 
-impl Hover {
-    /// How many rows the box takes on screen: its lines, plus the two rows its
-    /// border sits on. The renderer draws the border, but a border row hides a
-    /// line of code exactly as a text row does, so the count is the core's —
-    /// measured without it, the box sits one row over the symbol it describes,
-    /// which is what it did until a real server was driven at the bottom of the
-    /// pane.
-    pub fn rows(&self) -> usize {
-        self.lines.len() + 2
-    }
+/// One row of the box, and which of its two sections it belongs to. The value
+/// comes first while Paused: a reader stopped in their program wants what the
+/// expression *holds* before what it is.
+///
+/// One list, because the renderer draws these rows, the placement measures
+/// them and the mouse hit-tests against the box they fill — three derivations
+/// of how tall a box is is a box drawn where nobody put it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Said {
+    /// What the expression holds, as a tree that opens like the Variables.
+    Value(crate::debug::Row),
+    /// That the expression would have to be evaluated to be known, because it
+    /// calls something and a Hover never calls anything.
+    Needs,
+    /// The language server's type and docs.
+    Docs(crate::preview::Row),
+}
 
-    pub fn covers(&self, line: usize) -> bool {
-        (self.from..self.from + self.rows()).contains(&line)
-    }
-
-    pub fn placement(&self) -> Placement {
-        let texts: Vec<String> = self.lines.iter().map(crate::preview::Row::text).collect();
-        Placement {
-            from: self.from,
-            // At the text's left edge: a hover describes the whole line, where
-            // the candidate list offers a replacement for one word in it.
-            column: 1,
-            width: measured(texts.iter().map(String::as_str)),
-            rows: self.rows(),
+impl Said {
+    /// What the row reads as, which is what the box is measured against.
+    pub fn text(&self) -> String {
+        match self {
+            Said::Value(row) => format!("{}{} = {}", "  ".repeat(row.depth), row.name, row.value),
+            Said::Needs => NEEDS_EVALUATE.to_string(),
+            Said::Docs(row) => row.text(),
         }
     }
+}
+
+/// What the box says where the expression under it calls something. The words
+/// and not a slug, unlike a refusal's, because the box is measured against
+/// them: a renderer drawing a sentence the core sized a shorter one for is a
+/// sentence clipped at the border.
+pub const NEEDS_EVALUATE: &str = "calls something \u{2014} evaluate to see it";
+
+/// The box's rows, top to bottom. Empty when there is no box.
+pub fn sections(state: &State) -> Vec<Said> {
+    let Some(hover) = state.hover.as_ref() else {
+        return Vec::new();
+    };
+    let value = match hover.value.as_ref().map(|hovered| &hovered.held) {
+        Some(crate::debug::Held::NeedsEvaluate) => vec![Said::Needs],
+        None => Vec::new(),
+        Some(_) => crate::debug::hovered_rows(state)
+            .into_iter()
+            .map(Said::Value)
+            .collect(),
+    };
+    value
+        .into_iter()
+        .chain(hover.lines.iter().cloned().map(Said::Docs))
+        .collect()
+}
+
+/// How many rows the box takes on screen: the rows it says, plus the two its
+/// border sits on. The renderer draws the border, but a border row hides a
+/// line of code exactly as a text row does, so the count is the core's —
+/// measured without it, the box sits one row over the symbol it describes,
+/// which is what it did until a real server was driven at the bottom of the
+/// pane.
+pub fn rows(state: &State) -> usize {
+    sections(state).len() + 2
+}
+
+/// Whether the box is drawn over `line`. Beside [`rows`] and [`placement`]
+/// rather than on [`Hover`], because all three are measurements of the box on
+/// screen and the box's own fields answer none of them alone.
+pub fn covers(state: &State, line: usize) -> bool {
+    state
+        .hover
+        .as_ref()
+        .is_some_and(|hover| (hover.from..hover.from + rows(state)).contains(&line))
+}
+
+/// Where the box goes and how big it is, measured over everything it says.
+pub fn placement(state: &State) -> Option<Placement> {
+    let hover = state.hover.as_ref()?;
+    let texts: Vec<String> = sections(state).iter().map(Said::text).collect();
+    // Never narrower than its own Chips: the box's border is where they are
+    // drawn, and a box measured over its text alone cuts one off — which is
+    // the one thing a strip of Chips may never do.
+    let chips = crate::layout::strip_width(&crate::debug::hover_labels(state, u16::MAX)) as usize;
+    Some(Placement {
+        from: hover.from,
+        // At the text's left edge: a hover describes the whole line, where
+        // the candidate list offers a replacement for one word in it.
+        column: 1,
+        width: measured(texts.iter().map(String::as_str)).max(chips + 2),
+        rows: rows(state),
+    })
 }
 
 /// Where a box over the buffer goes and how big it is — the four numbers the
@@ -1082,6 +1158,35 @@ pub struct Placement {
     pub column: usize,
     pub width: usize,
     pub rows: usize,
+}
+
+impl Placement {
+    /// Where the box is on screen, over the editor pane it was placed in: its
+    /// buffer line and column turned into a row and column off the same
+    /// `editor_scroll` and `editor_hscroll` the code is drawn from, and kept
+    /// inside the screen across and inside the pane down. The box floats over
+    /// its neighbours like every other overlay — the core wraps it to the
+    /// screen for that reason — but its *rows* are that pane's lines, so a row
+    /// outside the pane would sit beside a line nobody is looking at.
+    ///
+    /// Here rather than in `ui` because the pointer is hit-tested against the
+    /// box as well as drawn under it: two copies of this arithmetic is a
+    /// pointer on the box's border read as a pointer on the code. The screen's
+    /// width is the AI pane's right edge, the last column the layout hands out.
+    pub fn spot(&self, state: &State, panes: &Layout) -> Area {
+        let editor = panes.editor;
+        let screen_width = panes.ai.right();
+        let height = (self.rows as u16).min(editor.height);
+        let width = (self.width as u16).min(screen_width);
+        let row = self.from.saturating_sub(1 + state.editor_scroll) as u16;
+        let across = self.column.saturating_sub(1 + state.editor_hscroll) as u16;
+        Area {
+            x: (editor.x + crate::gutter(state) + across).min(screen_width.saturating_sub(width)),
+            y: (editor.y + 1 + row).min(editor.bottom().saturating_sub(height)),
+            width,
+            height,
+        }
+    }
 }
 
 /// How wide a box holding these lines is: its widest line in *screen columns*,
@@ -1636,21 +1741,79 @@ fn hovered(state: &mut State, ask: Ask, result: &Value) -> Told {
         // [`empty_handed`]'s, once every server has had its turn.
         return Told::Nothing;
     };
+    // What the adapter already said about the same place is kept: the two
+    // halves of the box are asked for separately and arrive in either order,
+    // so a reply that replaced the box would drop whichever came first.
+    let value = state
+        .hover
+        .take()
+        .filter(|hover| hover.asked.place == ask.place)
+        .and_then(|hover| hover.value);
     // Placed against the rows the box will take rather than the lines it holds,
     // which is why the box is built first and asked how tall it is.
-    let mut hover = Hover {
+    state.hover = Some(Hover {
         lines,
         from: 0,
         asked: ask,
-    };
-    hover.from = placed(
-        hover.rows(),
-        hover.asked.place.line,
-        state.editor_scroll,
-        rows,
-    );
-    state.hover = Some(hover);
+        first: 0,
+        focused: false,
+        value,
+    });
+    settle_box(state, rows);
     Told::Something(Vec::new())
+}
+
+/// The box put over the line it is about, against the rows it now has. Called
+/// by both halves, because either can change how tall the box is and a box
+/// placed against one half's rows sits over the symbol the other describes.
+fn settle_box(state: &mut State, pane_rows: usize) {
+    let (count, scroll) = (rows(state), state.editor_scroll);
+    if let Some(hover) = state.hover.as_mut() {
+        hover.from = placed(count, hover.asked.place.line, scroll, pane_rows);
+    }
+}
+
+/// The Hover's value section while Paused: the expression under `at` and the
+/// `evaluate` that asks what it holds, put up as a box of its own if the
+/// language server has not answered yet.
+///
+/// The box goes up here rather than when an answer arrives, because a Hover
+/// over a call has no answer coming — the adapter is never asked — and a box
+/// that waited for one would never be drawn at all.
+pub fn value_hover(state: &mut State, at: Place) -> Vec<Effect> {
+    let (hovered, effects) = crate::debug::hovered(state, at);
+    let Some(path) = state.current_buffer.clone() else {
+        return effects;
+    };
+    let Some(revision) = state
+        .buffers
+        .get(&path)
+        .map(crate::editor::Buffer::revision)
+    else {
+        return effects;
+    };
+    match state.hover.as_mut().filter(|hover| hover.asked.place == at) {
+        Some(hover) => hover.value = hovered,
+        None if hovered.is_some() => {
+            state.hover = Some(Hover {
+                lines: Vec::new(),
+                from: 0,
+                asked: Ask {
+                    path,
+                    place: at,
+                    revision,
+                    about: About::Hover,
+                },
+                first: 0,
+                focused: false,
+                value: hovered,
+            });
+        }
+        None => return effects,
+    }
+    let pane_rows = crate::fits(state).1;
+    settle_box(state, pane_rows);
+    effects
 }
 
 /// What the server says may follow what is being typed, put on screen.
@@ -2268,6 +2431,9 @@ pub fn received(state: &mut State, language: &str, message: &str) -> Vec<Effect>
     if id == INITIALIZE && waiting(state, language) {
         return handshaken(state, language, &message);
     }
+    if let Some(effects) = crate::debug::ported(state, language, id, &message) {
+        return effects;
+    }
     answered(state, language, id, &message)
 }
 
@@ -2530,7 +2696,9 @@ pub fn pointed(state: &State) -> Option<(Vec<String>, Placement)> {
     if state.diff.is_some() || crate::previewing(state) {
         return None;
     }
-    let at = state.pointed_at?;
+    let Pointed::Text(at) = state.pointed_at else {
+        return None;
+    };
     let path = state.current_buffer.as_ref()?;
     let (from, _, diagnostic) = spans(state, path, at.line)
         .into_iter()
@@ -2794,11 +2962,53 @@ pub(crate) fn facts(state: &State) -> BTreeMap<String, Option<String>> {
         .collect()
 }
 
-fn initialize(
-    root: &Path,
-    options: Option<&serde_json::Map<String, Value>>,
+/// What a server is told in `initializationOptions`: its own row's options and
+/// the `plugin` of every Debug adapter it hosts, each filled on its own and then
+/// joined — so a plugin whose fact was not found goes alone, rather than taking
+/// the server's own entry under the same key with it.
+fn options(
+    state: &State,
+    language: &str,
     facts: &BTreeMap<String, Option<String>>,
-) -> InitializeParams {
+) -> Option<Value> {
+    let own = state
+        .servers
+        .get(language)
+        .and_then(|server| server.initialization_options.as_ref());
+    let plugins = state
+        .adapters
+        .values()
+        .filter(|adapter| adapter.server.as_deref() == Some(language))
+        .filter_map(|adapter| adapter.plugin.as_ref());
+    own.into_iter()
+        .chain(plugins)
+        .map(|options| Value::Object(filled_options(options, facts)))
+        .reduce(|mut into, from| {
+            joined(&mut into, from);
+            into
+        })
+}
+
+/// A table merged key by key and a list added to, so neither of two rows
+/// passing one server options has to know what the other passes.
+fn joined(into: &mut Value, from: Value) {
+    match (into, from) {
+        (Value::Object(into), Value::Object(from)) => {
+            for (key, value) in from {
+                match into.get_mut(&key) {
+                    Some(held) => joined(held, value),
+                    None => {
+                        into.insert(key, value);
+                    }
+                }
+            }
+        }
+        (Value::Array(into), Value::Array(from)) => into.extend(from),
+        (into, from) => *into = from,
+    }
+}
+
+fn initialize(root: &Path, options: Option<Value>) -> InitializeParams {
     InitializeParams {
         // The client's own pid is the edge's to know, and null is what the
         // protocol has for a client that does not say.
@@ -2851,8 +3061,7 @@ fn initialize(
         // Varde can do — it is how a server is told where its own toolchain
         // lives, and several will not run without it. A language that
         // configured none says nothing.
-        initialization_options: options
-            .map(|options| Value::Object(filled_options(options, facts))),
+        initialization_options: options,
         ..InitializeParams::default()
     }
 }
@@ -2868,6 +3077,30 @@ fn uri(path: &Path) -> Option<Url> {
     Url::from_file_path(path).ok()
 }
 
+/// A command put to `language`'s server — how a Debug adapter it hosts is
+/// started — and the id its answer comes back under. `None` until that server
+/// has finished its handshake, since it reads nothing sent before then.
+pub(crate) fn execute(state: &mut State, language: &str, command: &str) -> Option<(i64, Effect)> {
+    let conversation = state
+        .lsp
+        .get_mut(language)
+        .filter(|held| held.handshake == Handshake::Ready)?;
+    let id = conversation.next_id;
+    conversation.next_id += 1;
+    let json = request(
+        id,
+        "workspace/executeCommand",
+        json!({ "command": command }),
+    );
+    Some((
+        id,
+        Effect::LspSend {
+            language: language.to_string(),
+            json,
+        },
+    ))
+}
+
 fn request(id: i64, method: &str, params: impl Serialize) -> String {
     json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string()
 }
@@ -2880,6 +3113,54 @@ fn notification(method: &str, params: impl Serialize) -> String {
 mod tests {
     use super::*;
     use crate::editor::Buffer;
+
+    /// A hosted adapter's plugin joins what the server's own row passes it,
+    /// each filled on its own: a plugin whose fact was not found goes without
+    /// taking the server's entry under the same key with it.
+    #[test]
+    fn a_plugin_joins_the_options_of_the_server_that_hosts_it() {
+        let mut state = workspace("rust", "rust-analyzer");
+        state.facts.insert(
+            "plugin_jar".to_string(),
+            serde_json::from_value(json!({"marker": "plugin.jar"})).unwrap(),
+        );
+        state
+            .servers
+            .get_mut("rust")
+            .unwrap()
+            .initialization_options =
+            serde_json::from_str(r#"{"bundles": ["/own.jar"], "x": {"y": 1}}"#).ok();
+        let adapter = |server: &str, plugin: &str| crate::startup::Adapter {
+            command: "start".to_string(),
+            args: Vec::new(),
+            install: std::collections::BTreeMap::new(),
+            server: Some(server.to_string()),
+            plugin: serde_json::from_str(plugin).ok(),
+        };
+        state.adapters.insert(
+            "rust".to_string(),
+            adapter("rust", r#"{"bundles": ["${plugin_jar}"], "x": {"z": 2}}"#),
+        );
+        state
+            .adapters
+            .insert("other".to_string(), adapter("go", r#"{"elsewhere": true}"#));
+        assert_eq!(
+            options(&state, "rust", &facts(&state)),
+            Some(json!({"bundles": ["/own.jar"], "x": {"y": 1, "z": 2}}))
+        );
+        state
+            .workspace_facts
+            .insert("plugin_jar".to_string(), "/plugin.jar".to_string());
+        assert_eq!(
+            options(&state, "rust", &facts(&state)),
+            Some(json!({"bundles": ["/own.jar", "/plugin.jar"], "x": {"y": 1, "z": 2}}))
+        );
+        assert_eq!(
+            options(&state, "go", &facts(&state)),
+            Some(json!({"elsewhere": true}))
+        );
+        assert_eq!(options(&state, "vue", &facts(&state)), None);
+    }
 
     /// The last line, not the gate. [`sync`] refuses to spawn a server whose
     /// requirement is unmet, so at the system level the empty argument can no
@@ -3433,7 +3714,7 @@ mod tests {
         let path = state.root.join("src/lib.rs");
         open(&mut state, "src/lib.rs", "fn main() {}");
         state.current_buffer = Some(path.clone());
-        state.pointed_at = Some(crate::Place { line: 1, column: 4 });
+        state.pointed_at = Pointed::Text(crate::Place { line: 1, column: 4 });
         state.diagnostics.entry(path.clone()).or_default().insert(
             "rust".to_string(),
             vec![Diagnostic {
@@ -3907,32 +4188,39 @@ mod tests {
     fn the_box_sits_beside_the_line_it_describes_never_on_it() {
         // Two lines, so four rows once the border is counted.
         let boxed = |line: usize| {
-            let mut hover = Hover {
-                lines: says(
-                    &json!({"contents": {"kind": "plaintext", "value": "one\ntwo"}}),
-                    40,
-                )
-                .expect("two rows"),
-                from: 0,
-                asked: Ask {
-                    path: PathBuf::from("/w/one.rs"),
-                    place: Place { line, column: 1 },
-                    revision: 1,
-                    about: About::Hover,
-                },
+            let mut state = State {
+                hover: Some(Hover {
+                    lines: says(
+                        &json!({"contents": {"kind": "plaintext", "value": "one\ntwo"}}),
+                        40,
+                    )
+                    .expect("two rows"),
+                    from: 0,
+                    asked: Ask {
+                        path: PathBuf::from("/w/one.rs"),
+                        place: Place { line, column: 1 },
+                        revision: 1,
+                        about: About::Hover,
+                    },
+                    first: 0,
+                    focused: false,
+                    value: None,
+                }),
+                ..State::default()
             };
-            hover.from = placed(hover.rows(), line, 0, 20);
-            hover
+            settle_box(&mut state, 20);
+            state
         };
+        let boxed_at = |state: &State| state.hover.as_ref().expect("a box").from;
         let below = boxed(6);
-        assert_eq!(below.from, 7);
-        assert!(!below.covers(6) && below.covers(10));
+        assert_eq!(boxed_at(&below), 7);
+        assert!(!covers(&below, 6) && covers(&below, 10));
         // Near the bottom the four rows do not fit below, so the box goes
         // above — and its own bottom border must still leave the line alone,
         // which counting only its lines did not.
         let above = boxed(19);
-        assert_eq!(above.from, 15);
-        assert!(!above.covers(19) && above.covers(18));
+        assert_eq!(boxed_at(&above), 15);
+        assert!(!covers(&above, 19) && covers(&above, 18));
     }
 
     /// A ready server with everything declared, for the questions below —

@@ -1,4 +1,6 @@
-//! JSON-RPC over a child's stdio — the channel a language server speaks on.
+//! JSON-RPC over a child's stdio — the channel a language server speaks on —
+//! and the Debug Adapter Protocol over a Debug adapter's, which is a second
+//! channel rather than a reuse (ADR 0021).
 //!
 //! `pty.rs` is this pattern with the other framing: a child, a reader thread,
 //! and whatever arrived handed to the core as an event. The framing itself is
@@ -12,9 +14,15 @@ use anyhow::Result;
 use lsp_server::Message;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
+use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
+
+/// How long a server-reached Debug adapter has to start listening. Generous,
+/// since an adapter unpacking its own runtime on first start is slow, and one
+/// that exits instead ends the wait at once.
+const CONNECT: std::time::Duration = std::time::Duration::from_secs(10);
 
 pub struct Server {
     child: Child,
@@ -107,5 +115,213 @@ impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// A Debug adapter over its stdio or a TCP connection to it: the same child,
+/// reader thread and drain as [`Server`], in the Debug Adapter Protocol's
+/// framing. That framing is LSP's `Content-Length` header, but a DAP message
+/// has no `jsonrpc` field, so `lsp_server` cannot read one and no crate frames
+/// it for a client (`docs/stack.md`).
+pub struct Adapter {
+    /// `None` for an adapter a language server hosts: the server owns that
+    /// process, and only the connection is Varde's.
+    child: Option<Child>,
+    writer: BufWriter<Box<dyn Write + Send>>,
+    incoming: Receiver<String>,
+    pub alive: bool,
+}
+
+impl Adapter {
+    pub fn spawn(
+        command: &str,
+        args: &[String],
+        cwd: &Path,
+        log: Option<File>,
+    ) -> std::io::Result<Self> {
+        let mut child = Command::new(command)
+            .args(args)
+            .current_dir(cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            // For the reason a server's does: this process's stderr is the
+            // screen.
+            .stderr(log.map_or_else(Stdio::null, Stdio::from))
+            .spawn()?;
+        let stdout = child.stdout.take().expect("a piped stdout");
+        let stdin = child.stdin.take().expect("a piped stdin");
+        Ok(Self::over(Some(child), stdout, Box::new(stdin)))
+    }
+
+    /// An adapter that listens rather than reading its stdin: spawned with
+    /// `port` already in its arguments, then connected to on it. Its stdout is
+    /// talk rather than protocol, so it goes where its stderr does.
+    ///
+    /// The spawn is here, so a command that is not there is said at once; the
+    /// connection is made on a thread and arrives on the receiver, because an
+    /// adapter unpacking its own runtime on a first start can take seconds to
+    /// listen and the screen must not stop for it. Until it arrives nothing
+    /// can be sent, and nothing is: the core is told of the adapter only then.
+    pub fn connect(
+        command: &str,
+        args: &[String],
+        cwd: &Path,
+        log: Option<File>,
+        port: u16,
+    ) -> std::io::Result<Receiver<std::io::Result<Self>>> {
+        let stdout = match &log {
+            Some(file) => Stdio::from(file.try_clone()?),
+            None => Stdio::null(),
+        };
+        let child = Command::new(command)
+            .args(args)
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .stdout(stdout)
+            .stderr(log.map_or_else(Stdio::null, Stdio::from))
+            .spawn()?;
+        Ok(Self::dial(port, Some(child)))
+    }
+
+    /// The connection to an adapter listening on `port`, made on a thread for
+    /// the reason [`Adapter::connect`]'s is, and given up on early if `child`
+    /// — the adapter's process, where Varde spawned it — exits first.
+    pub fn dial(port: u16, mut child: Option<Child>) -> Receiver<std::io::Result<Self>> {
+        let (sender, connected) = channel();
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            // `localhost` rather than one address: an adapter may listen on
+            // either loopback, and this tries every one the name resolves to.
+            let stream = loop {
+                match TcpStream::connect(("localhost", port)) {
+                    Ok(stream) => break Ok(stream),
+                    Err(error)
+                        if started.elapsed() > CONNECT
+                            || child
+                                .as_mut()
+                                .is_some_and(|child| !matches!(child.try_wait(), Ok(None))) =>
+                    {
+                        break Err(error)
+                    }
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+                }
+            };
+            let adapter = stream.and_then(|stream| Ok((stream.try_clone()?, stream)));
+            // Nobody left to receive means the session was stopped while
+            // this waited, and the adapter is dropped with the message, which
+            // kills it. Killed and reaped here on a failure, since there is no
+            // `Self` whose `Drop` would.
+            let _ = sender.send(match adapter {
+                Ok((reader, writer)) => Ok(Self::over(child, reader, Box::new(writer))),
+                Err(error) => {
+                    if let Some(child) = child.as_mut() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                    Err(error)
+                }
+            });
+        });
+        connected
+    }
+
+    fn over(
+        child: Option<Child>,
+        reader: impl std::io::Read + Send + 'static,
+        writer: Box<dyn Write + Send>,
+    ) -> Self {
+        let (sender, incoming) = channel();
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(reader);
+            // A stream that cannot be read as frames any more ends the
+            // conversation: every message after a desynchronised header is
+            // garbage, and the loss reaches the core as an adapter that is gone.
+            while let Some(json) = read_frame(&mut reader) {
+                if sender.send(json).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            child,
+            writer: BufWriter::new(writer),
+            incoming,
+            alive: true,
+        }
+    }
+
+    pub fn send(&mut self, json: &str) {
+        let written = write!(self.writer, "Content-Length: {}\r\n\r\n{json}", json.len())
+            .and_then(|()| self.writer.flush());
+        if written.is_err() {
+            self.alive = false;
+        }
+    }
+
+    pub fn drain(&mut self) -> Vec<String> {
+        let mut arrived = Vec::new();
+        loop {
+            match self.incoming.try_recv() {
+                Ok(json) => arrived.push(json),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.alive = false;
+                    break;
+                }
+            }
+        }
+        arrived
+    }
+}
+
+impl Drop for Adapter {
+    /// An adapter outliving its session holds a debugged program nobody can
+    /// see. `disconnect` has had its answer by the time a session lets it go.
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// One message off a `Content-Length` framed stream: headers to a blank line,
+/// then exactly that many bytes. `None` at the end of the stream or at
+/// anything that is not a frame.
+fn read_frame(reader: &mut impl std::io::BufRead) -> Option<String> {
+    let mut length = None;
+    loop {
+        let mut header = String::new();
+        if reader.read_line(&mut header).ok()? == 0 {
+            return None;
+        }
+        let header = header.trim_end();
+        if header.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                length = value.trim().parse::<usize>().ok();
+            }
+        }
+    }
+    let mut body = vec![0; length?];
+    reader.read_exact(&mut body).ok()?;
+    String::from_utf8(body).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_frame;
+
+    /// Two frames back to back, a header the framing does not know, and a
+    /// body holding a multi-byte character — the length counts bytes.
+    #[test]
+    fn frames_are_read_by_their_byte_length() {
+        let stream = "Content-Length: 12\r\n\r\n{\"seq\":\"é\"}Content-Type: x\r\ncontent-length: 2\r\n\r\n{}";
+        let mut reader = std::io::BufReader::new(stream.as_bytes());
+        assert_eq!(read_frame(&mut reader).as_deref(), Some("{\"seq\":\"é\"}"));
+        assert_eq!(read_frame(&mut reader).as_deref(), Some("{}"));
+        assert_eq!(read_frame(&mut reader), None);
     }
 }
