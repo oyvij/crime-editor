@@ -595,6 +595,10 @@ struct Edge {
     /// Parsed tokens for the current buffer, kept until it changes. Re-parsing
     /// a whole file every frame is what made a big file feel heavy.
     highlighted: (PathBuf, u64, Vec<Vec<varde::highlight::Token>>),
+    /// Where a file's first parse puts its tokens, off the main loop: syntect
+    /// over a ten-thousand-line file is most of a second, and a restored
+    /// workspace asks for one before the first key is read (#83).
+    highlit: Sender<(PathBuf, u64, Vec<Vec<varde::highlight::Token>>)>,
     /// The lines a Run mark stands on, found with the tokens and for their
     /// reason: a syntax tree is a parse too.
     run_marks: Vec<usize>,
@@ -722,6 +726,12 @@ struct Edge {
     /// `Buffer::revision` is nowhere in this key, and why typing starts no walk
     /// (F40).
     authored: BTreeMap<PathBuf, (String, Vec<authorship::Authored>)>,
+    /// The buffers whose Authorship is being read, and where each answer goes.
+    /// Off the main loop: a blame of a file with a long history is half a
+    /// second, and every buffer a restored workspace reopens asks for one on
+    /// the first poll (#83).
+    blaming: BTreeSet<PathBuf>,
+    blamed: Sender<(PathBuf, String, Vec<authorship::Authored>)>,
 }
 
 /// A Reading as audio, and everything a position report needs about it. The
@@ -811,6 +821,8 @@ fn run(
     let (formatted_tx, formatted_rx) = channel();
     let (released_tx, released_rx) = channel();
     let (replaced_tx, replaced_rx) = channel();
+    let (highlit_tx, highlit_rx) = channel();
+    let (blamed_tx, blamed_rx) = channel();
     let mut edge = Edge {
         output: None,
         shells: vec![pty::Pane::spawn(
@@ -835,6 +847,7 @@ fn run(
         pointer: mouse::Pointer::default(),
         cursor_style: "",
         highlighted: (PathBuf::new(), u64::MAX, Vec::new()),
+        highlit: highlit_tx,
         run_marks: Vec::new(),
         diff_sides: (Vec::new(), Vec::new()),
         previewed: (PathBuf::new(), u64::MAX, 0, Vec::new()),
@@ -854,6 +867,8 @@ fn run(
         stream: None,
         player: None,
         authored: BTreeMap::new(),
+        blaming: BTreeSet::new(),
+        blamed: blamed_tx,
         area: ratatui::layout::Rect::new(0, 0, size.width, size.height),
         analysed: analysed_tx,
         tested: tested_tx,
@@ -946,9 +961,9 @@ fn run(
         queue_position(&edge, &mut last_position, &mut queue);
         tell_core(&mut state, &mut edge);
         dirty |= refresh_ignored(&root, &mut state, &mut last_shape);
-        dirty |= refresh_git(&root, &mut state, &mut edge.authored, &mut last_git);
+        dirty |= refresh_git(&root, &mut state, &mut edge, &blamed_rx, &mut last_git);
         set_cursor_style(&state, &mut edge);
-        cache_highlight(&state, &mut edge);
+        dirty |= cache_highlight(&state, &mut edge, &highlit_rx);
         cache_preview(&state, &mut edge);
 
         if !dirty {
@@ -1500,7 +1515,8 @@ fn refresh_ignored(root: &Path, state: &mut State, last_shape: &mut (usize, usiz
 fn refresh_git(
     root: &Path,
     state: &mut State,
-    authored: &mut BTreeMap<PathBuf, (String, Vec<authorship::Authored>)>,
+    edge: &mut Edge,
+    blamed: &Receiver<(PathBuf, String, Vec<authorship::Authored>)>,
     last_git: &mut Instant,
 ) -> bool {
     // A buffer opened since the last poll is not made to wait two seconds for
@@ -1510,7 +1526,15 @@ fn refresh_git(
         .buffers
         .keys()
         .any(|path| !state.committed.contains_key(path));
-    if !unasked && last_git.elapsed() <= Duration::from_secs(2) {
+    // An Authorship that has arrived is a poll now rather than up to two
+    // seconds from now, for the same reason.
+    let mut arrived = false;
+    while let Ok((path, at, lines)) = blamed.try_recv() {
+        edge.blaming.remove(&path);
+        edge.authored.insert(path, (at, lines));
+        arrived = true;
+    }
+    if !unasked && !arrived && last_git.elapsed() <= Duration::from_secs(2) {
         return false;
     }
     *last_git = Instant::now();
@@ -1535,7 +1559,14 @@ fn refresh_git(
     // would hand back the previous commit's authors for a whole poll after a
     // commit.
     let head = head_commit(root);
-    let fresh_authorship = authorship(root, state.buffers.keys(), head.as_deref(), authored);
+    let fresh_authorship = authorship(
+        root,
+        state.buffers.keys(),
+        head.as_deref(),
+        &mut edge.authored,
+        &mut edge.blaming,
+        &edge.blamed,
+    );
     let dirty = fresh != state.repo
         || fresh_hunks != state.file_hunks
         || fresh_ignored != state.ignored
@@ -1596,12 +1627,16 @@ fn committed<'a>(
 /// Cached against that commit, so the walk happens once per file per commit: the
 /// buffer's edits cannot change what the commit holds, which is what keeps a
 /// keystroke off git's history. A buffer that has closed takes its entry with
-/// it, and a commit that moved drops the lot.
+/// it, and a commit that moved drops the lot. The walk itself runs off the main
+/// loop and answers into [`refresh_git`]; a file whose walk is out reads as
+/// nobody's until it lands.
 fn authorship<'a>(
     root: &Path,
     buffers: impl Iterator<Item = &'a PathBuf>,
     head: Option<&str>,
     cached: &mut BTreeMap<PathBuf, (String, Vec<authorship::Authored>)>,
+    blaming: &mut BTreeSet<PathBuf>,
+    blamed: &Sender<(PathBuf, String, Vec<authorship::Authored>)>,
 ) -> BTreeMap<PathBuf, Vec<authorship::Authored>> {
     let open: BTreeSet<&PathBuf> = buffers.collect();
     cached.retain(|path, (at, _)| Some(at.as_str()) == head && open.contains(path));
@@ -1615,16 +1650,21 @@ fn authorship<'a>(
         return BTreeMap::new();
     };
     for path in open {
-        if cached.contains_key(path) {
+        if cached.contains_key(path) || blaming.contains(path) {
             continue;
         }
         let Ok(relative) = path.strip_prefix(&workdir) else {
             continue;
         };
-        cached.insert(
-            path.clone(),
-            (head.to_string(), authored_lines(&repository, relative)),
-        );
+        blaming.insert(path.clone());
+        let (relative, path, head) = (relative.to_path_buf(), path.clone(), head.to_string());
+        let (workdir, answer) = (workdir.clone(), blamed.clone());
+        std::thread::spawn(move || {
+            let lines = git2::Repository::open(&workdir)
+                .map(|repository| authored_lines(&repository, &relative))
+                .unwrap_or_default();
+            let _ = answer.send((path, head, lines));
+        });
     }
     cached
         .iter()
@@ -1700,7 +1740,25 @@ fn set_cursor_style(state: &State, edge: &mut Edge) {
 }
 
 /// Parse once per edit, not once per frame.
-fn cache_highlight(state: &State, edge: &mut Edge) {
+///
+/// A file the editor has just switched to is drawn plain and parsed off the
+/// main loop, so opening one — or reopening a big one at startup — never holds
+/// a key (#83). An edit to the file on screen still parses here: the tokens
+/// carry the text they colour, so drawing the last parse would show the text
+/// as it was before the keystroke. An answer for a revision no longer on
+/// screen is dropped.
+fn cache_highlight(
+    state: &State,
+    edge: &mut Edge,
+    highlit: &Receiver<(PathBuf, u64, Vec<Vec<varde::highlight::Token>>)>,
+) -> bool {
+    let mut arrived = false;
+    while let Ok((path, revision, tokens)) = highlit.try_recv() {
+        if edge.highlighted.0 == path && edge.highlighted.1 == revision {
+            edge.highlighted.2 = tokens;
+            arrived = true;
+        }
+    }
     let current = state
         .current_buffer
         .as_ref()
@@ -1710,17 +1768,29 @@ fn cache_highlight(state: &State, edge: &mut Edge) {
             edge.highlighted = (PathBuf::new(), u64::MAX, Vec::new());
             edge.run_marks.clear();
         }
-        return;
+        return arrived;
     };
-    if edge.highlighted.0 != *path || edge.highlighted.1 != buffer.revision() {
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        edge.highlighted = (
-            path.clone(),
-            buffer.revision(),
-            varde::highlight::highlight(&name, buffer.shown()),
-        );
-        edge.run_marks = varde::run::marks(state).into_keys().collect();
+    if edge.highlighted.0 == *path && edge.highlighted.1 == buffer.revision() {
+        return arrived;
     }
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tokens = if edge.highlighted.0 == *path {
+        varde::highlight::highlight(&name, buffer.shown())
+    } else {
+        let (name, text, answer) = (
+            name.into_owned(),
+            buffer.shown().to_string(),
+            edge.highlit.clone(),
+        );
+        let (path, revision) = (path.clone(), buffer.revision());
+        std::thread::spawn(move || {
+            let _ = answer.send((path, revision, varde::highlight::highlight(&name, &text)));
+        });
+        varde::highlight::plain(buffer.shown())
+    };
+    edge.highlighted = (path.clone(), buffer.revision(), tokens);
+    edge.run_marks = varde::run::marks(state).into_keys().collect();
+    arrived
 }
 
 /// Lay the document out once per edit and once per resize, not once per frame.
@@ -5161,8 +5231,42 @@ mod tests {
             author: "Ada Lovelace".to_string(),
             date: "2026-01-05".to_string(),
         };
-        let mut cached = BTreeMap::new();
-        let found = authorship(&root, buffers.iter(), Some("head"), &mut cached);
+        let (blamed, answers) = std::sync::mpsc::channel();
+        let (mut cached, mut blaming) = (BTreeMap::new(), BTreeSet::new());
+        // What `refresh_git` does with each answer.
+        let land = |cached: &mut BTreeMap<_, _>, blaming: &mut BTreeSet<PathBuf>| {
+            while !blaming.is_empty() {
+                let (path, at, lines) = answers
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .expect("the walk's answer");
+                blaming.remove(&path);
+                cached.insert(path, (at, lines));
+            }
+        };
+
+        // Off the calling thread (#83): the poll that asks is answered later,
+        // and one that comes before the answer does not ask again.
+        for _ in 0..2 {
+            let asked = authorship(
+                &root,
+                buffers.iter(),
+                Some("head"),
+                &mut cached,
+                &mut blaming,
+                &blamed,
+            );
+            assert_eq!(asked, BTreeMap::new());
+            assert_eq!(blaming, BTreeSet::from(buffers.clone()));
+        }
+        land(&mut cached, &mut blaming);
+        let found = authorship(
+            &root,
+            buffers.iter(),
+            Some("head"),
+            &mut cached,
+            &mut blaming,
+            &blamed,
+        );
         assert_eq!(
             found.get(&buffers[0]),
             Some(&vec![ada.clone(), ada.clone()])
@@ -5177,19 +5281,52 @@ mod tests {
             buffers[0].clone(),
             ("head".to_string(), vec![poison.clone()]),
         );
-        let again = authorship(&root, buffers.iter(), Some("head"), &mut cached);
-        assert_eq!(again.get(&buffers[0]), Some(&vec![poison]), "walked twice");
+        let again = authorship(
+            &root,
+            buffers.iter(),
+            Some("head"),
+            &mut cached,
+            &mut blaming,
+            &blamed,
+        );
+        assert_eq!(again.get(&buffers[0]), Some(&vec![poison]));
+        assert_eq!(blaming, BTreeSet::new(), "walked twice");
 
-        let moved = authorship(&root, buffers.iter(), Some("another"), &mut cached);
+        let moved = authorship(
+            &root,
+            buffers.iter(),
+            Some("another"),
+            &mut cached,
+            &mut blaming,
+            &blamed,
+        );
+        assert_eq!(moved, BTreeMap::new());
+        land(&mut cached, &mut blaming);
+        let moved = authorship(
+            &root,
+            buffers.iter(),
+            Some("another"),
+            &mut cached,
+            &mut blaming,
+            &blamed,
+        );
         assert_eq!(moved.get(&buffers[0]), Some(&vec![ada.clone(), ada]));
 
         // Nothing at all outside a repository, which is what makes the border
         // silent there rather than reporting an absence on every file.
         let bare = tempfile::tempdir().expect("a temp directory");
         assert_eq!(
-            authorship(bare.path(), buffers.iter(), Some("head"), &mut cached),
+            authorship(
+                bare.path(),
+                buffers.iter(),
+                Some("head"),
+                &mut cached,
+                &mut blaming,
+                &blamed,
+            ),
             BTreeMap::new()
         );
+        assert_eq!(blaming, BTreeSet::new());
     }
 
     /// The date is the day the author was on when they wrote it, not the day it
