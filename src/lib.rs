@@ -1879,7 +1879,10 @@ pub struct State {
     /// and cached there against the commit, never against `Buffer::revision`:
     /// reading it walks a file's history, and typing must not start one.
     /// Nothing at all for a file the commit has no copy of.
-    pub authorship: BTreeMap<PathBuf, Vec<authorship::Authored>>,
+    /// Shared rather than owned: a row per line of every open buffer, and
+    /// `update` clones the whole `State` per event, so owning it cost a tree
+    /// step milliseconds of copying (#86).
+    pub authorship: BTreeMap<PathBuf, std::sync::Arc<[authorship::Authored]>>,
     pub comments: Vec<Comment>,
     pub reviews: BTreeSet<u32>,
     pub retention_limit: usize,

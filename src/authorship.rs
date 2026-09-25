@@ -67,7 +67,7 @@ pub fn at_cursor(state: &State) -> Option<Authorship> {
     let authors = state
         .authorship
         .get(path)
-        .map(Vec::as_slice)
+        .map(|lines| &lines[..])
         .unwrap_or_default();
     let at = traced(committed, buffer.shown())
         .get(line.checked_sub(1)?)

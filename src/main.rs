@@ -18,6 +18,7 @@ use notify::{RecursiveMode, Watcher};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use terminput_crossterm::{to_terminput_key, to_terminput_mouse};
 use varde::authorship;
@@ -725,7 +726,7 @@ struct Edge {
     /// and only a new commit can change what it answers — which is why
     /// `Buffer::revision` is nowhere in this key, and why typing starts no walk
     /// (F40).
-    authored: BTreeMap<PathBuf, (String, Vec<authorship::Authored>)>,
+    authored: BTreeMap<PathBuf, (String, Arc<[authorship::Authored]>)>,
     /// The buffers whose Authorship is being read, and where each answer goes.
     /// Off the main loop: a blame of a file with a long history is half a
     /// second, and every buffer a restored workspace reopens asks for one on
@@ -1531,7 +1532,7 @@ fn refresh_git(
     let mut arrived = false;
     while let Ok((path, at, lines)) = blamed.try_recv() {
         edge.blaming.remove(&path);
-        edge.authored.insert(path, (at, lines));
+        edge.authored.insert(path, (at, lines.into()));
         arrived = true;
     }
     if !unasked && !arrived && last_git.elapsed() <= Duration::from_secs(2) {
@@ -1634,10 +1635,10 @@ fn authorship<'a>(
     root: &Path,
     buffers: impl Iterator<Item = &'a PathBuf>,
     head: Option<&str>,
-    cached: &mut BTreeMap<PathBuf, (String, Vec<authorship::Authored>)>,
+    cached: &mut BTreeMap<PathBuf, (String, Arc<[authorship::Authored]>)>,
     blaming: &mut BTreeSet<PathBuf>,
     blamed: &Sender<(PathBuf, String, Vec<authorship::Authored>)>,
-) -> BTreeMap<PathBuf, Vec<authorship::Authored>> {
+) -> BTreeMap<PathBuf, Arc<[authorship::Authored]>> {
     let open: BTreeSet<&PathBuf> = buffers.collect();
     cached.retain(|path, (at, _)| Some(at.as_str()) == head && open.contains(path));
     let Some(head) = head else {
@@ -5236,11 +5237,12 @@ mod tests {
         // What `refresh_git` does with each answer.
         let land = |cached: &mut BTreeMap<_, _>, blaming: &mut BTreeSet<PathBuf>| {
             while !blaming.is_empty() {
-                let (path, at, lines) = answers
-                    .recv_timeout(std::time::Duration::from_secs(10))
-                    .expect("the walk's answer");
+                let (path, at, lines): (PathBuf, String, Vec<varde::authorship::Authored>) =
+                    answers
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .expect("the walk's answer");
                 blaming.remove(&path);
-                cached.insert(path, (at, lines));
+                cached.insert(path, (at, lines.into()));
             }
         };
 
@@ -5268,10 +5270,10 @@ mod tests {
             &blamed,
         );
         assert_eq!(
-            found.get(&buffers[0]),
-            Some(&vec![ada.clone(), ada.clone()])
+            found.get(&buffers[0]).map(|lines| &lines[..]),
+            Some(&[ada.clone(), ada.clone()][..])
         );
-        assert_eq!(found.get(&buffers[1]), Some(&Vec::new()));
+        assert_eq!(found.get(&buffers[1]).map(|lines| lines.len()), Some(0));
 
         let poison = varde::authorship::Authored {
             author: "nobody walked this".to_string(),
@@ -5279,7 +5281,7 @@ mod tests {
         };
         cached.insert(
             buffers[0].clone(),
-            ("head".to_string(), vec![poison.clone()]),
+            ("head".to_string(), vec![poison.clone()].into()),
         );
         let again = authorship(
             &root,
@@ -5289,7 +5291,10 @@ mod tests {
             &mut blaming,
             &blamed,
         );
-        assert_eq!(again.get(&buffers[0]), Some(&vec![poison]));
+        assert_eq!(
+            again.get(&buffers[0]).map(|lines| &lines[..]),
+            Some(&[poison][..])
+        );
         assert_eq!(blaming, BTreeSet::new(), "walked twice");
 
         let moved = authorship(
@@ -5310,7 +5315,10 @@ mod tests {
             &mut blaming,
             &blamed,
         );
-        assert_eq!(moved.get(&buffers[0]), Some(&vec![ada.clone(), ada]));
+        assert_eq!(
+            moved.get(&buffers[0]).map(|lines| &lines[..]),
+            Some(&[ada.clone(), ada][..])
+        );
 
         // Nothing at all outside a repository, which is what makes the border
         // silent there rather than reporting an absence on every file.
