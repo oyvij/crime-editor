@@ -3196,6 +3196,7 @@ const REPL: &str = "repl";
 
 pub const RUN: &str = "evaluator-run";
 pub const CANCEL: &str = "evaluator-cancel";
+pub const CLOSE: &str = "evaluator-close";
 
 /// `␣e`, the Hover's Evaluate Chip and a Variables row's: the Evaluator opens
 /// on the expression the gesture named, prefilled and asking the adapter
@@ -3441,8 +3442,8 @@ fn remember(next: &mut State, snippet: String) -> Vec<Effect> {
     vec![Effect::SaveState(crate::state_json(next))]
 }
 
-/// The Chips on the Evaluator's top border: run, and the cancel that takes a
-/// run back. Run is dimmed while the program is not stopped, because there is
+/// The Chips on the Evaluator's top border: run, the cancel that takes a run
+/// back, and close. Run is dimmed while the program is not stopped, because there is
 /// no Frame to run a Snippet in; cancel while there is nothing in flight or
 /// the adapter cannot take one back.
 pub fn evaluator_chips(state: &State) -> Vec<crate::Chip> {
@@ -3477,13 +3478,21 @@ pub fn evaluator_chips(state: &State) -> Vec<crate::Chip> {
         Chip {
             action: CANCEL,
             name: "cancel",
-            glyph: "\u{2715}".to_string(),
+            glyph: "\u{25a0}".to_string(),
             keys: "",
             hue: Hue::Halt,
             tone: match running && can_cancel {
                 true => Tone::Plain,
                 false => Tone::Dimmed,
             },
+        },
+        Chip {
+            action: CLOSE,
+            name: "close",
+            glyph: "\u{2715}".to_string(),
+            keys: "Esc",
+            hue: Hue::Halt,
+            tone: Tone::Plain,
         },
     ]
 }
@@ -3840,12 +3849,19 @@ fn end(next: &mut State) -> Vec<Effect> {
     // left in one that is no longer on screen. The Evaluator is a third: it
     // runs code inside a program, and a window offering to run one with
     // nothing to run it in is a window that can only refuse.
-    if matches!(next.focus, Pane::Frames | Pane::Variables | Pane::Evaluator) {
+    if matches!(next.focus, Pane::Frames | Pane::Variables) {
         next.focus = Pane::Editor;
     }
-    // The Snippet outlives the window it was written in, whether or not it
-    // was ever run: a session ending under a half-written block must not be
-    // what loses it.
+    close_evaluator(next)
+}
+
+/// Escape, `:q`, or the session ending. The Snippet outlives the window it
+/// was written in, whether or not it was ever run: closing over a
+/// half-written block must not be what loses it.
+pub fn close_evaluator(next: &mut State) -> Vec<Effect> {
+    if next.focus == Pane::Evaluator {
+        next.focus = Pane::Editor;
+    }
     let snippet = snippet_text(next);
     next.evaluator = None;
     remember(next, snippet)

@@ -3150,6 +3150,23 @@ fn on_snippet(mut next: State, event: Event, wheeled: bool) -> Answered {
             return Ok(settle(next, vec![], wheeled));
         }
     }
+    // Escape closes the window once there is nothing left for it to leave:
+    // inserting, a Visual selection, a half-typed command and a Selection are
+    // each taken back by an Escape of their own first. `:q` closes it rather
+    // than the file behind it, which is not the one being typed in.
+    let snippet = &next.evaluator.as_ref().expect("checked just above").snippet;
+    let settled = snippet.mode == editor::Mode::Normal
+        && snippet.pending_command().is_empty()
+        && next.selection.is_none();
+    if matches!(event, Event::CloseBuffer { .. })
+        || (matches!(event, Event::EditorEscape) && settled)
+    {
+        let effects = debug::close_evaluator(&mut next);
+        return Ok(settle(next, effects, wheeled));
+    }
+    if matches!(event, Event::EditorEscape) {
+        next.selection = None;
+    }
     let snippet = &mut next.evaluator.as_mut().expect("checked just above").snippet;
     match event {
         Event::EditorKey(key) => _ = snippet.key(key),
@@ -8866,6 +8883,7 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
             vec![]
         }
         Event::RowAction(debug::CANCEL) => debug::cancel(&mut next),
+        Event::RowAction(debug::CLOSE) => debug::close_evaluator(&mut next),
         Event::OpenEvaluatedRow(index) => debug::open_evaluated(&mut next, index),
         Event::OpenHoverRow(index) => debug::open_hovered(&mut next, index),
         Event::RowAction(debug::COPY_VALUE) => match debug::row(state) {
